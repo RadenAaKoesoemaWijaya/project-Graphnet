@@ -1,0 +1,113 @@
+# =============================================================================
+# Google Cloud Build configuration for ASTINA
+# -----------------------------------------------------------------------------
+# This file builds the container image and (optionally) deploys it to
+# Cloud Run in a single step.
+#
+# Triggered manually:
+#   gcloud builds submit --config=cloudbuild.yaml \
+#       --substitutions=_REGION=asia-southeast2,_SERVICE=astina
+#
+# Connected to a GitHub trigger:
+#   When Cloud Build is connected to the repository, a push to the main
+#   branch will execute this file automatically.
+#
+# R6: --no-allow-unauthenticated by default (require IAM auth).
+# R7: --min-instances=1 by default, --max-request-body-size=3GiB.
+# R8: Cloud Logging only; JSON-formatted logs from the app.
+# =============================================================================
+
+# Use the latest available substitutions as defaults; they can be overridden
+# at submission time with --substitutions=_KEY=value
+substitutions:
+  _REGION: asia-southeast2
+  _SERVICE: astina
+  _REPOSITORY: astina-images           # Artifact Registry repository name
+  _AR_HOST: asia-southeast2-docker.pkg.dev   # Artifact Registry host
+  # Increased memory for hyperparameter tuning and cross-validation features
+  _MEMORY: 16Gi
+  _CPU: "4"
+  _CONCURRENCY: "10"
+  # R7: keep one warm instance to avoid 20-60s cold starts on first request.
+  _MIN_INSTANCES: "1"
+  _MAX_INSTANCES: "5"
+  # R7: cap request body at 3GiB so the Streamlit upload limit actually works.
+  _MAX_REQUEST_BODY_SIZE: "3Gi"
+  # R6: keep the service private. Users must be granted
+  # ``roles/run.invoker`` explicitly (or front it with IAP / a load
+  # balancer). Override with --substitutions=_ALLOW_UNAUTH=true for
+  # public demos if you understand the risk.
+  _ALLOW_UNAUTH: "false"
+  # R4: optional GCS bucket for persistent model artefacts. When set
+  # ``cloud_storage`` mirrors uploads/downloads automatically.
+  # IMPORTANT: Set this to your GCS bucket name for production to persist
+  # models across Cloud Run instance restarts. Example: "my-astina-models-bucket"
+  _GCS_BUCKET: ""
+
+steps:
+  # ---------------------------------------------------------------------------
+  # 1. Build the container image with Cloud Build's Docker support.
+  # ---------------------------------------------------------------------------
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --tag=${_AR_HOST}/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE}:${SHORT_SHA}
+      - --tag=${_AR_HOST}/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE}:latest
+      - --cache-from=${_AR_HOST}/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE}:latest
+      - --build-arg=BUILDKIT_INLINE_CACHE=1
+      - "."
+
+  # ---------------------------------------------------------------------------
+  # 2. Push both tags (immutable SHA + rolling "latest") to Artifact Registry.
+  # ---------------------------------------------------------------------------
+  - id: push
+    name: gcr.io/cloud-builders/docker
+    waitFor: ["build"]
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        docker push ${_AR_HOST}/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE}:${SHORT_SHA}
+        docker push ${_AR_HOST}/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE}:latest
+
+  # ---------------------------------------------------------------------------
+  # 3. Deploy the new image to Cloud Run.
+  # ---------------------------------------------------------------------------
+  - id: deploy
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    waitFor: ["push"]
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_SERVICE}
+      - --image=${_AR_HOST}/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE}:${SHORT_SHA}
+      - --region=${_REGION}
+      - --platform=managed
+      - --memory=${_MEMORY}
+      - --cpu=${_CPU}
+      - --concurrency=${_CONCURRENCY}
+      - --min-instances=${_MIN_INSTANCES}
+      - --max-instances=${_MAX_INSTANCES}
+      - --port=8501
+      # R7: allow uploads up to 3GiB on the Cloud Run side.
+      - --max-request-body-size=${_MAX_REQUEST_BODY_SIZE}
+      # R6: deny anonymous traffic by default. Override per environment.
+      - --allow-unauthenticated=${_ALLOW_UNAUTH}
+      # R3: structured (JSON) logs are picked up by Cloud Logging.
+      # R4: optional GCS bucket for model persistence.
+      - --set-env-vars=POLARS_SKIP_CPU_CHECK=1,STREAMLIT_SERVER_MAX_UPLOAD_SIZE=3072,ASTINA_LOG_FORMAT=json,CACHE_DIR=/tmp/astina_cache,MODELS_DIR=/tmp/astina_models${_GCS_BUCKET:+,GOOGLE_CLOUD_BUCKET=${_GCS_BUCKET}}
+
+# Store the built image so it can be inspected later.
+images:
+  - ${_AR_HOST}/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE}:${SHORT_SHA}
+  - ${_AR_HOST}/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE}:latest
+
+# Give Cloud Build enough time to build a large image.
+timeout: 1800s
+
+options:
+  # R8: keep build logs in Cloud Logging; do not duplicate to GCS bucket.
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8
