@@ -6,9 +6,12 @@ Provides SHAP-based explanations for anomaly detection models
 import numpy as np
 import pandas as pd
 import streamlit as st
+import logging
 from typing import Dict, List, Optional, Tuple
 import warnings
 warnings.filterwarnings('ignore')
+
+logger = logging.getLogger(__name__)
 
 try:
     import shap

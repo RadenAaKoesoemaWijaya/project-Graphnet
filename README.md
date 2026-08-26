@@ -227,36 +227,77 @@ Acceptance test production wajib mencakup upload 3 GiB resumable, peak memory, d
 
 ---
 
-## 🔍 Alur Kerja & Formula Risiko
+## 🧠 Urutan Alur Kerja Hybrid AI ASTINA (End-to-End Workflow)
 
-```text
-[Input Data Klaim (CSV/XLSX)]
-       │
-       ▼
-[1. Preprocessing & Alignment] ─── Validasi schema, normalisasi tanggal & tarif
-       │
-       ├─────────────────────────────────────────┐
-       ▼                                         ▼
-[2. ML Anomaly Scoring]               [3. Rule-Based Fraud Detection]
-   • Isolation Forest                    • 9 Business Rule Modules
-   • Autoencoder                         • Fuzzy Similarity Engine
-   • XGBoost / GNN                       • Provider & Service Validation
-       │                                         │
-       └────────────────────┬────────────────────┘
-                            │
-                            ▼
-               [4. Risk Score Aggregation]
-                            │
-                            ▼
-         [5. Executive Dashboard & Investigation]
+ASTINA mengoperasikan arsitektur **Hybrid AI** berlapis yang memadukan komputasi statistik machine learning, representasi relasional graf, serta aturan audit kepatuhan deterministik:
+
+```mermaid
+flowchart TD
+    A[Data Klaim Mentah CSV/XLSX/Parquet] --> B[1. Validasi Data & ID Unik _astina_row_id]
+    B --> C[2. Preprocessing & Domain Feature Engineering]
+    C --> D[3. Estimasi Skor Statistik ML Ensemble]
+    C --> E[4. Analisis Jaringan Kolusi GNN GATConv]
+    C --> F[5. Audit Kepatuhan 9 Modul Business Rules]
+    D --> G[6. Konsolidasi Risiko Hybrid Score Aggregation]
+    E --> G
+    F --> G
+    G --> H[7. Output Investigasi & Explainable AI SHAP/LIME]
 ```
 
-### Formula Skor Risiko Bisnis
+---
 
-Skor risiko bisnis (`business_risk_score`) dihitung secara deterministik:
-$$\text{Business Risk} = 0.40(R_{\text{repeat}}) + 0.20(R_{\text{phantom}}) + 0.15(R_{\text{capacity}}) + 0.15(R_{\text{fuzzy}}) + 0.10(R_{\text{other}})$$
+### 1. Validasi Data & Penetapan ID Unik (`_astina_row_id`)
+* **Proses:** Data klaim mentah yang diunggah divalidasi keutuhannya melalui modul `DataValidator` dan disanitasi oleh `DataSanitizer`.
+* **Peran Krusial:** Sebelum data dipecah (split), diurutkan (sorting), atau diproses per chunk, sistem menetapkan penanda unik permanen bernama `_astina_row_id` untuk setiap baris klaim. ID ini memastikan hasil prediksi model ML, analisis hubungan GNN, dan bendera (*flag*) aturan bisnis selalu merujuk pada klaim fisik yang sama tanpa risiko tertukar akibat komputasi downstream.
 
-Skor ini kemudian dikombinasikan dengan skor anomali Machine Learning untuk menghasilkan **Overall Combined Risk Score** (0.00 - 1.00) dan klasifikasi severity: **Low**, **Medium**, atau **High Risk**.
+### 2. Preprocessing & Feature Engineering
+* **Proses:** Data numerik dibersihkan dari outlier menggunakan batas IQR (`detect_and_handle_outliers`), data tanggal diekstrak menjadi fitur temporal (lama proses, gap pengajuan, keterlambatan), dan data kategori dikodekan secara optimal (*Target Encoding*, *Frequency Encoding*, atau *One-Hot*).
+* **Peran Krusial:** Sistem secara otomatis membentuk fitur-fitur baru (*engineered domain features*) khusus industri asuransi kesehatan:
+  * `payment_ratio`: Rasio nominal dibayar terhadap nominal ditagihkan.
+  * `allowance_ratio`: Rasio nominal disetujui terhadap nominal ditagihkan.
+  * `high_amount_quick_submit`: Indikator klaim bernominal kuartil tinggi yang diajukan dalam durasi waktu sangat singkat.
+  * `zscore`: Standarisasi deviasi statistik pada variabel moneter utama.
+
+### 3. Estimasi Skor Statistik melalui Model ML Ensemble
+* **Proses:** Fitur yang telah disejajarkan (*aligned*) dimasukkan ke dalam `CombinedAnomalyDetector`. Beberapa model Machine Learning bekerja secara paralel untuk menilai keanehan klaim berdasarkan pola historis:
+  * **Isolation Forest**: Mendeteksi klaim dengan atribut yang sangat terisolasi atau berada di luar sebaran data mayoritas.
+  * **Autoencoder (Neural Network PyTorch)**: Mempelajari representasi data klaim normal, lalu menghitung tingkat kejanggalan melalui *reconstruction error*.
+  * **XGBoost (Supervised / Semi-Supervised)**: Memprediksi probabilitas fraud berdasarkan hubungan fitur non-linear yang dipelajari dari label historis.
+* **Hasil:** Model menghasilkan probabilitas individual yang kemudian digabungkan secara rata-rata berbobot (dioptimasi secara dinamis via Optuna) menjadi satu nilai statistik: `anomaly_probability` $\in [0.00, 1.00]$.
+
+### 4. Analisis Kolusi Jaringan menggunakan Graph Neural Network (GNN)
+* **Proses:** ASTINA membangun topologi relasional (*Graph Construction*) antarklaim menggunakan metode **Star Graph** (menghubungkan klaim yang berbagi dokter/provider, pasien, atau diagnosis yang sama) maupun graf heterogen/k-NN.
+* **Peran Krusial:** Model GNN (`InsuranceAnomalyGNNModel` berbasis `GATConv` / *Graph Attention Network*) menganalisis pola koneksi ini. GNN mampu mendeteksi anomali kelompok (*fraud ring* / sindikat faskes)—misalnya sekelompok pasien berbeda yang diklaim secara massal oleh provider yang sama dengan kode diagnosis identik dalam rentang waktu berdekatan. Skor relasional topologi ini digabungkan langsung ke dalam total probabilitas deteksi.
+
+### 5. Audit Kepatuhan menggunakan Rule-Based Business Engine
+* **Proses:** Secara paralel dengan jalannya model ML, sistem mengeksekusi `run_integrated_claim_risk_pipeline()` yang memuat **9 kelompok aturan kepatuhan asuransi kesehatan**:
+  1. **Repeat Billing**: Deteksi tagihan berulang untuk pasien/tindakan yang sama dalam jendela waktu 30 hari.
+  2. **Phantom Service**: Validasi klaim fiktif melalui `PhantomServiceRuleEngine` (misal: layanan di luar tanggal rawat atau ketidakwajaran prosedur).
+  3. **Provider Capacity**: Evaluasi beban layanan harian dokter/faskes yang melampaui batas wajar kapasitas fisik.
+  4. **Fuzzy Claim Matching**: Deteksi kemiripan deskripsi klaim non-identik berbasis string similarity.
+  5. **Upcoding & Unbundling**: Deteksi penggelembungan kode tarif dan pemecahan paket tindakan tunggal.
+  6. **Inflated Bill & Cloning**: Deteksi lonjakan tagihan ekstrem di atas benchmark medis dan duplikasi rekam medis (*cloned charts*).
+  7. **Length of Stay & Readmission**: Deteksi anomali lama rawat inap (*outlier LOS*) dan pola readmisi cepat.
+  8. **Medication & Device Fraud**: Audit kuantitas obat berlebih, dosis tidak rasional, dan margin alkes.
+  9. **Duplicate Payment & Status Check**: Validasi pembayaran ganda pada klaim yang telah lunas/disetujui.
+* **Hasil:** Setiap aturan yang terpicu menghasilkan *flag* biner, skor risiko bisnis (`business_risk_score`), dan catatan bukti penjelasan (*evidence*).
+
+### 6. Konsolidasi Risiko (Hybrid Score Aggregation)
+* **Proses:** Skor anomali statistik ML/GNN (`anomaly_probability`) dan skor risiko aturan bisnis (`business_risk_score`) disatukan menggunakan formula bobot terintegrasi:
+
+$$\text{Business Risk Score} = 0.40(R_{\text{repeat}}) + 0.20(R_{\text{phantom}}) + 0.15(R_{\text{capacity}}) + 0.15(R_{\text{fuzzy}}) + 0.10(R_{\text{additional}})$$
+
+$$\text{Final Risk Score} = 0.50(\text{Business Risk Score}) + 0.30(\text{ML Anomaly Score}) + 0.20(\text{Duplicate Payment Flag})$$
+
+* **Hasil:** Sistem menghasilkan `final_risk_score` (skala 0.00 hingga 1.00) dan mengklasifikasikannya ke dalam tingkat keparahan risiko: **Low Risk**, **Medium Risk**, atau **High Risk** (Threshold default $\ge 0.65$).
+
+### 7. Output Investigasi & Explainable AI (XAI)
+* **Proses:** Seluruh kasus berisiko dikirimkan ke dasbor investigator interaktif yang menyediakan:
+  * **Fraud Review Table**: Tabel interaktif dengan filter faskes, severity, dan pewarnaan visual merah/kuning.
+  * **Explicit Evidence & Reasoning**: Rincian naratif aturan bisnis mana saja yang dilanggar beserta bukti fisik per klaim.
+  * **Explainable AI (SHAP & LIME)**: Visualisasi *SHAP summary plot* dan kontribusi bobot fitur (*feature importance*) untuk menjelaskan alasan di balik keputusan model ML.
+  * **Visualisasi Graf Jaringan**: Pemetaan interaktif node & edge untuk menelusuri rantai kolusi antar-faskes dan pasien.
+  * **Export Laporan**: Fasilitas unduh hasil audit dalam format CSV terstruktur untuk pelaporan resmi investigasi fraud.
 
 ---
 
