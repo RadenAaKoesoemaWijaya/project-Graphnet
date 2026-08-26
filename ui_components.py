@@ -501,34 +501,21 @@ def render_top_navbar_status():
             status_class = "pending"
             badge_content = num
 
-        step_html = f'''
-        <div class="step-item {status_class}">
-            <span class="step-badge">{badge_content}</span>
-            <span>{label}</span>
-        </div>
-        '''
+        step_html = f'<div class="step-item {status_class}"><span class="step-badge">{badge_content}</span><span>{label}</span></div>'
         steps_html.append(step_html)
 
     pipeline_tracker_html = '<span class="step-arrow">➔</span>'.join(steps_html)
 
-    navbar_html = f"""
-    <div class="astina-top-navbar">
-        <div class="nav-brand-section">
-            <span class="nav-brand-logo">ASTINA</span>
-            <span class="nav-brand-title">Analisis Transaksi & Fraud Intel</span>
-        </div>
-        <div class="nav-pills-container">
-            {data_pill}
-            {model_pill}
-            {engine_pill}
-            {copilot_pill}
-            {audit_pill}
-        </div>
-        <div class="pipeline-bar-wrapper">
-            {pipeline_tracker_html}
-        </div>
-    </div>
-    """
+    navbar_html = (
+        '<div class="astina-top-navbar">'
+        '<div class="nav-brand-section">'
+        '<span class="nav-brand-logo">ASTINA</span>'
+        '<span class="nav-brand-title">Analisis Transaksi & Fraud Intel</span>'
+        '</div>'
+        f'<div class="nav-pills-container">{data_pill} {model_pill} {engine_pill} {copilot_pill} {audit_pill}</div>'
+        f'<div class="pipeline-bar-wrapper">{pipeline_tracker_html}</div>'
+        '</div>'
+    )
     st.markdown(navbar_html, unsafe_allow_html=True)
 
 def render_footer():
