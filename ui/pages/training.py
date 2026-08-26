@@ -293,6 +293,13 @@ def show_training_page():
 
         use_dynamic_weights = False
 
+        # Optuna Ensemble Weight Tuning Option
+        enable_optuna_ensemble_weights = st.checkbox(
+            "⚡ Optimasi Bobot Ensemble Dinamis (Optuna FPR Minimizer)",
+            value=True,
+            help="Gunakan Optuna untuk mencari bobot ensemble optimal secara matematis guna meminimalkan False Positive Rate (FPR) klaim wajar."
+        )
+
     else:
         supervised_model_type = st.selectbox(
             "Pilih algoritma dengan supervisi:",
@@ -312,6 +319,13 @@ def show_training_page():
             "Aktifkan Hyperparameter Tuning (Optuna)",
             value=False,
             help="Gunakan Optuna untuk mencari hyperparameter terbaik secara otomatis. Proses ini akan memakan waktu lebih lama."
+        )
+
+        # Optuna Ensemble Weight Tuning Option
+        enable_optuna_ensemble_weights = st.checkbox(
+            "⚡ Optimasi Bobot Ensemble Dinamis (Optuna FPR Minimizer)",
+            value=True,
+            help="Gunakan Optuna untuk mencari bobot ensemble optimal secara matematis guna meminimalkan False Positive Rate (FPR)."
         )
 
         # Cross-Validation Option
@@ -724,16 +738,24 @@ def show_training_page():
             import json
             import os
             
-            def train_worker(detector_obj, X, e_idx, e_type, y, dev, mode):
+            def train_worker(detector_obj, X, e_idx, e_type, y, dev, mode, opt_ensemble, opt_hyper):
                 try:
                     os.makedirs("cache", exist_ok=True)
                     with open("cache/training_status.json", "w") as f:
-                        json.dump({"status": "running", "progress": 0.1, "message": "Memulai pelatihan..."}, f)
+                        json.dump({"status": "running", "progress": 0.1, "message": "Memulai pelatihan model ensemble..."}, f)
                     
                     if mode == TRAINING_MODE_SUPERVISED:
-                        detector_obj.fit(X, edge_index=e_idx, edge_type=e_type, labels=y, device=dev)
+                        detector_obj.fit(
+                            X, edge_index=e_idx, edge_type=e_type, labels=y, device=dev,
+                            optimize_hyperparams=opt_hyper,
+                            optimize_ensemble_weights=opt_ensemble
+                        )
                     else:
-                        detector_obj.fit(X, edge_index=e_idx, edge_type=e_type, labels=None, device=dev)
+                        detector_obj.fit(
+                            X, edge_index=e_idx, edge_type=e_type, labels=None, device=dev,
+                            optimize_hyperparams=opt_hyper,
+                            optimize_ensemble_weights=opt_ensemble
+                        )
                         
                     with open("cache/training_status.json", "w") as f:
                         json.dump({"status": "completed", "progress": 1.0, "message": "Training selesai!"}, f)
@@ -748,7 +770,9 @@ def show_training_page():
                 args=(st.session_state['current_training_detector'], X_train, edge_index,
                       st.session_state.get('edge_type'),
                       y_train if training_mode == TRAINING_MODE_SUPERVISED else None,
-                      device, training_mode)
+                      device, training_mode,
+                      enable_optuna_ensemble_weights,
+                      enable_hyperparameter_tuning)
             )
             t.start()
             
@@ -918,8 +942,28 @@ def show_training_page():
                     fig.update_traces(textposition='inside', textinfo='percent+label')
                     st.plotly_chart(fig, width='stretch')
                 
-                # Show dynamic weights info
-                if use_dynamic_weights:
+                # Show Optuna Ensemble Weight Optimization Results
+                if getattr(detector, 'weight_optimization_results', None):
+                    opt_res = detector.weight_optimization_results
+                    cmp = opt_res.get('metric_comparison', {})
+                    def_m = cmp.get('default', {})
+                    opt_m = cmp.get('optimized', {})
+                    fpr_red = cmp.get('fpr_reduction_pct', 0.0)
+                    
+                    st.success(f"⚡ **Optuna Ensemble Weights Applied!** Berhasil mereduksi False Positive Rate sebesar **{fpr_red:.1f}%**")
+                    with st.expander("📊 Detail Evaluasi Optimasi Bobot Ensemble (Optuna vs Default)", expanded=True):
+                        opt_c1, opt_c2, opt_c3, opt_c4 = st.columns(4)
+                        with opt_c1:
+                            st.metric("False Positive Rate (FPR)", f"{opt_m.get('fpr', 0):.2%}", delta=f"{-fpr_red:.1f}%", delta_color="inverse")
+                        with opt_c2:
+                            st.metric("Precision (Presisi)", f"{opt_m.get('precision', 0):.2%}", delta=f"{(opt_m.get('precision', 0) - def_m.get('precision', 0)):.2%}")
+                        with opt_c3:
+                            st.metric("Recall (Sensitivitas)", f"{opt_m.get('recall', 0):.2%}", delta=f"{(opt_m.get('recall', 0) - def_m.get('recall', 0)):.2%}")
+                        with opt_c4:
+                            st.metric("F1-Score / F0.5", f"{opt_m.get('f1', 0):.2%}", delta=f"{(opt_m.get('f1', 0) - def_m.get('f1', 0)):.2%}")
+                        
+                        st.caption(f"Optimasi diselesaikan dalam {opt_res.get('n_trials_completed', 0)} trials menggunakan Stratified K-Fold Cross-Validation.")
+                elif use_dynamic_weights:
                     st.success("🎯 **Dynamic Weights Applied**: Weights were automatically optimized based on your data characteristics!")
                     
                     # Show weight optimization details
@@ -936,12 +980,6 @@ def show_training_page():
                         - Data Size: {current_sample_count} samples
                         - Feature Count: {len(selected_features)} features
                         - XGBoost Features: {'Ready' if current_sample_count > 1 else 'Insufficient Data'}
-                        
-                        **Optimization Strategy:**
-                        - Small datasets favor Isolation Forest (less overfitting risk)
-                        - High variance features favor Autoencoder (complex pattern detection)
-                        - Dense features favor XGBoost (complex pattern analysis)
-                        - Sparse features reduce XGBoost weight (fallback to other algorithms)
                         """)
                 else:
                     st.info("🎛️ **Manual Weights Applied**: Using manually configured weights.")

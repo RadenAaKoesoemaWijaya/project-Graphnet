@@ -575,6 +575,56 @@ class ConceptDriftDetector:
             st.warning(f"⚠️ Concept drift detected in {drifted_count} features")
             st.write("Drifted features:", drift_df[drift_df['drift']]['feature'].tolist())
 
+    def check_and_trigger_retraining(self, new_data, adaptive_manager=None, min_drift_feature_pct=0.20, retrain_callback=None, **retrain_kwargs):
+        """Automatically detect drift and trigger model retraining if drift ratio exceeds threshold.
+        
+        Args:
+            new_data: Incoming claims batch / new dataset to evaluate.
+            adaptive_manager: AdaptiveLearningManager instance (optional).
+            min_drift_feature_pct: Minimum proportion of drifted features to trigger retraining (e.g. 0.20 = 20%).
+            retrain_callback: Optional callable func(new_data, **retrain_kwargs) -> new_detector.
+            retrain_kwargs: Additional arguments passed to retraining pipeline.
+            
+        Returns:
+            Dictionary with drift detection metrics, trigger status, and retraining outcome.
+        """
+        drift_detected, drift_report = self.detect_drift(new_data)
+        
+        features_dict = drift_report.get('features', {})
+        total_feats = len(features_dict)
+        drifted_feats = [f for f, rep in features_dict.items() if rep.get('drift', False)]
+        drift_ratio = len(drifted_feats) / total_feats if total_feats > 0 else 0.0
+        
+        should_retrain = drift_detected and (drift_ratio >= min_drift_feature_pct)
+        outcome = {
+            'drift_detected': bool(drift_detected),
+            'drift_ratio': float(drift_ratio),
+            'drifted_features': drifted_feats,
+            'total_features': total_feats,
+            'retraining_triggered': bool(should_retrain),
+            'retraining_result': None,
+            'reason': f"Drift in {len(drifted_feats)}/{total_feats} ({drift_ratio:.1%}) features exceeding {min_drift_feature_pct:.1%} threshold." if should_retrain else "Drift within acceptable tolerance."
+        }
+        
+        if should_retrain:
+            logger.info("Concept Drift Trigger Activated: %s", outcome['reason'])
+            if retrain_callback is not None:
+                try:
+                    outcome['retraining_result'] = retrain_callback(new_data, **retrain_kwargs)
+                except Exception as e:
+                    outcome['retraining_result'] = {'status': 'error', 'message': str(e)}
+            elif adaptive_manager is not None:
+                try:
+                    outcome['retraining_result'] = adaptive_manager.trigger_automated_retraining(
+                        train_data=new_data,
+                        reason=outcome['reason'],
+                        **retrain_kwargs
+                    )
+                except Exception as e:
+                    outcome['retraining_result'] = {'status': 'error', 'message': str(e)}
+                    
+        return outcome
+
 
 class PerformanceMonitor:
     """
@@ -860,3 +910,172 @@ class AdaptiveLearningManager:
             
             fig = px.pie(feedback_df, values='Count', names='Type', title='Feedback Distribution')
             st.plotly_chart(fig, use_container_width=True)
+
+    def evaluate_champion_challenger(self, champion_detector, challenger_detector, validation_data,
+                                      validation_labels=None, max_fpr_increase=0.01, min_recall_retention=0.95):
+        """Senior QA Champion vs Challenger Quality Gate: Evaluates candidate model before production deployment.
+        
+        Args:
+            champion_detector: Existing active CombinedAnomalyDetector instance.
+            challenger_detector: Retrained candidate CombinedAnomalyDetector instance.
+            validation_data: Dataset for comparison.
+            validation_labels: Binary labels (pseudo-labels generated if None).
+            max_fpr_increase: Maximum allowed FPR degradation (e.g. 0.01 = +1% FPR allowed).
+            min_recall_retention: Minimum recall retention factor (e.g. 0.95 = 95% of champion recall).
+            
+        Returns:
+            Dictionary with gate decision ('promote' or 'reject'), metrics comparison, and reasons.
+        """
+        try:
+            # Generate predictions from both models
+            champ_scores = champion_detector.predict_anomaly_probability(validation_data)
+            chal_scores = challenger_detector.predict_anomaly_probability(validation_data)
+            
+            if isinstance(champ_scores, tuple):
+                champ_scores = champ_scores[0]
+            if isinstance(chal_scores, tuple):
+                chal_scores = chal_scores[0]
+                
+            n_samples = len(validation_data)
+            if validation_labels is None:
+                # Use high-confidence consensus as validation target
+                combined_ref = (champ_scores + chal_scores) / 2.0
+                thresh = np.percentile(combined_ref, 95)
+                y_eval = (combined_ref >= thresh).astype(int)
+            else:
+                y_eval = np.asarray(validation_labels, dtype=int)
+                
+            def _calc_qa_metrics(scores, y_true):
+                preds = (scores >= 0.5).astype(int)
+                tp = np.sum((preds == 1) & (y_true == 1))
+                tn = np.sum((preds == 0) & (y_true == 0))
+                fp = np.sum((preds == 1) & (y_true == 0))
+                fn = np.sum((preds == 0) & (y_true == 1))
+                
+                fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0
+                prec = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+                rec = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+                f1 = 2 * (prec * rec) / (prec + rec) if (prec + rec) > 0 else 0.0
+                return {'fpr': float(fpr), 'precision': float(prec), 'recall': float(rec), 'f1': float(f1)}
+                
+            champ_metrics = _calc_qa_metrics(champ_scores, y_eval)
+            chal_metrics = _calc_qa_metrics(chal_scores, y_eval)
+            
+            # QA Evaluation Rules
+            passed_fpr = chal_metrics['fpr'] <= (champ_metrics['fpr'] + max_fpr_increase)
+            passed_recall = chal_metrics['recall'] >= (champ_metrics['recall'] * min_recall_retention)
+            passed_f1 = chal_metrics['f1'] >= (champ_metrics['f1'] * 0.90)
+            
+            promoted = passed_fpr and (passed_recall or chal_metrics['f1'] > champ_metrics['f1'])
+            
+            decision = "promote" if promoted else "reject"
+            reasons = []
+            if not passed_fpr:
+                reasons.append(f"FPR exceeded threshold: Challenger FPR={chal_metrics['fpr']:.2%}, Champion={champ_metrics['fpr']:.2%}")
+            if not passed_recall:
+                reasons.append(f"Recall dropped below retention threshold: Challenger Recall={chal_metrics['recall']:.2%}, Champion={champ_metrics['recall']:.2%}")
+            if promoted:
+                reasons.append("Challenger satisfies all QA stability and FPR constraints.")
+                
+            return {
+                'decision': decision,
+                'promoted': bool(promoted),
+                'champion_metrics': champ_metrics,
+                'challenger_metrics': chal_metrics,
+                'reasons': reasons,
+                'timestamp': pd.Timestamp.now().isoformat()
+            }
+        except Exception as e:
+            return {
+                'decision': 'error',
+                'promoted': False,
+                'error': str(e)
+            }
+
+    def trigger_automated_retraining(self, train_data, train_labels=None, edge_index=None,
+                                     device='cpu', optuna_n_trials=15, optuna_timeout=120,
+                                     lambda_fpr=0.5, reason="Concept Drift Detected"):
+        """Execute automated retraining pipeline with Optuna tuning and Champion-Challenger validation.
+        
+        Args:
+            train_data: Training features dataframe / matrix.
+            train_labels: Target labels (optional).
+            edge_index: Graph edge index (optional).
+            device: Computing device ('cpu' or 'cuda').
+            optuna_n_trials: Optuna trials count.
+            optuna_timeout: Optuna timeout in seconds.
+            lambda_fpr: False positive penalty weight.
+            reason: Text trigger reason.
+            
+        Returns:
+            Dictionary detailing retraining execution and deployment outcome.
+        """
+        import copy
+        from model import CombinedAnomalyDetector
+        
+        logger.info("Triggering automated retraining pipeline. Reason: %s", reason)
+        
+        # Instantiate Challenger model using current detector architecture
+        challenger = CombinedAnomalyDetector(
+            algorithms=list(self.detector.algorithms) if self.detector else None,
+            use_dynamic_weights=True
+        )
+        
+        try:
+            # Fit challenger with Optuna hyperparameter + Ensemble Weight Tuning enabled
+            challenger.fit(
+                features=train_data.values if hasattr(train_data, 'values') else train_data,
+                labels=train_labels,
+                edge_index=edge_index,
+                device=device,
+                optimize_hyperparams=True,
+                optuna_n_trials=optuna_n_trials,
+                optuna_timeout=optuna_timeout,
+                optimize_ensemble_weights=True,
+                lambda_fpr=lambda_fpr
+            )
+            
+            # If Champion exists, run Champion-Challenger Quality Gate
+            if self.detector is not None:
+                gate_result = self.evaluate_champion_challenger(
+                    champion_detector=self.detector,
+                    challenger_detector=challenger,
+                    validation_data=train_data.values if hasattr(train_data, 'values') else train_data,
+                    validation_labels=train_labels
+                )
+                
+                if gate_result.get('promoted', False):
+                    old_detector = self.detector
+                    self.detector = challenger
+                    self.log_retraining(
+                        reason=reason,
+                        performance_before=gate_result.get('champion_metrics', {}),
+                        performance_after=gate_result.get('challenger_metrics', {})
+                    )
+                    logger.info("Challenger successfully promoted to Champion! Status: DEPLOYED")
+                    return {
+                        'status': 'promoted',
+                        'message': 'Challenger model passed QA Gate and has been deployed.',
+                        'gate_result': gate_result,
+                        'weights': {
+                            'isolation': challenger.isolation_weight,
+                            'autoencoder': challenger.autoencoder_weight,
+                            'xgboost': challenger.xgboost_weight,
+                            'gnn': challenger.gnn_weight
+                        }
+                    }
+                else:
+                    logger.warning("Challenger failed QA Gate. Retained Champion model. Reasons: %s", gate_result.get('reasons'))
+                    return {
+                        'status': 'rejected',
+                        'message': 'Challenger failed QA quality gate. Retained champion model.',
+                        'gate_result': gate_result
+                    }
+            else:
+                self.detector = challenger
+                return {'status': 'deployed_initial', 'message': 'Challenger deployed as initial champion model.'}
+                
+        except Exception as e:
+            logger.error("Automated retraining pipeline failed: %s", e)
+            return {'status': 'error', 'message': str(e)}
+

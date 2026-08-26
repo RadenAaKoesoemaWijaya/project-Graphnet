@@ -2196,6 +2196,227 @@ class DynamicWeightOptimizer:
         
         return current_weights
 
+    def optimize_weights_with_optuna(self, individual_scores, y_true=None, active_algorithms=None,
+                                     n_trials=30, timeout=120, lambda_fpr=0.5, cv_folds=5):
+        """Optimize ensemble weights dynamically using Optuna to minimize False Positive Rate.
+        
+        Args:
+            individual_scores: Dictionary of algorithm_name -> np.ndarray of continuous scores/probabilities.
+            y_true: True binary labels (0/1) or consensus pseudo-labels.
+            active_algorithms: List of algorithms to include in ensemble.
+            n_trials: Number of Optuna optimization trials.
+            timeout: Optimization timeout in seconds.
+            lambda_fpr: Weight penalty for False Positive Rate in objective function.
+            cv_folds: Number of Stratified K-Fold CV folds.
+            
+        Returns:
+            Dictionary with optimal weights and comparative performance metrics.
+        """
+        optimizer = OptunaEnsembleOptimizer(
+            n_trials=n_trials,
+            timeout=timeout,
+            lambda_fpr=lambda_fpr,
+            cv_folds=cv_folds
+        )
+        return optimizer.optimize(
+            individual_scores=individual_scores,
+            y_true=y_true,
+            active_algorithms=active_algorithms
+        )
+
+
+class OptunaEnsembleOptimizer:
+    """Dynamic Ensemble Weight Optimizer powered by Optuna.
+    
+    Optimizes ensemble weights across multiple anomaly detection models (XGBoost, 
+    Isolation Forest, Autoencoder, GNN) specifically designed to minimize False Positive 
+    Rate (FPR) while preserving high recall using Stratified K-Fold Cross-Validation.
+    """
+    def __init__(self, n_trials=30, timeout=120, lambda_fpr=0.5, cv_folds=5, beta=0.5, random_state=42):
+        self.n_trials = n_trials
+        self.timeout = timeout
+        self.lambda_fpr = lambda_fpr
+        self.cv_folds = cv_folds
+        self.beta = beta  # Beta < 1.0 (e.g. 0.5) puts higher emphasis on Precision (fewer false positives)
+        self.random_state = random_state
+        self.best_weights = None
+        self.study_summary = {}
+
+    def _normalize_scores(self, scores_dict):
+        """Scale all model score outputs safely to [0, 1] range."""
+        norm_scores = {}
+        for algo, scores in scores_dict.items():
+            if scores is None or len(scores) == 0:
+                continue
+            arr = np.asarray(scores, dtype=float)
+            s_min, s_max = np.min(arr), np.max(arr)
+            denom = s_max - s_min
+            if denom > 1e-8:
+                norm_scores[algo] = (arr - s_min) / denom
+            else:
+                norm_scores[algo] = np.zeros_like(arr)
+        return norm_scores
+
+    def _compute_metrics_at_threshold(self, y_true, combined_scores, threshold=0.5):
+        """Compute comprehensive QA metrics: FPR, Precision, Recall, F1, F_beta."""
+        y_pred = (combined_scores >= threshold).astype(int)
+        
+        # Calculate confusion matrix components
+        tp = np.sum((y_pred == 1) & (y_true == 1))
+        tn = np.sum((y_pred == 0) & (y_true == 0))
+        fp = np.sum((y_pred == 1) & (y_true == 0))
+        fn = np.sum((y_pred == 0) & (y_true == 1))
+        
+        fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        
+        beta_sq = self.beta ** 2
+        f_beta_denom = (beta_sq * precision + recall)
+        f_beta = (1 + beta_sq) * (precision * recall) / f_beta_denom if f_beta_denom > 0 else 0.0
+        
+        f1_denom = precision + recall
+        f1 = 2 * (precision * recall) / f1_denom if f1_denom > 0 else 0.0
+        
+        return {
+            'fpr': float(fpr),
+            'precision': float(precision),
+            'recall': float(recall),
+            'f1': float(f1),
+            'f_beta': float(f_beta),
+            'tp': int(tp),
+            'tn': int(tn),
+            'fp': int(fp),
+            'fn': int(fn)
+        }
+
+    def optimize(self, individual_scores, y_true=None, active_algorithms=None):
+        """Run Optuna study to find optimal ensemble weights."""
+        norm_scores = self._normalize_scores(individual_scores)
+        
+        if not norm_scores:
+            logger.warning("No valid individual scores provided for Optuna ensemble tuning.")
+            return {'weights': {}, 'status': 'no_data'}
+        
+        algos = active_algorithms if active_algorithms else list(norm_scores.keys())
+        algos = [a for a in algos if a in norm_scores]
+        
+        if len(algos) == 0:
+            return {'weights': {}, 'status': 'no_matching_algos'}
+        
+        if len(algos) == 1:
+            return {
+                'weights': {algos[0]: 1.0},
+                'status': 'single_algo',
+                'best_score': 1.0,
+                'metric_comparison': {}
+            }
+            
+        n_samples = len(next(iter(norm_scores.values())))
+        
+        # If no ground truth labels, generate consensus pseudo labels (top 5% anomalies)
+        if y_true is None:
+            mean_score = np.mean([norm_scores[a] for a in algos], axis=0)
+            threshold = np.percentile(mean_score, 95)
+            y_eval = (mean_score >= threshold).astype(int)
+        else:
+            y_eval = np.asarray(y_true, dtype=int)
+            
+        # Baseline / Default equal weights evaluation
+        equal_weight = 1.0 / len(algos)
+        default_combined = sum(equal_weight * norm_scores[a] for a in algos)
+        default_metrics = self._compute_metrics_at_threshold(y_eval, default_combined)
+
+        if not OPTUNA_AVAILABLE:
+            logger.warning("Optuna is not installed. Using default normalized equal weights.")
+            return {
+                'weights': {a: equal_weight for a in algos},
+                'status': 'optuna_not_available',
+                'metric_comparison': {
+                    'default': default_metrics,
+                    'optimized': default_metrics
+                }
+            }
+
+        # Setup Stratified K-Fold Cross Validation
+        from sklearn.model_selection import StratifiedKFold
+        
+        unique_classes, counts = np.unique(y_eval, return_counts=True)
+        use_cv = len(unique_classes) > 1 and np.min(counts) >= self.cv_folds
+        
+        if use_cv:
+            skf = StratifiedKFold(n_splits=self.cv_folds, shuffle=True, random_state=self.random_state)
+            splits = list(skf.split(np.zeros(n_samples), y_eval))
+        else:
+            splits = [(np.arange(n_samples), np.arange(n_samples))]
+
+        # Optuna Objective Function
+        def objective(trial):
+            # Sample simplex weights
+            raw_w = {}
+            for a in algos:
+                raw_w[a] = trial.suggest_float(f'weight_{a}', 0.01, 1.0)
+            
+            total_w = sum(raw_w.values())
+            weights = {a: raw_w[a] / total_w for a in algos}
+            
+            cv_scores = []
+            for train_idx, val_idx in splits:
+                val_combined = sum(weights[a] * norm_scores[a][val_idx] for a in algos)
+                metrics = self._compute_metrics_at_threshold(y_eval[val_idx], val_combined)
+                
+                # Custom objective: Maximize F_beta while penalizing False Positive Rate (FPR)
+                # Score = F_beta - (lambda * FPR)
+                fold_obj = metrics['f_beta'] - (self.lambda_fpr * metrics['fpr'])
+                cv_scores.append(fold_obj)
+                
+            return float(np.mean(cv_scores))
+
+        # Run Optuna Study with suppress logging
+        optuna.logging.set_verbosity(optuna.logging.WARNING)
+        study = optuna.create_study(
+            direction="maximize",
+            sampler=optuna.samplers.TPESampler(seed=self.random_state)
+        )
+        
+        study.optimize(
+            objective,
+            n_trials=self.n_trials,
+            timeout=self.timeout,
+            show_progress_bar=False
+        )
+        
+        # Extract best weights
+        best_raw = {a: study.best_params.get(f'weight_{a}', 1.0) for a in algos}
+        best_sum = sum(best_raw.values())
+        optimal_weights = {a: float(best_raw[a] / best_sum) for a in algos}
+        
+        # Evaluate optimized ensemble
+        opt_combined = sum(optimal_weights[a] * norm_scores[a] for a in algos)
+        optimized_metrics = self._compute_metrics_at_threshold(y_eval, opt_combined)
+        
+        logger.info(
+            "Optuna Ensemble Optimization Completed: Best Score=%.4f, FPR Reduction: %.2f%% -> %.2f%%",
+            study.best_value, default_metrics['fpr'] * 100, optimized_metrics['fpr'] * 100
+        )
+        
+        self.best_weights = optimal_weights
+        return {
+            'weights': optimal_weights,
+            'status': 'success',
+            'best_objective_value': float(study.best_value),
+            'n_trials_completed': len(study.trials),
+            'metric_comparison': {
+                'default': default_metrics,
+                'optimized': optimized_metrics,
+                'fpr_reduction_pct': float(
+                    ((default_metrics['fpr'] - optimized_metrics['fpr']) / default_metrics['fpr'] * 100)
+                    if default_metrics['fpr'] > 0 else 0.0
+                )
+            }
+        }
+
+
 class CombinedAnomalyDetector:
     """Enhanced anomaly detection with dynamic weight optimization and imbalance handling"""
     def __init__(self, isolation_forest_params=None, autoencoder_params=None, dbscan_params=None, xgboost_params=None,
@@ -2232,6 +2453,7 @@ class CombinedAnomalyDetector:
         # Dynamic weight optimization
         self.use_dynamic_weights = use_dynamic_weights
         self.weight_optimizer = DynamicWeightOptimizer() if use_dynamic_weights else None
+        self.weight_optimization_results = None
 
         # Imbalance handling
         self.imbalance_config = imbalance_config or {}
@@ -2276,7 +2498,9 @@ class CombinedAnomalyDetector:
             'random_state': 42
         }
     
-    def fit(self, features, edge_index=None, edge_type=None, labels=None, device='cpu', optimize_hyperparams=False, optuna_n_trials=15, optuna_timeout=600):
+    def fit(self, features, edge_index=None, edge_type=None, labels=None, device='cpu', 
+            optimize_hyperparams=False, optuna_n_trials=15, optuna_timeout=600, 
+            optimize_ensemble_weights=False, lambda_fpr=0.5):
         """Train the combined anomaly detection model with dynamic weight optimization and imbalance handling"""
         # Set seeds for reproducibility
         _set_global_seeds(42)
@@ -2707,9 +2931,128 @@ class CombinedAnomalyDetector:
         if self.gnn_model is not None and self.gnn_weight > 0 and 'gnn' not in self.algorithms:
             self.algorithms.append('gnn')
         
+        # Optimize ensemble weights dynamically with Optuna (FPR minimization)
+        if optimize_ensemble_weights or (optimize_hyperparams and OPTUNA_AVAILABLE):
+            try:
+                self.optimize_ensemble_weights(
+                    features=features,
+                    labels=pseudo_labels,
+                    edge_index=edge_index,
+                    edge_type=edge_type,
+                    device=device,
+                    n_trials=optuna_n_trials,
+                    timeout=optuna_timeout,
+                    lambda_fpr=lambda_fpr
+                )
+            except Exception as opt_err:
+                logger.warning("Dynamic Optuna ensemble weight optimization failed: %s", opt_err)
+
         # Train stacking ensemble if enabled and labels are available
         if self.use_stacking and labels is not None:
             self._train_stacking_ensemble(features_scaled, labels, device)
+
+    def optimize_ensemble_weights(self, features, labels=None, edge_index=None, edge_type=None,
+                                  device='cpu', n_trials=30, timeout=120, lambda_fpr=0.5, cv_folds=5):
+        """Dynamically optimize ensemble weights via Optuna specifically to minimize False Positive Rate.
+        
+        Args:
+            features: Input feature matrix (raw / unscaled).
+            labels: Ground truth binary labels or pseudo-labels.
+            edge_index: Graph edge index (for GNN scoring).
+            edge_type: Graph edge types (optional).
+            device: Computing device ('cpu' or 'cuda').
+            n_trials: Number of Optuna optimization trials.
+            timeout: Optimization timeout in seconds.
+            lambda_fpr: Weight penalty for False Positive Rate in objective function.
+            cv_folds: Number of Stratified K-Fold CV splits.
+            
+        Returns:
+            Dictionary containing optimization results, best weights, and metrics comparison.
+        """
+        logger.info("Starting Dynamic Ensemble Weight Optimization (Optuna FPR Minimization)...")
+        
+        features_imputed = self.imputer.transform(features)
+        features_scaled = self.scaler.transform(features_imputed)
+        
+        individual_scores = {}
+        
+        # 1. Isolation Forest scores
+        if self.isolation_forest is not None and 'isolation_forest' in self.algorithms:
+            iso_scores = self.isolation_forest.decision_function(features_scaled)
+            denom = (iso_scores.max() - iso_scores.min())
+            individual_scores['isolation'] = 1 - (iso_scores - iso_scores.min()) / (denom if denom != 0 else 1.0)
+            
+        # 2. Autoencoder reconstruction error scores
+        if self.autoencoder is not None and self.autoencoder_threshold is not None and 'autoencoder' in self.algorithms:
+            self.autoencoder.eval()
+            batch_size = get_optimal_batch_size(device, len(features_scaled), features_scaled.shape[1], default_batch=2048)
+            all_errors = []
+            with torch.no_grad():
+                for i in range(0, len(features_scaled), batch_size):
+                    batch_features = torch.FloatTensor(features_scaled[i:i+batch_size]).to(device)
+                    out = self.autoencoder(batch_features)
+                    recon = out[0] if self.autoencoder.vae else out
+                    batch_errors = F.mse_loss(recon, batch_features, reduction='none').mean(dim=1)
+                    all_errors.extend(batch_errors.cpu().numpy())
+            ae_scores = np.array(all_errors) / self.autoencoder_threshold
+            individual_scores['autoencoder'] = np.clip(ae_scores, 0, 1)
+
+        # 3. XGBoost / Supervised scores
+        if self.xgboost_model is not None and 'xgboost' in self.algorithms:
+            try:
+                individual_scores['xgboost'] = self.xgboost_model.predict_proba(features_scaled)[:, 1]
+            except Exception as e:
+                logger.warning("Error getting XGBoost scores for weight optimization: %s", e)
+
+        # 4. GNN scores
+        if self.gnn_model is not None and 'gnn' in self.algorithms and edge_index is not None:
+            try:
+                self.gnn_model.eval()
+                with torch.no_grad():
+                    num_nodes = features_scaled.shape[0]
+                    ei = torch.LongTensor(edge_index).to(device)
+                    if ei.dim() == 2 and ei.size(0) != 2 and ei.size(1) == 2:
+                        ei = ei.t().contiguous()
+                    feat_t = torch.FloatTensor(features_scaled).to(device)
+                    batch_t = torch.zeros(num_nodes, dtype=torch.long, device=device)
+                    out = self.gnn_model(feat_t, ei, batch_t, edge_type)
+                    individual_scores['gnn'] = torch.softmax(out, dim=1)[:, 1].cpu().numpy()
+            except Exception as e:
+                logger.warning("Error getting GNN scores for weight optimization: %s", e)
+
+        if not individual_scores:
+            logger.warning("No individual model scores available for weight optimization.")
+            return None
+
+        # Run Optuna weight optimization
+        optimizer = OptunaEnsembleOptimizer(
+            n_trials=n_trials,
+            timeout=timeout,
+            lambda_fpr=lambda_fpr,
+            cv_folds=cv_folds
+        )
+        
+        result = optimizer.optimize(
+            individual_scores=individual_scores,
+            y_true=labels,
+            active_algorithms=list(individual_scores.keys())
+        )
+        
+        if result and result.get('status') == 'success':
+            weights = result.get('weights', {})
+            if 'isolation' in weights:
+                self.isolation_weight = weights['isolation']
+            if 'autoencoder' in weights:
+                self.autoencoder_weight = weights['autoencoder']
+            if 'xgboost' in weights:
+                self.xgboost_weight = weights['xgboost']
+            if 'gnn' in weights:
+                self.gnn_weight = weights['gnn']
+                
+            self.weight_optimization_results = result
+            logger.info("Updated CombinedAnomalyDetector weights with Optuna optimal weights: %s", weights)
+            
+        return result
 
     def _train_stacking_ensemble(self, features_scaled, labels, device='cpu'):
         """Train stacking ensemble with meta-learner"""

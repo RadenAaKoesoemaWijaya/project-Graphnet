@@ -284,7 +284,52 @@ def show_detection_page():
                             # Display results
                             if drift_detected:
                                 st.error("⚠️ Concept Drift Terdeteksi!")
-                                st.warning("Distribusi data baru berbeda signifikan dari data latih. Pertimbangkan untuk retraining model.")
+                                st.warning("Distribusi data baru berbeda signifikan dari data latih.")
+                                
+                                # QA Automated Retraining Option
+                                st.markdown("### 🔄 Automated Retraining Pipeline (Optuna + Stratified K-Fold CV)")
+                                auto_retrain = st.checkbox(
+                                    "Picu Retraining Otomatis & Evaluasi Champion vs Challenger",
+                                    value=True,
+                                    help="Memicu pelatihan ulang model baru dengan Optuna hyperparameter tuning dan Stratified K-Fold CV untuk adaptasi terhadap pola klaim baru."
+                                )
+                                
+                                if auto_retrain and st.button("🚀 Jalankan Auto-Retraining Sekarang", key="btn_auto_retrain"):
+                                    with st.spinner("Menjalankan retraining model penantang (Challenger) dengan Optuna & K-Fold CV..."):
+                                        try:
+                                            from model_explainer import AdaptiveLearningManager
+                                            adaptive_mgr = AdaptiveLearningManager(detector=st.session_state.get('model'))
+                                            
+                                            retrain_res = drift_detector.check_and_trigger_retraining(
+                                                new_data=df_processed[training_features],
+                                                adaptive_manager=adaptive_mgr,
+                                                min_drift_feature_pct=0.10,
+                                                optuna_n_trials=15,
+                                                optuna_timeout=90
+                                            )
+                                            
+                                            if retrain_res.get('retraining_triggered'):
+                                                res = retrain_res.get('retraining_result', {})
+                                                if res.get('status') == 'promoted':
+                                                    st.success("✅ **Model Challenger Lolos QA Quality Gate & Berhasil Di-deploy!**")
+                                                    st.session_state['model'] = adaptive_mgr.detector
+                                                    st.session_state['adaptive_learning_manager'] = adaptive_mgr
+                                                    
+                                                    gate = res.get('gate_result', {})
+                                                    c_m = gate.get('champion_metrics', {})
+                                                    ch_m = gate.get('challenger_metrics', {})
+                                                    
+                                                    m_col1, m_col2, m_col3 = st.columns(3)
+                                                    with m_col1:
+                                                        st.metric("FPR Model", f"{ch_m.get('fpr', 0):.2%}", delta=f"{(ch_m.get('fpr', 0) - c_m.get('fpr', 0)):.2%}", delta_color="inverse")
+                                                    with m_col2:
+                                                        st.metric("Recall Model", f"{ch_m.get('recall', 0):.2%}", delta=f"{(ch_m.get('recall', 0) - c_m.get('recall', 0)):.2%}")
+                                                    with m_col3:
+                                                        st.metric("F1-Score", f"{ch_m.get('f1', 0):.2%}", delta=f"{(ch_m.get('f1', 0) - c_m.get('f1', 0)):.2%}")
+                                                else:
+                                                    st.warning(f"⚠️ Model Challenger ditolak oleh Quality Gate: {res.get('message', 'Performa belum melampaui Champion')}")
+                                        except Exception as err:
+                                            st.error(f"Gagal mengeksekusi auto-retraining: {str(err)}")
                             else:
                                 st.success("✅ Tidak ada Concept Drift Terdeteksi")
                                 st.info("Distribusi data baru konsisten dengan data latih model.")
