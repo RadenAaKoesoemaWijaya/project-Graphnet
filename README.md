@@ -9,6 +9,8 @@ Aplikasi ini dilengkapi antarmuka interaktif berbasis **Streamlit**, mendukung p
 ## 🚀 Fitur Utama
 
 - **Hybrid Detection Engine**: Menggabungkan probabilitas statistik/anomali ML dengan validasi kepatuhan aturan bisnis asuransi.
+- **Batch-Only Optimized Pipeline**: Deteksi anomali dioptimalkan secara eksklusif untuk dataset batch (CSV/XLSX/XLS/Parquet) guna menjamin validitas statistik agregat (IQR, Quantile, Z-Score) dan pembentukan graf relasi GNN.
+- **In-App Dataset Template & Schema Readiness**: Menyediakan unduhan template standar klaim (`astina_claim_template.csv`) dan evaluasi kesiapan skema otomatis (0–100%) sebelum analisis dijalankan.
 - **9 Modul Aturan Bisnis Fraud**:
   1. *Repeat Billing*: Deteksi klaim berulang dalam rentang waktu singkat.
   2. *Phantom Service*: Deteksi tindakan medis yang tidak wajar/fiktif.
@@ -224,6 +226,51 @@ docker compose ps
 ```
 
 Acceptance test production wajib mencakup upload 3 GiB resumable, peak memory, disk temporary, restart worker, concurrent users, restore model dari GCS, training GNN sampled, dan pencocokan `node_id` dengan anomaly probability.
+
+---
+
+## 📋 Panduan Persiapan Data & Format Skema Batch Deteksi
+
+Untuk menjamin akurasi estimasi statistik (*IQR, Quantile, Z-Score*), topologi graf GNN, serta 9 modul aturan bisnis, deteksi anomali ASTINA **wajib menggunakan dataset batch** (minimal 2 baris data). Input manual satu data tidak diperkenankan karena tidak memiliki konteks statistik agregat.
+
+### 📥 Unduh Template Dataset Standar
+
+Aplikasi menyediakan template standar berekstensi CSV (`astina_claim_template.csv`) yang dapat langsung diunduh melalui antarmuka web di halaman **Deteksi** (`⬇️ Unduh Template Dataset (CSV)`). Template memuat 5 baris contoh realistis dengan 14 kolom inti.
+
+Format file yang didukung: **`.csv`**, **`.xlsx`**, **`.xls`**, dan **`.parquet`**.
+
+### 🏷️ 14 Kolom Inti & Pemetaan Modul yang Bergantung
+
+| Kolom | Tipe Data | Deskripsi / Contoh | Modul yang Bergantung |
+| :--- | :--- | :--- | :--- |
+| `claim_id` | String/Int | Identifikasi unik klaim (`CLM-01001`) | Audit Trail, Duplicate Payment |
+| `patient_id` | String/Int | Identifikasi unik pasien (`PAT-00201`) | Repeat Billing, Fuzzy Claim Matching |
+| `provider_id` | String/Int | Kode faskes/dokter (`PROV-00011`) | Provider Capacity, Topologi Graf GNN |
+| `service_code` | String | Kode prosedur/tindakan medis (`99213`) | Phantom Service, Upcoding & Unbundling |
+| `diagnosis_code` | String | Kode diagnosis ICD-10 (`J06.9`, `E11.9`) | Phantom Service, Topologi Graf GNN |
+| `billing_date` | Date (YYYY-MM-DD) | Tanggal penagihan klaim (`2024-01-15`) | Repeat Billing (30-day window), Feature High Amount Quick Submit |
+| `service_date` | Date (YYYY-MM-DD) | Tanggal tindakan medis diberikan | Provider Capacity, Length of Stay |
+| `billed_amount` | Float | Nominal yang ditagihkan dalam Rupiah | ML Ensemble (Fitur amount), payment_ratio, allowance_ratio |
+| `paid_amount` | Float | Nominal yang dibayarkan oleh asuransi | payment_ratio, Inflated Bill & Cloning |
+| `allowed_amount` | Float | Nominal yang disetujui untuk ditanggung | allowance_ratio |
+| `claim_status` | String | Status klaim (`APPROVED`, `PENDING`, `REJECTED`) | Duplicate Payment & Status Check |
+| `patient_age` | Integer | Usia pasien dalam tahun (`45`) | Feature Engineering: age_group_encoded |
+| `length_of_stay` | Integer | Lama rawat inap dalam hari (`0` jika rawat jalan) | Length of Stay & Readmission |
+| `quantity` | Integer | Kuantitas obat/alkes/tindakan | Medication & Device Fraud |
+
+### 🩺 Evaluasi Kesiapan Skema (Schema Readiness Card)
+
+Setiap kali pengguna mengunggah dataset klaim baru, sistem secara otomatis mengevaluasi kesesuaian kolom:
+- 🟢 **100% Lengkap**: Seluruh 14 kolom inti ada; semua 9 modul aturan bisnis dan GNN aktif penuh.
+- 🟡 **70%–99% Memadai**: Sebagian modul non-kritis mungkin non-aktif; sistem memberi peringatan modul mana yang terdampak.
+- 🔴 **< 70% Tidak Memadai**: Kolom esensial tidak ditemukan; inferensi ditolak atau terdegradasi parah dan pengguna diarahkan menggunakan template.
+
+### 🔧 Penyesuaian Fitur Otomatis (*Smart Feature Alignment*)
+
+Model machine learning yang telah dilatih memiliki daftar fitur tetap. Saat dataset baru diunggah:
+1. **Fitur Eksisting**: Digunakan langsung dari kolom dataset.
+2. **Fitur Diturunkan (*Engineered*)**: Dihitung secara dinamis (misal: rasio `payment_ratio`, boolean `_high` via kuartil 90%, ekstrak tanggal `_day_of_week`/`_month`).
+3. **Fitur Hilang (*Imputed*)**: Diisi dengan **nilai median dari data latih** (`training_stats` yang tersimpan pada `metadata.json`), bukan dengan angka 0 statis, sehingga tidak mendistorsi distribusi normal model.
 
 ---
 

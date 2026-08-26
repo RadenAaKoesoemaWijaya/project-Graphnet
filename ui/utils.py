@@ -699,42 +699,72 @@ def get_gpu_status_display():
         # Check if it's ROCm or standard CPU
         if 'rocm' in gpu_info['torch_version'].lower():
             return "🔴 GPU (ROCm): No device detected"
-        return "💻 CPU Mode"
-
-
-def _derive_inference_feature(df, feature_name):
+      
+def _derive_inference_feature(df, feature_name, training_stats: dict | None = None):
     """
-    Derive a feature from available columns for inference/validation inference.
-    Returns a (series, source) tuple where source is 'existing', 'derived', or 'filled_zero'.
+    Derive a feature from available columns for inference.
+
+    Returns a (series, source) tuple where source is one of:
+        'existing'  – column present in df as-is
+        'derived'   – computed from related columns
+        'filled'    – imputed with a domain-neutral default (not just 0)
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Incoming batch dataset.
+    feature_name : str
+        Name of the feature expected by the trained model.
+    training_stats : dict, optional
+        Median / mean statistics saved from training (from metadata.json).
+        Keys are feature names; values are numeric medians. Used for imputation
+        so that missing features receive a realistic default value rather than 0.
     """
+    if training_stats is None:
+        training_stats = {}
+
+    # ── 1. Column exists directly ──────────────────────────────────────────────
     if feature_name in df.columns:
-        series = df[feature_name]
-        return series, 'existing'
+        return df[feature_name], 'existing'
 
+    # ── 2. Suffix-based derivations ───────────────────────────────────────────
     if feature_name.endswith('_high'):
         original_col = feature_name[:-5]
         if original_col in df.columns:
-            series = pd.Series(pd.to_numeric(df[original_col], errors='coerce'), dtype=float)
-            threshold = series.quantile(0.9)
-            return (series > threshold).astype(np.int8), 'derived'
+            s = pd.to_numeric(df[original_col], errors='coerce').astype(float)
+            return (s > s.quantile(0.9)).astype(np.int8), 'derived'
+
+    if feature_name.endswith('_very_high'):
+        original_col = feature_name[:-10]
+        if original_col in df.columns:
+            s = pd.to_numeric(df[original_col], errors='coerce').astype(float)
+            return (s > s.quantile(0.9)).astype(np.int8), 'derived'
 
     if feature_name.endswith('_late'):
         original_col = feature_name[:-5]
         if original_col in df.columns:
-            series = pd.Series(pd.to_numeric(df[original_col], errors='coerce'), dtype=float)
-            return (series > series.quantile(0.9)).astype(np.int8), 'derived'
+            s = pd.to_numeric(df[original_col], errors='coerce').astype(float)
+            return (s > s.quantile(0.9)).astype(np.int8), 'derived'
 
     if feature_name.endswith('_quick'):
         original_col = feature_name[:-6]
         if original_col in df.columns:
-            series = pd.Series(pd.to_numeric(df[original_col], errors='coerce'), dtype=float)
-            return (series < series.quantile(0.1)).astype(np.int8), 'derived'
+            s = pd.to_numeric(df[original_col], errors='coerce').astype(float)
+            return (s < s.quantile(0.1)).astype(np.int8), 'derived'
+
+    if feature_name.endswith('_zscore'):
+        original_col = feature_name[:-7]
+        if original_col in df.columns:
+            s = pd.to_numeric(df[original_col], errors='coerce').astype(float)
+            std = s.std()
+            if std > 0:
+                return ((s - s.mean()) / std), 'derived'
 
     if feature_name.endswith('_group_encoded'):
         original_col = feature_name[:-14]
         if original_col in df.columns:
             groups = pd.cut(
-                pd.to_numeric(df[original_col], errors='coerce'),  # type: ignore
+                pd.to_numeric(df[original_col], errors='coerce'),
                 bins=[0, 18, 35, 50, 65, 100],
                 labels=['0-18', '19-35', '36-50', '51-65', '65+']
             )
@@ -743,50 +773,103 @@ def _derive_inference_feature(df, feature_name):
     if feature_name.endswith('_day_of_week'):
         original_col = feature_name[:-12]
         if original_col in df.columns:
-            dates = pd.Series(pd.to_datetime(df[original_col], errors='coerce'))
-            return dates.dt.dayofweek, 'derived'
+            return pd.to_datetime(df[original_col], errors='coerce').dt.dayofweek, 'derived'
 
     if feature_name.endswith('_month'):
         original_col = feature_name[:-6]
         if original_col in df.columns:
-            dates = pd.Series(pd.to_datetime(df[original_col], errors='coerce'))
-            return dates.dt.month, 'derived'
+            return pd.to_datetime(df[original_col], errors='coerce').dt.month, 'derived'
 
     if feature_name.endswith('_year'):
         original_col = feature_name[:-5]
         if original_col in df.columns:
-            dates = pd.Series(pd.to_datetime(df[original_col], errors='coerce'))
-            return dates.dt.year, 'derived'
+            return pd.to_datetime(df[original_col], errors='coerce').dt.year, 'derived'
 
     if feature_name.endswith('_quarter'):
         original_col = feature_name[:-8]
         if original_col in df.columns:
-            dates = pd.Series(pd.to_datetime(df[original_col], errors='coerce'))
-            return dates.dt.quarter, 'derived'
+            return pd.to_datetime(df[original_col], errors='coerce').dt.quarter, 'derived'
 
     if '_to_' in feature_name and feature_name.endswith('_ratio'):
         base_name = feature_name[:-6]
         parts = base_name.split('_to_')
         if len(parts) == 2 and parts[0] in df.columns and parts[1] in df.columns:
-            left = pd.Series(pd.to_numeric(df[parts[0]], errors='coerce'), dtype=float)
-            right = pd.Series(pd.to_numeric(df[parts[1]], errors='coerce'), dtype=float)
+            left = pd.to_numeric(df[parts[0]], errors='coerce').astype(float)
+            right = pd.to_numeric(df[parts[1]], errors='coerce').astype(float)
             ratio = left / (right + 1e-8)
             return ratio.replace([np.inf, -np.inf], np.nan), 'derived'
 
-    return pd.Series(0.0, index=df.index), 'filled_zero'
+    # ── 3. Known domain-specific engineered features ──────────────────────────
+    # high_amount_quick_submit: requires at least one amount-like and time-like column
+    if feature_name == 'high_amount_quick_submit':
+        amount_candidates = [c for c in df.columns if any(k in c.lower() for k in ('amount', 'billed', 'cost', 'paid'))]
+        time_candidates   = [c for c in df.columns if any(k in c.lower() for k in ('days', 'time', 'duration', 'gap'))]
+        if amount_candidates and time_candidates:
+            a = pd.to_numeric(df[amount_candidates[0]], errors='coerce').astype(float)
+            t = pd.to_numeric(df[time_candidates[0]],  errors='coerce').astype(float)
+            return ((a > a.quantile(0.75)) & (t < t.quantile(0.25))).astype(np.int8), 'derived'
 
-def build_aligned_inference_features(df, training_features):
+    if feature_name == 'payment_ratio':
+        billed = next((c for c in df.columns if 'billed' in c.lower()), None)
+        paid   = next((c for c in df.columns if 'paid'   in c.lower()), None)
+        if billed and paid:
+            b = pd.to_numeric(df[billed], errors='coerce').astype(float)
+            p = pd.to_numeric(df[paid],   errors='coerce').astype(float)
+            ratio = (p / (b + 1e-8)).clip(0.0, 1.0)
+            return ratio.replace([np.inf, -np.inf], np.nan), 'derived'
+
+    if feature_name == 'allowance_ratio':
+        billed   = next((c for c in df.columns if 'billed'  in c.lower()), None)
+        allowed  = next((c for c in df.columns if 'allowed' in c.lower()), None)
+        if billed and allowed:
+            b = pd.to_numeric(df[billed],  errors='coerce').astype(float)
+            a = pd.to_numeric(df[allowed], errors='coerce').astype(float)
+            ratio = (a / (b + 1e-8)).clip(0.0, 1.0)
+            return ratio.replace([np.inf, -np.inf], np.nan), 'derived'
+
+    # ── 4. Fallback: impute using training median, else 0 ─────────────────────
+    fill_val = training_stats.get(feature_name, 0.0)
+    return pd.Series(float(fill_val), index=df.index), 'filled'
+
+
+def build_aligned_inference_features(df, training_features, training_stats: dict | None = None):
     """
-    Build an inference matrix that exactly matches the training feature list
-    and order. Missing features are derived when possible or filled with 0.
+    Build an inference matrix that exactly matches the training feature list and order.
+
+    Missing features are derived via known engineering rules when possible,
+    or imputed using stored training medians (from metadata.json) rather
+    than silent zeros.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Preprocessed input batch dataset.
+    training_features : list[str]
+        Ordered list of feature names the model was trained on.
+    training_stats : dict, optional
+        Median statistics per feature from training. Used for domain-neutral imputation.
+
+    Returns
+    -------
+    aligned_df : pd.DataFrame  (float32, same index as df)
+    summary    : dict with keys:
+        - expected_features   : int
+        - existing_features   : list[str]
+        - derived_features    : list[str]
+        - filled_features     : list[str]   (previously 'filled_zero_features')
+        - fill_values_used    : dict[str, float]
     """
-    aligned_df = pd.DataFrame(index=df.index)
+    if training_stats is None:
+        training_stats = {}
+
+    aligned_df       = pd.DataFrame(index=df.index)
     existing_features = []
-    derived_features = []
-    filled_zero_features = []
+    derived_features  = []
+    filled_features   = []
+    fill_values_used  = {}
 
     for feature_name in training_features:
-        series, source = _derive_inference_feature(df, feature_name)
+        series, source = _derive_inference_feature(df, feature_name, training_stats)
 
         if not isinstance(series, pd.Series):
             series = pd.Series(series, index=df.index)
@@ -796,10 +879,18 @@ def build_aligned_inference_features(df, training_features):
         if not pd.api.types.is_numeric_dtype(series):
             series = pd.Series(pd.factorize(series.fillna('Unknown'))[0], index=df.index)
 
-        series = pd.Series(pd.to_numeric(series, errors='coerce'), dtype=float)
+        series = pd.to_numeric(series, errors='coerce').astype(float)
+
         if series.isnull().any():
-            fill_value = series.median() if not series.dropna().empty else 0.0
+            if source == 'existing':
+                # For existing columns, use the column's own median
+                fill_value = series.median() if not series.dropna().empty else training_stats.get(feature_name, 0.0)
+            else:
+                # For engineered/filled features use training median or domain neutral value
+                fill_value = training_stats.get(feature_name, 0.0)
             series = series.fillna(fill_value)
+        else:
+            fill_value = None
 
         aligned_df[feature_name] = series.astype(np.float32)
 
@@ -808,13 +899,206 @@ def build_aligned_inference_features(df, training_features):
         elif source == 'derived':
             derived_features.append(feature_name)
         else:
-            filled_zero_features.append(feature_name)
+            filled_features.append(feature_name)
+            fill_values_used[feature_name] = fill_value if fill_value is not None else training_stats.get(feature_name, 0.0)
 
     summary = {
-        'expected_features': len(training_features),  # type: ignore
-        'existing_features': existing_features,
-        'derived_features': derived_features,
-        'filled_zero_features': filled_zero_features
+        'expected_features':    len(training_features),  # type: ignore
+        'existing_features':    existing_features,
+        'derived_features':     derived_features,
+        'filled_features':      filled_features,
+        # Legacy alias kept for backward compatibility
+        'filled_zero_features': filled_features,
+        'fill_values_used':     fill_values_used,
     }
     return aligned_df, summary
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DATASET TEMPLATE GENERATOR
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Core columns required for full operation of all 9 business rule modules and GNN
+TEMPLATE_CORE_COLUMNS = [
+    "claim_id",
+    "patient_id",
+    "provider_id",
+    "service_code",
+    "diagnosis_code",
+    "billing_date",
+    "service_date",
+    "billed_amount",
+    "paid_amount",
+    "allowed_amount",
+    "claim_status",
+    "patient_age",
+    "length_of_stay",
+    "quantity",
+]
+
+# Human-readable description for each column — shown in the schema readiness card
+COLUMN_DESCRIPTIONS = {
+    "claim_id":       "Identifikasi unik klaim (String/Integer)",
+    "patient_id":     "Identifikasi unik pasien (diperlukan untuk Repeat Billing & Fuzzy Match)",
+    "provider_id":    "Kode dokter/faskes (diperlukan untuk Provider Capacity & Graf GNN)",
+    "service_code":   "Kode prosedur/tindakan medis (diperlukan untuk Phantom Service & Upcoding)",
+    "diagnosis_code": "Kode diagnosis ICD (diperlukan untuk deteksi Phantom Service & GNN)",
+    "billing_date":   "Tanggal penagihan dalam format YYYY-MM-DD (diperlukan untuk aturan temporal)",
+    "service_date":   "Tanggal layanan diberikan (YYYY-MM-DD)",
+    "billed_amount":  "Total nominal ditagihkan dalam Rupiah (Float)",
+    "paid_amount":    "Nominal yang dibayarkan (Float) — digunakan untuk payment_ratio",
+    "allowed_amount": "Nominal yang disetujui (Float) — digunakan untuk allowance_ratio",
+    "claim_status":   "Status klaim: APPROVED / PENDING / REJECTED",
+    "patient_age":    "Usia pasien dalam tahun (Integer)",
+    "length_of_stay": "Lama rawat inap dalam hari (Integer, isi 0 untuk rawat jalan)",
+    "quantity":       "Jumlah unit tindakan/obat/alkes yang diklaim (Integer)",
+}
+
+# Which modul / rule depends on each column
+COLUMN_RULE_DEPENDENCIES = {
+    "claim_id":       ["Audit Trail", "Duplicate Payment"],
+    "patient_id":     ["Repeat Billing", "Fuzzy Claim Matching"],
+    "provider_id":    ["Provider Capacity", "GNN Graf Relasi"],
+    "service_code":   ["Phantom Service", "Upcoding & Unbundling"],
+    "diagnosis_code": ["Phantom Service", "GNN Graf Relasi"],
+    "billing_date":   ["Repeat Billing (30-day window)", "high_amount_quick_submit"],
+    "service_date":   ["Provider Capacity", "Length of Stay"],
+    "billed_amount":  ["ML Ensemble (Feature: amount)", "payment_ratio", "allowance_ratio"],
+    "paid_amount":    ["payment_ratio", "Inflated Bill & Cloning"],
+    "allowed_amount": ["allowance_ratio"],
+    "claim_status":   ["Duplicate Payment & Status Check"],
+    "patient_age":    ["Feature Engineering: age_group_encoded"],
+    "length_of_stay": ["Length of Stay & Readmission"],
+    "quantity":       ["Medication & Device Fraud"],
+}
+
+
+def generate_sample_claims_template(n_rows: int = 5) -> pd.DataFrame:
+    """
+    Generate a sample insurance claims DataFrame with all core columns.
+
+    The template contains realistic sample values to guide users in preparing
+    their data for batch anomaly detection.
+
+    Parameters
+    ----------
+    n_rows : int
+        Number of sample rows to include. Default is 5.
+
+    Returns
+    -------
+    pd.DataFrame
+        Template DataFrame with TEMPLATE_CORE_COLUMNS as columns.
+    """
+    import random
+    import datetime
+
+    random.seed(42)
+    base_date = datetime.date(2024, 1, 15)
+    statuses  = ["APPROVED", "PENDING", "REJECTED", "APPROVED", "APPROVED"]
+    services  = ["99213", "99214", "71046", "80053", "43239"]
+    diagnoses = ["J06.9", "E11.9", "I10", "Z00.00", "K21.0"]
+
+    rows = []
+    for i in range(n_rows):
+        billing_dt  = base_date + datetime.timedelta(days=i * 7)
+        service_dt  = billing_dt - datetime.timedelta(days=random.randint(0, 5))
+        billed      = round(random.uniform(500_000, 10_000_000), 0)
+        paid        = round(billed * random.uniform(0.60, 1.00), 0)
+        allowed     = round(billed * random.uniform(0.70, 1.00), 0)
+        rows.append({
+            "claim_id":       f"CLM-{1000 + i:05d}",
+            "patient_id":     f"PAT-{200 + (i % 3):04d}",
+            "provider_id":    f"PROV-{10 + (i % 2):03d}",
+            "service_code":   services[i % len(services)],
+            "diagnosis_code": diagnoses[i % len(diagnoses)],
+            "billing_date":   billing_dt.strftime("%Y-%m-%d"),
+            "service_date":   service_dt.strftime("%Y-%m-%d"),
+            "billed_amount":  billed,
+            "paid_amount":    paid,
+            "allowed_amount": allowed,
+            "claim_status":   statuses[i % len(statuses)],
+            "patient_age":    random.randint(20, 75),
+            "length_of_stay": random.randint(0, 7),
+            "quantity":       random.randint(1, 5),
+        })
+
+    return pd.DataFrame(rows)
+
+
+def render_schema_readiness_card(df: pd.DataFrame) -> dict:
+    """
+    Analyse an uploaded batch dataset against TEMPLATE_CORE_COLUMNS and render
+    a visual schema readiness card in the Streamlit UI.
+
+    Displays:
+    - A green/amber/red banner summarising overall schema completeness.
+    - A per-column table indicating availability and which rules are affected.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        The uploaded/preprocessed batch dataset.
+
+    Returns
+    -------
+    dict  with keys:
+        - 'complete_pct'   : float (0–100)
+        - 'present'        : list[str]
+        - 'missing'        : list[str]
+        - 'affected_rules' : list[str]   (unique rules that cannot run)
+    """
+    present = [c for c in TEMPLATE_CORE_COLUMNS if c in df.columns]
+    missing = [c for c in TEMPLATE_CORE_COLUMNS if c not in df.columns]
+    complete_pct = len(present) / len(TEMPLATE_CORE_COLUMNS) * 100
+
+    # Collect rules that cannot run
+    affected_rules: list[str] = []
+    for col in missing:
+        affected_rules.extend(COLUMN_RULE_DEPENDENCIES.get(col, []))
+    affected_rules = list(dict.fromkeys(affected_rules))  # deduplicate preserving order
+
+    # ── Banner ──────────────────────────────────────────────────────────────
+    if complete_pct == 100:
+        st.success(
+            f"✅ **Skema Data Lengkap 100%** — Seluruh {len(TEMPLATE_CORE_COLUMNS)} kolom inti tersedia. "
+            "Semua 9 modul aturan bisnis dan GNN aktif penuh."
+        )
+    elif complete_pct >= 70:
+        st.warning(
+            f"⚠️ **Skema Data {complete_pct:.0f}%** — {len(missing)} kolom inti tidak ditemukan. "
+            f"Modul berikut mungkin tidak aktif: *{', '.join(affected_rules[:4])}*"
+            + (" dan lainnya." if len(affected_rules) > 4 else ".")
+        )
+    else:
+        st.error(
+            f"❌ **Skema Data Tidak Memadai ({complete_pct:.0f}%)** — {len(missing)} kolom penting tidak ada. "
+            "Akurasi deteksi akan sangat terdegradasi. Unduh template dan sesuaikan dataset Anda."
+        )
+
+    # ── Per-column status table ──────────────────────────────────────────────
+    table_rows = []
+    for col in TEMPLATE_CORE_COLUMNS:
+        status = "✅ Ada" if col in df.columns else "❌ Tidak ada"
+        rules  = ", ".join(COLUMN_RULE_DEPENDENCIES.get(col, ["-"]))
+        table_rows.append({
+            "Kolom": col,
+            "Status": status,
+            "Keterangan": COLUMN_DESCRIPTIONS.get(col, ""),
+            "Modul yang Bergantung": rules,
+        })
+
+    with st.expander("📋 Rincian Kelengkapan Kolom Data", expanded=(complete_pct < 100)):
+        st.dataframe(
+            pd.DataFrame(table_rows),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+
+    return {
+        "complete_pct":   complete_pct,
+        "present":        present,
+        "missing":        missing,
+        "affected_rules": affected_rules,
+    }

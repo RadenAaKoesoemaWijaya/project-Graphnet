@@ -3,6 +3,11 @@ from state_manager import *
 from repeat_billing_detector import RepeatBillingDetector
 from fuzzy_claim_matcher import FuzzyClaimMatcher
 from phantom_service_rules import PhantomServiceRuleEngine
+from ui.utils import (
+    generate_sample_claims_template,
+    render_schema_readiness_card,
+    TEMPLATE_CORE_COLUMNS,
+)
 import shutil
 
 
@@ -217,390 +222,230 @@ def show_detection_page():
     Gunakan model yang telah dilatih untuk mendeteksi anomali pada data transaksi asuransi.
     """)
     
-    # Data input options
-    st.subheader("📂 Sumber Data")
+    # ── Template dataset download ────────────────────────────────────────────
+    st.subheader("📋 Panduan Format Data & Template")
+    with st.expander("📖 Kolom yang Diperlukan untuk Deteksi Optimal", expanded=False):
+        st.markdown(
+            "Dataset Anda harus menyertakan kolom-kolom berikut agar seluruh **9 Modul Aturan Bisnis** "
+            "dan **GNN Graf Relasi** dapat berjalan secara penuh."
+        )
+        guide_rows = [
+            {"Kolom": c,
+             "Keterangan": COLUMN_DESCRIPTIONS.get(c, ""),
+             "Modul yang Bergantung": ", ".join(COLUMN_RULE_DEPENDENCIES.get(c, ["-"]))}
+            for c in TEMPLATE_CORE_COLUMNS
+        ]
+        st.dataframe(pd.DataFrame(guide_rows), use_container_width=True, hide_index=True)
+
+    template_df  = generate_sample_claims_template(n_rows=5)
+    template_csv = template_df.to_csv(index=False).encode("utf-8")
+    col_tmpl1, col_tmpl2 = st.columns([1, 3])
+    with col_tmpl1:
+        st.download_button(
+            label="⬇️ Unduh Template Dataset (CSV)",
+            data=template_csv,
+            file_name="astina_claim_template.csv",
+            mime="text/csv",
+            help="Unduh template CSV dengan format kolom standar. Isi dengan data klaim Anda sebelum mengunggah.",
+        )
+    with col_tmpl2:
+        st.caption(
+            "Template berisi 5 baris contoh dengan format kolom lengkap. "
+            "Anda dapat menambahkan baris baru atau menggantinya dengan data aktual."
+        )
+
+    st.markdown("---")
+
+    # ── Batch dataset upload ─────────────────────────────────────────────────
+    st.subheader("📂 Unggah Dataset Klaim (Batch)")
+    st.info(
+        "Deteksi anomali memerlukan **dataset batch** (lebih dari 1 baris) agar modul statistik, "
+        "GNN, dan aturan temporal bekerja secara akurat. "
+        "Format yang didukung: **CSV, XLSX, XLS, Parquet**."
+    )
 
     if 'enable_large_file_handling' not in st.session_state:
         st.session_state['enable_large_file_handling'] = True
     st.checkbox(
         "Aktifkan pemrosesan bertahap untuk dataset besar",
         key='enable_large_file_handling',
-        help="Disarankan aktif untuk mencegah error memori pada data besar. Nonaktifkan jika ingin praproses tanpa pembacaan bertahap."
+        help="Disarankan aktif untuk mencegah error memori pada data besar."
     )
-    
-    data_option = st.radio("Pilih sumber data:", [
-        "Unggah data baru (CSV)",
-        "Input manual (satu data)"
-    ])
-    
-    if data_option == "Unggah data baru (CSV)":
-        # Upload new data
-        uploaded_file = st.file_uploader("Unggah file CSV transaksi asuransi:", type=["csv"])
-        
-        if uploaded_file is not None:
-            try:
-                # Load and preprocess data
-                df_new = read_file_with_optimization(uploaded_file, 'csv')
-                if df_new is None or len(df_new) == 0:
-                    st.error("❌ File tidak dapat dibaca atau kosong.")
-                    return
-                st.success(f"File berhasil diunggah: {len(df_new)} baris")
-                
-                # Preprocess data
-                df_processed, feature_columns, preprocessing_metadata_new = preprocess_insurance_claims_optimized(
-                    df_new,
-                    enable_large_file_handling=st.session_state['enable_large_file_handling'],
-                    enable_outlier_detection=st.session_state.get('enable_outlier_detection', True),
-                    enable_data_validation=st.session_state.get('enable_data_validation', True)
+
+    uploaded_file = st.file_uploader(
+        "Unggah file dataset klaim asuransi:",
+        type=["csv", "xlsx", "xls", "parquet"],
+        help="Gunakan template yang diunduh di atas sebagai referensi format kolom.",
+    )
+
+    if uploaded_file is not None:
+        try:
+            # Detect format from file extension
+            file_ext = uploaded_file.name.rsplit(".", 1)[-1].lower()
+            fmt_map   = {"csv": "csv", "xlsx": "excel", "xls": "excel", "parquet": "parquet"}
+            file_format = fmt_map.get(file_ext, "csv")
+
+            df_new = read_file_with_optimization(uploaded_file, file_format)
+            if df_new is None or len(df_new) == 0:
+                st.error("❌ File tidak dapat dibaca atau kosong.")
+                return
+
+            if len(df_new) < 2:
+                st.error(
+                    "❌ Dataset harus memiliki minimal **2 baris data** agar analisis statistik, "
+                    "GNN, dan aturan temporal dapat berjalan dengan benar."
                 )
-                
-                # --- CONCEPT DRIFT DETECTION ---
-                # Compare distribution of new data with training data
-                st.info("📊 Pemeriksaan Concept Drift: Membandingkan distribusi data baru dengan data latih...")
-                
-                if st.button("🔍 Deteksi Concept Drift", key="detect_drift"):
-                    with st.spinner("Menganalisis perubahan distribusi data..."):
-                        try:
-                            # Get reference data from training metadata if available
-                            if 'train_df' in st.session_state:
-                                reference_data = st.session_state['train_df'][training_features]
-                            else:
-                                st.warning("Data latih tidak tersedia untuk perbandingan. Menggunakan data baru sebagai baseline.")
-                                reference_data = df_processed[training_features].head(1000)
-                            
-                            # Initialize drift detector
-                            drift_detector = ConceptDriftDetector(
-                                reference_data=reference_data,
-                                feature_names=training_features,
-                                threshold=0.05
-                            )
-                            
-                            # Detect drift
-                            drift_detected, drift_report = drift_detector.detect_drift(
-                                df_processed[training_features],
-                                method='ks_test'
-                            )
-                            
-                            # Display results
-                            if drift_detected:
-                                st.error("⚠️ Concept Drift Terdeteksi!")
-                                st.warning("Distribusi data baru berbeda signifikan dari data latih.")
-                                
-                                # QA Automated Retraining Option
-                                st.markdown("### 🔄 Automated Retraining Pipeline (Optuna + Stratified K-Fold CV)")
-                                auto_retrain = st.checkbox(
-                                    "Picu Retraining Otomatis & Evaluasi Champion vs Challenger",
-                                    value=True,
-                                    help="Memicu pelatihan ulang model baru dengan Optuna hyperparameter tuning dan Stratified K-Fold CV untuk adaptasi terhadap pola klaim baru."
-                                )
-                                
-                                if auto_retrain and st.button("🚀 Jalankan Auto-Retraining Sekarang", key="btn_auto_retrain"):
-                                    with st.spinner("Menjalankan retraining model penantang (Challenger) dengan Optuna & K-Fold CV..."):
-                                        try:
-                                            from model_explainer import AdaptiveLearningManager
-                                            adaptive_mgr = AdaptiveLearningManager(detector=st.session_state.get('model'))
-                                            
-                                            retrain_res = drift_detector.check_and_trigger_retraining(
-                                                new_data=df_processed[training_features],
-                                                adaptive_manager=adaptive_mgr,
-                                                min_drift_feature_pct=0.10,
-                                                optuna_n_trials=15,
-                                                optuna_timeout=90
-                                            )
-                                            
-                                            if retrain_res.get('retraining_triggered'):
-                                                res = retrain_res.get('retraining_result', {})
-                                                if res.get('status') == 'promoted':
-                                                    st.success("✅ **Model Challenger Lolos QA Quality Gate & Berhasil Di-deploy!**")
-                                                    st.session_state['model'] = adaptive_mgr.detector
-                                                    st.session_state['adaptive_learning_manager'] = adaptive_mgr
-                                                    
-                                                    gate = res.get('gate_result', {})
-                                                    c_m = gate.get('champion_metrics', {})
-                                                    ch_m = gate.get('challenger_metrics', {})
-                                                    
-                                                    m_col1, m_col2, m_col3 = st.columns(3)
-                                                    with m_col1:
-                                                        st.metric("FPR Model", f"{ch_m.get('fpr', 0):.2%}", delta=f"{(ch_m.get('fpr', 0) - c_m.get('fpr', 0)):.2%}", delta_color="inverse")
-                                                    with m_col2:
-                                                        st.metric("Recall Model", f"{ch_m.get('recall', 0):.2%}", delta=f"{(ch_m.get('recall', 0) - c_m.get('recall', 0)):.2%}")
-                                                    with m_col3:
-                                                        st.metric("F1-Score", f"{ch_m.get('f1', 0):.2%}", delta=f"{(ch_m.get('f1', 0) - c_m.get('f1', 0)):.2%}")
-                                                else:
-                                                    st.warning(f"⚠️ Model Challenger ditolak oleh Quality Gate: {res.get('message', 'Performa belum melampaui Champion')}")
-                                        except Exception as err:
-                                            st.error(f"Gagal mengeksekusi auto-retraining: {str(err)}")
-                            else:
-                                st.success("✅ Tidak ada Concept Drift Terdeteksi")
-                                st.info("Distribusi data baru konsisten dengan data latih model.")
-                            
-                            # Show drift report visualization
-                            drift_detector.plot_drift_report(drift_report)
-                            
-                            # Store drift detector in session
-                            st.session_state['drift_detector'] = drift_detector
-                            st.session_state['last_drift_detected'] = drift_detected
-                            
-                        except Exception as e:
-                            st.error(f"Error dalam deteksi concept drift: {str(e)}")
-                            st.info("Deteksi concept drift memerlukan scipy. Install dengan: pip install scipy")
-                
-                # Show drift status if previously detected
-                if 'last_drift_detected' in st.session_state:
-                    drift_status = "⚠️ Terdeteksi" if st.session_state['last_drift_detected'] else "✅ Tidak Terdeteksi"
-                    st.metric("Status Concept Drift Terakhir", drift_status)
-                # -------------------------------------
-                df = df_processed
-                st.session_state['uploaded_data'] = df
-                st.session_state['preprocessing_metadata_new'] = preprocessing_metadata_new
-                
-            except Exception as e:
-                st.error(f"Gagal memproses file: {str(e)}")
-                logger.error(f"Detection page preprocessing error: {e}", exc_info=True)
-                
-                # Provide recovery options
-                st.markdown("---")
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    if st.button("🔄 Coba Upload Ulang", key="retry_upload"):
-                        st.session_state.pop('uploaded_data', None)
-                        st.session_state.pop('preprocessing_metadata_new', None)
-                        st.rerun()
-                
-                with col2:
-                    if st.button("🏠 Kembali ke Beranda", key="detection_to_home"):
-                        navigate_to_page('home')
-                
                 return
-        else:
-            st.info("Silakan unggah file CSV.")
+
+            st.success(f"✅ File berhasil diunggah: **{len(df_new):,} baris**, {len(df_new.columns)} kolom")
+
+            # ── Schema Readiness Card ───────────────────────────────────────
+            st.subheader("🩺 Kesiapan Skema Data")
+            schema_info = render_schema_readiness_card(df_new)
+
+            # Preprocess data
+            df_processed, feature_columns, preprocessing_metadata_new = preprocess_insurance_claims_optimized(
+                df_new,
+                enable_large_file_handling=st.session_state['enable_large_file_handling'],
+                enable_outlier_detection=st.session_state.get('enable_outlier_detection', True),
+                enable_data_validation=st.session_state.get('enable_data_validation', True)
+            )
+
+            # --- CONCEPT DRIFT DETECTION ---
+            # Compare distribution of new data with training data
+            st.info("📊 Pemeriksaan Concept Drift: Membandingkan distribusi data baru dengan data latih...")
+
+            if st.button("🔍 Deteksi Concept Drift", key="detect_drift"):
+                with st.spinner("Menganalisis perubahan distribusi data..."):
+                    try:
+                        # Get reference data from training metadata if available
+                        if 'train_df' in st.session_state:
+                            reference_data = st.session_state['train_df'][training_features]
+                        else:
+                            st.warning("Data latih tidak tersedia untuk perbandingan. Menggunakan data baru sebagai baseline.")
+                            reference_data = df_processed[training_features].head(1000)
+
+                        # Initialize drift detector
+                        drift_detector = ConceptDriftDetector(
+                            reference_data=reference_data,
+                            feature_names=training_features,
+                            threshold=0.05
+                        )
+
+                        # Detect drift
+                        drift_detected, drift_report = drift_detector.detect_drift(
+                            df_processed[training_features],
+                            method='ks_test'
+                        )
+
+                        # Display results
+                        if drift_detected:
+                            st.error("⚠️ Concept Drift Terdeteksi!")
+                            st.warning("Distribusi data baru berbeda signifikan dari data latih.")
+
+                            # QA Automated Retraining Option
+                            st.markdown("### 🔄 Automated Retraining Pipeline (Optuna + Stratified K-Fold CV)")
+                            auto_retrain = st.checkbox(
+                                "Picu Retraining Otomatis & Evaluasi Champion vs Challenger",
+                                value=True,
+                                help="Memicu pelatihan ulang model baru dengan Optuna hyperparameter tuning dan Stratified K-Fold CV untuk adaptasi terhadap pola klaim baru."
+                            )
+
+                            if auto_retrain and st.button("🚀 Jalankan Auto-Retraining Sekarang", key="btn_auto_retrain"):
+                                with st.spinner("Menjalankan retraining model penantang (Challenger) dengan Optuna & K-Fold CV..."):
+                                    try:
+                                        from model_explainer import AdaptiveLearningManager
+                                        adaptive_mgr = AdaptiveLearningManager(detector=st.session_state.get('model'))
+
+                                        retrain_res = drift_detector.check_and_trigger_retraining(
+                                            new_data=df_processed[training_features],
+                                            adaptive_manager=adaptive_mgr,
+                                            min_drift_feature_pct=0.10,
+                                            optuna_n_trials=15,
+                                            optuna_timeout=90
+                                        )
+
+                                        if retrain_res.get('retraining_triggered'):
+                                            res = retrain_res.get('retraining_result', {})
+                                            if res.get('status') == 'promoted':
+                                                st.success("✅ **Model Challenger Lolos QA Quality Gate & Berhasil Di-deploy!**")
+                                                st.session_state['model'] = adaptive_mgr.detector
+                                                st.session_state['adaptive_learning_manager'] = adaptive_mgr
+
+                                                gate = res.get('gate_result', {})
+                                                c_m  = gate.get('champion_metrics', {})
+                                                ch_m = gate.get('challenger_metrics', {})
+
+                                                m_col1, m_col2, m_col3 = st.columns(3)
+                                                with m_col1:
+                                                    st.metric("FPR Model", f"{ch_m.get('fpr', 0):.2%}", delta=f"{(ch_m.get('fpr', 0) - c_m.get('fpr', 0)):.2%}", delta_color="inverse")
+                                                with m_col2:
+                                                    st.metric("Recall Model", f"{ch_m.get('recall', 0):.2%}", delta=f"{(ch_m.get('recall', 0) - c_m.get('recall', 0)):.2%}")
+                                                with m_col3:
+                                                    st.metric("F1-Score", f"{ch_m.get('f1', 0):.2%}", delta=f"{(ch_m.get('f1', 0) - c_m.get('f1', 0)):.2%}")
+                                            else:
+                                                st.warning(f"⚠️ Model Challenger ditolak oleh Quality Gate: {res.get('message', 'Performa belum melampaui Champion')}")
+                                    except Exception as err:
+                                        st.error(f"Gagal mengeksekusi auto-retraining: {str(err)}")
+                        else:
+                            st.success("✅ Tidak ada Concept Drift Terdeteksi")
+                            st.info("Distribusi data baru konsisten dengan data latih model.")
+
+                        # Show drift report visualization
+                        drift_detector.plot_drift_report(drift_report)
+
+                        # Store drift detector in session
+                        st.session_state['drift_detector'] = drift_detector
+                        st.session_state['last_drift_detected'] = drift_detected
+
+                    except Exception as e:
+                        st.error(f"Error dalam deteksi concept drift: {str(e)}")
+                        st.info("Deteksi concept drift memerlukan scipy. Install dengan: pip install scipy")
+
+            # Show drift status if previously detected
+            if 'last_drift_detected' in st.session_state:
+                drift_status = "⚠️ Terdeteksi" if st.session_state['last_drift_detected'] else "✅ Tidak Terdeteksi"
+                st.metric("Status Concept Drift Terakhir", drift_status)
+
+            df = df_processed
+            st.session_state['uploaded_data'] = df
+            st.session_state['feature_columns_new'] = feature_columns
+            st.session_state['preprocessing_metadata_new'] = preprocessing_metadata_new
+
+        except Exception as e:
+            st.error(f"Gagal memproses file: {str(e)}")
+            logger.error(f"Detection page preprocessing error: {e}", exc_info=True)
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("🔄 Coba Upload Ulang", key="retry_upload"):
+                    st.session_state.pop('uploaded_data', None)
+                    st.session_state.pop('preprocessing_metadata_new', None)
+                    st.rerun()
+            with col2:
+                if st.button("🏠 Kembali ke Beranda", key="detection_to_home"):
+                    navigate_to_page('home')
             return
-            
-    else:  # Input manual (satu data)
-        st.write("### 📝 Input Data Transaksi Manual")
-        st.write("Masukkan data transaksi asuransi secara manual untuk deteksi anomali:")
-        
-        # Get training features for reference
-        if 'training_features' in st.session_state:
-            training_features = st.session_state['training_features']
-        else:
-            training_features = st.session_state.get('feature_columns', [])
-        
-        # Create dynamic manual input form based on training features
-        with st.form("manual_input_form"):
-            st.write("**Masukkan Detail Transaksi (Disesuaikan dengan Model):**")
-            st.info(f"🎯 Form ini disesuaikan dengan {len(training_features)} fitur yang digunakan oleh model pelatihan")  # type: ignore
-            
-            # Show training features for reference
-            with st.expander("📋 Fitur yang Digunakan Model"):
-                st.write("Model ini dilatih dengan fitur-fitur berikut:")
-                for i, feature in enumerate(training_features, 1):
-                    st.write(f"{i:2d}. {feature}")
-            
-            # Dynamic form generation based on common patterns in training features
-            manual_data = {}
-            field_configs = []
-            
-            # Analyze training features to determine appropriate input fields
-            feature_patterns = {
-                'id_fields': [],
-                'amount_fields': [],
-                'age_fields': [],
-                'count_fields': [],
-                'day_fields': [],
-                'ratio_fields': [],
-                'flag_fields': [],
-                'category_fields': [],
-                'other_numeric': [],
-                'other_categorical': []
-            }
-            
-            for feature in training_features:
-                feature_lower = feature.lower()
-                if any(keyword in feature_lower for keyword in ['id', 'code', 'number']):
-                    feature_patterns['id_fields'].append(feature)
-                elif any(keyword in feature_lower for keyword in ['amount', 'cost', 'price', 'billed', 'paid', 'charged']):
-                    feature_patterns['amount_fields'].append(feature)
-                elif 'age' in feature_lower:
-                    feature_patterns['age_fields'].append(feature)
-                elif any(keyword in feature_lower for keyword in ['count', 'num', 'frequency']):
-                    feature_patterns['count_fields'].append(feature)
-                elif any(keyword in feature_lower for keyword in ['day', 'time']):
-                    feature_patterns['day_fields'].append(feature)
-                elif 'ratio' in feature_lower:
-                    feature_patterns['ratio_fields'].append(feature)
-                elif any(keyword in feature_lower for keyword in ['flag', 'is_', 'has_']):
-                    feature_patterns['flag_fields'].append(feature)
-                elif any(keyword in feature_lower for keyword in ['category', 'type', 'status']):
-                    feature_patterns['category_fields'].append(feature)
-                elif feature_lower in ['submit_day', 'service_category', 'claim_status', 'network_flag', 'urgent_flag']:
-                    feature_patterns['category_fields'].append(feature)
-            
-            # Generate input fields dynamically
-            st.write("**📝 Input Data Transaksi:**")
-            
-            # Basic identification fields
-            if feature_patterns['id_fields']:
-                st.write("**🏷️ Identifikasi:**")
-                id_cols = st.columns(min(3, len(feature_patterns['id_fields'])))
-                for i, field in enumerate(feature_patterns['id_fields'][:3]):
-                    with id_cols[i % 3]:
-                        field_name = field.replace('_', ' ').title()
-                        default_value = f"{'TRX' if 'claim' in field.lower() else 'PROV' if 'provider' in field.lower() else 'PAT'}_001"
-                        value = st.text_input(f"{field_name}*", value=default_value, help=f"Masukkan {field_name.lower()}")
-                        manual_data[field] = value
-                        field_configs.append({'field': field, 'type': 'text', 'required': True})
-            
-            # Amount fields
-            if feature_patterns['amount_fields']:
-                st.write("**💰 Jumlah Uang:**")
-                amount_cols = st.columns(min(2, len(feature_patterns['amount_fields'])))
-                for i, field in enumerate(feature_patterns['amount_fields'][:2]):
-                    with amount_cols[i % 2]:
-                        field_name = field.replace('_', ' ').title()
-                        default_val = 5000000 if 'billed' in field.lower() else 3500000 if 'paid' in field.lower() else 1000000
-                        value = st.number_input(f"{field_name} (IDR)*", min_value=0, value=default_val, step=100000, help=f"Masukkan {field_name.lower()}")
-                        manual_data[field] = value
-                        field_configs.append({'field': field, 'type': 'number', 'required': True})
-            
-            # Age and count fields
-            age_count_fields = feature_patterns['age_fields'] + feature_patterns['count_fields']
-            if age_count_fields:
-                st.write("**👥📊 Usia & Jumlah:**")
-                ac_cols = st.columns(min(3, len(age_count_fields)))
-                for i, field in enumerate(age_count_fields[:3]):
-                    with ac_cols[i % 3]:
-                        field_name = field.replace('_', ' ').title()
-                        if 'age' in field.lower():
-                            value = st.number_input(f"{field_name}*", min_value=0, max_value=120, value=45, help=f"Masukkan {field_name.lower()}")
-                        else:
-                            value = st.number_input(f"{field_name}*", min_value=0, value=3, step=1, help=f"Masukkan {field_name.lower()}")
-                        manual_data[field] = value
-                        field_configs.append({'field': field, 'type': 'number', 'required': True})
-            
-            # Day fields
-            if feature_patterns['day_fields']:
-                st.write("**📅 Waktu:**")
-                day_cols = st.columns(min(2, len(feature_patterns['day_fields'])))
-                for i, field in enumerate(feature_patterns['day_fields'][:2]):
-                    with day_cols[i % 2]:
-                        field_name = field.replace('_', ' ').title()
-                        if 'day' in field.lower() and 'submit' in field.lower():
-                            value = st.selectbox(f"{field_name}*", ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"], help=f"Pilih {field_name.lower()}")
-                        else:
-                            value = st.number_input(f"{field_name}*", min_value=0, value=7, help=f"Masukkan {field_name.lower()}")
-                        manual_data[field] = value
-                        field_configs.append({'field': field, 'type': 'select' if 'day' in field.lower() else 'number', 'required': True})
-            
-            # Category fields
-            if feature_patterns['category_fields']:
-                st.write("**🏷️ Kategori & Status:**")
-                cat_cols = st.columns(min(2, len(feature_patterns['category_fields'])))
-                for i, field in enumerate(feature_patterns['category_fields'][:2]):
-                    with cat_cols[i % 2]:
-                        field_name = field.replace('_', ' ').title()
-                        if 'service' in field.lower() and 'category' in field.lower():
-                            options = ["IP", "OP", "ER", "DIAG", "LAB", "RAD"]
-                        elif 'status' in field.lower():
-                            options = ["Disetujui", "Menunggu", "Ditolak", "Dalam Peninjauan"]
-                        elif 'network' in field.lower():
-                            options = ["Dalam Jaringan", "Luar Jaringan"]
-                        elif 'urgent' in field.lower() or 'flag' in field.lower():
-                            options = ["Tidak", "Ya"]
-                        else:
-                            options = ["A", "B", "C", "D"]  # Generic options
-                        
-                        value = st.selectbox(f"{field_name}*", options, help=f"Pilih {field_name.lower()}")
-                        manual_data[field] = value
-                        field_configs.append({'field': field, 'type': 'select', 'required': True})
-            
-            # Ratio fields (calculated automatically)
-            if feature_patterns['ratio_fields']:
-                st.write("**📊 Rasio (Dihitung Otomatis):**")
-                for field in feature_patterns['ratio_fields']:
-                    field_name = field.replace('_', ' ').title()
-                    st.info(f"🔧 {field_name}: Akan dihitung otomatis dari data yang diinput")
-            
-            # Submit button
-            submitted = st.form_submit_button("🔍 Deteksi Anomali dengan Model Adaptif", type="primary")
-            
-            if submitted:
-                # Validate required fields
-                validation_errors = []
-                for config in field_configs:
-                    if config['required']:
-                        value = manual_data.get(config['field'])
-                        if config['type'] == 'text':
-                            if not value or not str(value).strip():
-                                validation_errors.append(f"{config['field']} wajib diisi")
-                        elif config['type'] == 'number':
-                            if value is None or value <= 0:
-                                validation_errors.append(f"{config['field']} harus > 0")
-                
-                if validation_errors:
-                    st.error(f"❌ Validasi gagal: {', '.join(validation_errors)}")
-                    return
-                
-                try:
-                    # Create DataFrame from manual input
-                    df_manual = pd.DataFrame([manual_data])
-                    
-                    # Preprocess the manual data using the same pipeline as training
-                    df_processed, feature_columns, preprocessing_metadata_manual = preprocess_insurance_claims_optimized(
-                        df_manual,
-                        enable_large_file_handling=st.session_state['enable_large_file_handling'],
-                        enable_outlier_detection=st.session_state.get('enable_outlier_detection', True),
-                        enable_data_validation=st.session_state.get('enable_data_validation', True)
-                    )
-                    df = df_processed
-                    
-                    st.success(f"✅ Data transaksi berhasil diproses dengan {len(feature_columns)} fitur!")
-                    
-                    # Show input summary
-                    st.write("### 📋 Ringkasan Input:")
-                    summary_data = []
-                    for config in field_configs[:6]:  # Show first 6 fields
-                        value = manual_data.get(config['field'])
-                        if config['type'] == 'number' and isinstance(value, (int, float)):
-                            if 'amount' in config['field'].lower():
-                                formatted_value = f"Rp {value:,}".replace(",", ".")
-                            else:
-                                formatted_value = f"{value}"
-                        else:
-                            formatted_value = str(value)
-                        
-                        summary_data.append({
-                            'Kolom': config['field'].replace('_', ' ').title(),
-                            'Nilai': formatted_value
-                        })
-                    
-                    summary_df = pd.DataFrame(summary_data)
-                    st.dataframe(summary_df, width='stretch')
-                    
-                    # Show feature mapping
-                    st.write("### 🔄 Pemetaan Fitur:")
-                    st.write(f"✅ {len(feature_columns)} fitur berhasil di-generate dari input manual:")
-                    for i, feature in enumerate(feature_columns[:10], 1):  # Show first 10
-                        st.write(f"{i:2d}. {feature}")
-                    if len(feature_columns) > 10:
-                        st.write(f"... dan {len(feature_columns) - 10} fitur lainnya")
-                    
-                    # Store in session state
-                    st.session_state['manual_input_data'] = df
-                    st.session_state['preprocessing_metadata_manual'] = preprocessing_metadata_manual
-                    
-                except Exception as e:
-                    st.error(f"Gagal memproses input manual: {str(e)}")
-                    return
-            else:
-                st.info("👆 Silakan masukkan data transaksi manual dan klik 'Deteksi Anomali'")
-                return
-    
-    # Strict feature alignment for detection
+
+    else:
+        st.info("📤 Silakan unggah file dataset klaim (CSV / XLSX / XLS / Parquet) untuk memulai deteksi.")
+        return
+
+    if 'uploaded_data' not in st.session_state:
+        return
+
+    df = st.session_state['uploaded_data']
+    feature_columns = st.session_state.get('feature_columns_new', [])
+
+    # ── Strict feature alignment ────────────────────────────────────────────
     st.subheader("🔧 Adaptasi Fitur untuk Deteksi")
     incoming_feature_count = len(feature_columns)
-    aligned_feature_df, alignment_summary = build_aligned_inference_features(df, training_features)
+    # Retrieve training-time median stats from detector metadata (if available)
+    training_stats: dict = (
+        getattr(detector, 'training_metadata', {}) or {}
+    ).get('feature_medians', {})
+    aligned_feature_df, alignment_summary = build_aligned_inference_features(
+        df, training_features, training_stats=training_stats
+    )
     feature_columns = training_features
 
     comparison_col1, comparison_col2, comparison_col3 = st.columns(3)
@@ -615,7 +460,7 @@ def show_detection_page():
         f"✅ Inferensi akan memakai tepat {len(feature_columns)} fitur sesuai training "
         f"({len(alignment_summary['existing_features'])} langsung, "
         f"{len(alignment_summary['derived_features'])} diturunkan, "
-        f"{len(alignment_summary['filled_zero_features'])} diisi 0)."
+        f"{len(alignment_summary['filled_features'])} diimputasi dari statistik training)."
     )
 
     if alignment_summary['filled_zero_features']:
