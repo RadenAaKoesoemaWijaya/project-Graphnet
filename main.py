@@ -18,7 +18,7 @@ os.environ["POLARS_SKIP_CPU_CHECK"] = "1"
 # Set page configuration FIRST, before any other Streamlit commands
 st.set_page_config(page_title='ASTINA - Analisis Sistem Transaksi Identifikasi Nilai Anomali', layout='wide')
 
-from ui_components import apply_custom_css
+from ui_components import apply_custom_css, render_top_navbar_status, render_footer
 # Apply Custom CSS
 apply_custom_css()
 
@@ -47,6 +47,9 @@ def main():
     # Render Sidebar
     render_sidebar()
 
+    # Render Top Informative Navbar Status
+    render_top_navbar_status()
+
     # Get current page safely
     current_page = st.session_state.get('page', 'home')
     
@@ -72,6 +75,9 @@ def main():
         st.markdown("---")
         if st.button("🏠 Kembali ke Beranda"):
             navigate_to_page('home')
+    finally:
+        # Render application footer with copyright
+        render_footer()
 
 if __name__ == "__main__":
     main()

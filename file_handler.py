@@ -206,7 +206,8 @@ def process_dataframe_in_chunks(df, processing_func, chunk_size=10000, progress_
             if progress_bar and st is not None and progress_bar_st is not None:
                 progress = (i + 1) / total_chunks
                 progress_bar_st.progress(progress)
-                status_text.text(f"Processing chunk {i + 1}/{total_chunks}")
+                if status_text is not None:
+                    status_text.text(f"Processing chunk {i + 1}/{total_chunks}")
             
             # Force garbage collection
             if i % 5 == 0:
@@ -295,6 +296,62 @@ def optimize_dataframe_memory(df):
         'memory_saved_percent': memory_saved_percent
     }
 
+def ingest_file_to_raw_parquet(uploaded_file, file_type='csv'):
+    """
+    Stream uploaded file directly to a raw Parquet file on disk without loading into RAM.
+    Returns (raw_parquet_path, total_rows, schema_dict)
+    """
+    file_size = uploaded_file.size
+    check_file_size(file_size)
+    
+    unique_id = uuid.uuid4().hex
+    raw_parquet_path = os.path.join(TEMP_DATA_DIR, f"raw_{unique_id}.parquet")
+    
+    with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{file_type}') as tmp_file:
+        if hasattr(uploaded_file, 'seek'):
+            uploaded_file.seek(0)
+        shutil.copyfileobj(uploaded_file, tmp_file, length=8 * 1024 * 1024)
+        tmp_file_path = tmp_file.name
+
+    try:
+        if file_type == 'csv':
+            stream_csv_to_parquet(tmp_file_path, output_path=raw_parquet_path, progress_bar=False)
+        elif file_type == 'parquet':
+            shutil.copyfile(tmp_file_path, raw_parquet_path)
+        else:
+            # Fallback for Excel / JSON
+            df = read_file_with_optimization(uploaded_file, file_type)
+            df = fix_arrow_compatibility(df)
+            df.to_parquet(raw_parquet_path, index=False, compression="zstd")
+            del df
+            gc.collect()
+
+        # Extract schema and row count using Polars Lazy scan (zero-copy / low memory)
+        lf = pl.scan_parquet(raw_parquet_path)
+        total_rows = lf.select(pl.len()).collect().item()
+        schema = lf.collect_schema()
+        
+        schema_dict = {
+            'columns': list(schema.names()),
+            'dtypes': {name: str(dtype) for name, dtype in schema.items()},
+            'total_rows': total_rows
+        }
+        return raw_parquet_path, total_rows, schema_dict
+    finally:
+        if os.path.exists(tmp_file_path):
+            try:
+                os.unlink(tmp_file_path)
+            except Exception:
+                pass
+
+def get_parquet_sample(parquet_path: str, n: int = 5000) -> pd.DataFrame:
+    """
+    Read a representative head sample from a Parquet file without loading the entire dataset.
+    """
+    if not os.path.exists(parquet_path):
+        raise FileNotFoundError(f"Parquet file not found: {parquet_path}")
+    return pl.scan_parquet(parquet_path).head(n).collect().to_pandas()
+
 def show_file_size_warning(file_size_gb):
     """
     Show warning for large files
@@ -307,9 +364,12 @@ def show_file_size_warning(file_size_gb):
 
 def save_processed_data(df, prefix="processed"):
     """
-    Save processed DataFrame to Parquet file in TEMP_DATA_DIR
+    Save processed DataFrame or file path to Parquet file in TEMP_DATA_DIR
     Returns the file path
     """
+    if isinstance(df, str) and os.path.exists(df):
+        return df
+
     # Apply Arrow compatibility fix before saving
     df_copy = fix_arrow_compatibility(df.copy())
 

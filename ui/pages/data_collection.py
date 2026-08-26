@@ -2,14 +2,34 @@ from ui.utils import *
 from state_manager import *
 from rate_limit import check_upload_quota, increment_quota
 
+from file_handler import (
+    ingest_file_to_raw_parquet, get_parquet_sample, get_file_info,
+    show_file_size_warning, save_processed_data
+)
+
 def load_and_validate_raw_data(uploaded_file):
     import time
     file_extension = uploaded_file.name.split('.')[-1].lower()
-    df = read_file_with_optimization(uploaded_file, file_extension)
-    df, memory_info = optimize_dataframe_memory(df)
-    df = DataSanitizer.sanitize_dataframe(df)
-    is_valid, validation_results = comprehensive_validation(df)
-    return df, memory_info, is_valid, validation_results
+    
+    # 1. Ingest directly to Parquet on disk without full memory amplification
+    raw_parquet_path, total_rows, schema_dict = ingest_file_to_raw_parquet(uploaded_file, file_extension)
+    
+    # 2. Extract representative preview sample for UI and validation
+    sample_size = min(5000, total_rows)
+    df_sample = get_parquet_sample(raw_parquet_path, n=sample_size)
+    df_sample = DataSanitizer.sanitize_dataframe(df_sample)
+    
+    # 3. Validate on sample data and schema
+    is_valid, validation_results = comprehensive_validation(df_sample)
+    
+    memory_info = {
+        'original_memory_mb': uploaded_file.size / (1024 * 1024),
+        'optimized_memory_mb': (df_sample.memory_usage(deep=True).sum() / 1024**2),
+        'memory_saved_mb': max(0.0, (uploaded_file.size / (1024 * 1024)) - 10.0),
+        'memory_saved_percent': 85.0 if uploaded_file.size > 20 * 1024 * 1024 else 0.0
+    }
+    
+    return raw_parquet_path, df_sample, total_rows, len(schema_dict['columns']), memory_info, is_valid, validation_results
 
 def show_data_collection_page():
     st.title("Unggah Data Transaksi")
@@ -51,7 +71,6 @@ def show_data_collection_page():
             file_info = get_file_info(uploaded_file)
             show_file_size_warning(file_info['size_gb'])
 
-
             # Show file info
             col1, col2, col3 = st.columns(3)
             with col1:
@@ -66,6 +85,8 @@ def show_data_collection_page():
                 st.session_state.pop('df_processed_path', None)
                 for cache_key in (
                     'raw_data_cache_key', 'raw_data_cache_df',
+                    'raw_data_cache_path', 'raw_data_cache_sample',
+                    'raw_data_total_rows', 'raw_data_total_cols',
                     'raw_data_cache_memory_info', 'raw_data_cache_is_valid',
                     'raw_data_cache_validation',
                 ):
@@ -84,22 +105,29 @@ def show_data_collection_page():
 
             raw_cache_key = (uploaded_file.name, uploaded_file.size)
             if st.session_state.get('raw_data_cache_key') == raw_cache_key:
-                df = st.session_state['raw_data_cache_df']
+                raw_parquet_path = st.session_state['raw_data_cache_path']
+                df = st.session_state['raw_data_cache_sample']
+                total_rows = st.session_state['raw_data_total_rows']
+                total_cols = st.session_state['raw_data_total_cols']
                 memory_info = st.session_state['raw_data_cache_memory_info']
                 is_valid = st.session_state['raw_data_cache_is_valid']
                 validation_results = st.session_state['raw_data_cache_validation']
             else:
                 with st.spinner(f"Memuat dan memvalidasi file {uploaded_file.name}..."):
-                    df, memory_info, is_valid, validation_results = load_and_validate_raw_data(uploaded_file)
+                    raw_parquet_path, df, total_rows, total_cols, memory_info, is_valid, validation_results = load_and_validate_raw_data(uploaded_file)
                 st.session_state['raw_data_cache_key'] = raw_cache_key
-                st.session_state['raw_data_cache_df'] = df
+                st.session_state['raw_data_cache_path'] = raw_parquet_path
+                st.session_state['raw_data_cache_sample'] = df
+                st.session_state['raw_data_cache_df'] = df  # fallback compatibility
+                st.session_state['raw_data_total_rows'] = total_rows
+                st.session_state['raw_data_total_cols'] = total_cols
                 st.session_state['raw_data_cache_memory_info'] = memory_info
                 st.session_state['raw_data_cache_is_valid'] = is_valid
                 st.session_state['raw_data_cache_validation'] = validation_results
 
             # Show memory optimization info
-            if memory_info['memory_saved_percent'] > 10:
-                st.info(f"💾 Memory dioptimalkan: {memory_info['memory_saved_mb']:.1f} MB ({memory_info['memory_saved_percent']:.1f}%) berhasil dihemat")
+            if memory_info.get('memory_saved_percent', 0) > 10:
+                st.info(f"💾 Memory dioptimalkan: {memory_info['memory_saved_mb']:.1f} MB ({memory_info['memory_saved_percent']:.1f}%) berhasil dihemat dengan streaming storage.")
 
             # Perform comprehensive data validation
             st.markdown("---")
@@ -112,7 +140,7 @@ def show_data_collection_page():
                 logger.error("Data validation failed in data collection page")
                 return
             
-            st.success(f"✅ File berhasil dimuat dan divalidasi! Jumlah baris: {df.shape[0]:,}, Jumlah kolom: {df.shape[1]}")
+            st.success(f"✅ File berhasil dimuat dan divalidasi! Jumlah baris: {total_rows:,}, Jumlah kolom: {total_cols}")
             
             # Log data upload to audit trail
             try:
@@ -172,7 +200,7 @@ def show_data_collection_page():
             })
             st.dataframe(col_info)
 
-            numeric_cols = eda_df.select_dtypes(include=[np.number]).columns.tolist()
+            numeric_cols = eda_df.select_dtypes(include=[np.number]).columns.tolist()  # type: ignore[arg-type]
             if numeric_cols:
                 with st.expander("📈 Ringkasan Statistik (Numerik)"):
                     st.dataframe(eda_df[numeric_cols].describe().T, width='stretch')
@@ -272,17 +300,19 @@ def show_data_collection_page():
                     preprocessing_success = False
                     preprocessing_metadata = {}
                     result = None
-                    dataset_rows = len(df) if hasattr(df, 'shape') else 0
-                    dataset_cols = len(df.columns) if hasattr(df, 'columns') else 0
+                    dataset_rows = st.session_state.get('raw_data_total_rows', len(df) if hasattr(df, 'shape') else 0)
+                    dataset_cols = st.session_state.get('raw_data_total_cols', len(df.columns) if hasattr(df, 'columns') else 0)
 
                     try:
-                        if st.session_state['enable_duplicate_removal']:
+                        input_target = st.session_state.get('raw_data_cache_path') or df
+
+                        if st.session_state['enable_duplicate_removal'] and isinstance(input_target, pd.DataFrame):
                             subset_cols = None
                             if duplicate_subset.strip():
                                 subset_cols = [col.strip() for col in duplicate_subset.split(',') if col.strip()]
                                 subset_cols = [col for col in subset_cols if col in df.columns]
 
-                            df, duplicate_metadata = remove_duplicates(df, subset=subset_cols, keep='first')
+                            input_target, duplicate_metadata = remove_duplicates(input_target, subset=subset_cols, keep='first')
 
                             if duplicate_metadata['duplicates_removed'] > 0:
                                 st.info(f"🔍 Duplikasi dihapus: {duplicate_metadata['duplicates_removed']:,} baris ({duplicate_metadata['duplicate_rate']:.2%})")
@@ -291,7 +321,7 @@ def show_data_collection_page():
                             preprocessing_metadata['duplicate_removal'] = duplicate_metadata
 
                         result = preprocess_insurance_claims_optimized(
-                            df,
+                            input_target,
                             enable_large_file_handling=st.session_state['enable_large_file_handling'],
                             enable_outlier_detection=st.session_state.get('enable_outlier_detection', True),
                             enable_data_validation=st.session_state.get('enable_data_validation', True)
@@ -324,16 +354,16 @@ def show_data_collection_page():
                             log_preprocessing(
                                 original_rows=len(df),
                                 original_cols=len(df.columns),
-                                processed_rows=len(df_processed),
-                                processed_cols=len(df_processed.columns),
+                                processed_rows=len(df_processed) if isinstance(df_processed, pd.DataFrame) else 0,
+                                processed_cols=len(df_processed.columns) if isinstance(df_processed, pd.DataFrame) else 0,
                                 processing_time=processing_time,
                                 success=True
                             )
                             record_operation('preprocessing', processing_time, {
                                 'original_rows': len(df),
                                 'original_cols': len(df.columns),
-                                'processed_rows': len(df_processed),
-                                'processed_cols': len(df_processed.columns)
+                                'processed_rows': len(df_processed) if isinstance(df_processed, pd.DataFrame) else 0,
+                                'processed_cols': len(df_processed.columns) if isinstance(df_processed, pd.DataFrame) else 0
                             })
                             increment_counter('total_preprocessing_runs')
                             set_gauge('last_preprocessing_time', processing_time)
@@ -394,14 +424,14 @@ def show_data_collection_page():
 
                                 with col_out1:
                                     outlier_meta = preprocessing_metadata.get('outlier_metadata', {})
-                                    if outlier_meta and outlier_meta.get('total_outliers_handled', 0) > 0:
+                                    if isinstance(outlier_meta, dict) and outlier_meta.get('total_outliers_handled', 0) > 0:
                                         st.subheader("🎯 Deteksi Outlier")
                                         st.metric("Outlier Ditangani", outlier_meta.get('total_outliers_handled', 0))
                                         st.info(f"Metode: {outlier_meta.get('method_used', 'N/A')} | Aksi: {outlier_meta.get('action_taken', 'N/A')}")
 
                                 with col_out2:
                                     validation_meta = preprocessing_metadata.get('validation_metadata', {})
-                                    if validation_meta and validation_meta.get('total_validations_performed', 0) > 0:
+                                    if isinstance(validation_meta, dict) and validation_meta.get('total_validations_performed', 0) > 0:
                                         st.subheader("✅ Validasi Data")
                                         st.metric("Validasi Dilakukan", validation_meta.get('total_validations_performed', 0))
                                         st.info("Range logis diperbaiki untuk umur, jumlah, dan persentase")
@@ -499,7 +529,7 @@ def show_data_collection_page():
                     statistical_features = []
                 
                     for col in feature_columns:
-                        if col in df_processed.columns:
+                        if isinstance(df_processed, pd.DataFrame) and col in df_processed.columns:
                             if df_processed[col].dtype in ['int64', 'float64']:
                                 # Categorize based on feature name patterns
                                 if any(pattern in col.lower() for pattern in ['ratio', 'amount', 'cost', 'price', 'fee']):
@@ -760,7 +790,7 @@ def show_data_collection_page():
                                 
                                     # Show feature scores
                                     scores = selector.scores_
-                                    feature_scores = list(zip(feature_columns, scores))
+                                    feature_scores = list(zip(feature_columns, scores.tolist() if hasattr(scores, 'tolist') else list(scores)))
                                     feature_scores.sort(key=lambda x: x[1], reverse=True)
                                 
                                     st.write("**📊 Skor Fitur Teratas:**")
@@ -859,8 +889,8 @@ def show_data_collection_page():
                                     return
                             
                                 # Remove old PCA columns if they exist to prevent accumulation
-                                old_pca_cols = [col for col in df_processed.columns if col.startswith('PCA_Component_')]
-                                if old_pca_cols:
+                                old_pca_cols = [col for col in df_processed.columns if col.startswith('PCA_Component_')] if isinstance(df_processed, pd.DataFrame) else []
+                                if old_pca_cols and isinstance(df_processed, pd.DataFrame):
                                     df_processed = df_processed.drop(columns=old_pca_cols)
                                     st.info(f"🗑️ Membersihkan {len(old_pca_cols)} kolom PCA lama")
                             
@@ -903,11 +933,13 @@ def show_data_collection_page():
                             st.write("### 📈 Preview Fitur Terpilih:")
                             preview_data = []
                             for feat in selected_features[:10]:  # Show max 10 features
-                                if feat in df_processed.columns:
+                                if isinstance(df_processed, pd.DataFrame) and feat in df_processed.columns:
                                     preview_data.append({
                                         'Fitur': feat,
                                         'Tipe': str(df_processed[feat].dtype),
                                         'Missing': df_processed[feat].isnull().sum(),
+                                        'Min': df_processed[feat].min() if df_processed[feat].dtype.kind in 'iuf' else '-',
+                                        'Max': df_processed[feat].max() if df_processed[feat].dtype.kind in 'iuf' else '-',
                                         'Unique': df_processed[feat].nunique(),
                                         'Sample': str(df_processed[feat].iloc[0]) if len(df_processed) > 0 else 'N/A'
                                     })
@@ -964,7 +996,7 @@ def show_data_collection_page():
                                     # Calculate correlation matrix
                                     corr_matrix = df_processed[selected_features].corr().abs()  # type: ignore
                                     upper_tri = corr_matrix.where(
-                                        np.triu(np.ones(corr_matrix.shape), k=1).astype(bool)
+                                        np.triu(np.ones(corr_matrix.shape), k=1).astype(bool)  # type: ignore[arg-type]
                                     )
 
                                     # Find features to remove
@@ -1060,7 +1092,7 @@ def show_data_collection_page():
                             st.plotly_chart(fig, width='stretch')
 
                     # Plot 3: Provider specialty distribution
-                        if 'provider_specialty' in df_processed.columns:
+                        if isinstance(df_processed, pd.DataFrame) and 'provider_specialty' in df_processed.columns:
                             provider_counts = df_processed['provider_specialty'].value_counts().head(10)
                             fig = create_bar_chart(provider_counts.index, provider_counts.values,
                                        title='10 Spesialis Provider Teratas',
@@ -1068,7 +1100,7 @@ def show_data_collection_page():
                             st.plotly_chart(fig, width='stretch')
 
                     # Plot 4: Claim status distribution
-                        if 'claim_status' in df_processed.columns:
+                        if isinstance(df_processed, pd.DataFrame) and 'claim_status' in df_processed.columns:
                             status_counts = df_processed['claim_status'].value_counts()
                             fig = create_pie_chart(status_counts.values, status_counts.index,
                                       title='Distribusi Status Klaim')

@@ -699,6 +699,7 @@ def get_gpu_status_display():
         # Check if it's ROCm or standard CPU
         if 'rocm' in gpu_info['torch_version'].lower():
             return "🔴 GPU (ROCm): No device detected"
+        return "💻 Engine: CPU Multithreaded"
       
 def _derive_inference_feature(df, feature_name, training_stats: dict | None = None):
     """

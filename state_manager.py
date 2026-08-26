@@ -48,6 +48,23 @@ def get_df_processed():
         st.error(f"Gagal memuat data hasil praproses: {e}")
         return None
 
+def get_processed_lazy():
+    """Helper function to get Polars LazyFrame for out-of-core queries"""
+    import polars as pl
+    if 'df_processed_path' not in st.session_state:
+        return None
+    path = st.session_state['df_processed_path']
+    if not os.path.exists(path):
+        return None
+    return pl.scan_parquet(path)
+
+def get_processed_sample(n=1000):
+    """Helper function to get a lightweight head sample dataframe"""
+    lazy_lf = get_processed_lazy()
+    if lazy_lf is None:
+        return None
+    return lazy_lf.head(n).collect().to_pandas()
+
 def update_df_processed(new_df):
     """Helper function to update df_processed and save to Parquet"""
     new_path = save_processed_data(new_df, prefix="preprocessed")

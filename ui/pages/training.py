@@ -4,6 +4,8 @@ import pandas as pd
 try:
     import torch
 except (ImportError, OSError, Exception):
+    import sys
+    sys.modules.pop('torch', None)
     torch = None
 from ui.utils import *
 from state_manager import *

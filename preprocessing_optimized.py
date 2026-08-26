@@ -114,9 +114,10 @@ def detect_and_handle_outliers(df, numerical_columns, method='iqr', threshold=3.
                 if action == 'cap':
                     # Cap outliers to bounds
                     if method == 'iqr':
+                        # lower_bound and upper_bound are guaranteed set in the iqr branch above
                         df_processed[col] = np.where(
-                            df_processed[col] > upper_bound, upper_bound,
-                            np.where(df_processed[col] < lower_bound, lower_bound, df_processed[col])
+                            df_processed[col] > upper_bound, upper_bound,  # type: ignore[possibly-unbound]
+                            np.where(df_processed[col] < lower_bound, lower_bound, df_processed[col])  # type: ignore[possibly-unbound]
                         )
                     elif method == 'zscore':
                         mean_val = df_processed[col].mean()
@@ -432,7 +433,7 @@ def enhanced_missing_handling(df, use_robust_imputation=True):
                 missing_rate = df_processed[col].isnull().sum() / len(df_processed)
 
                 # Convert to string if categorical to avoid setitem error
-                if pd.api.types.is_categorical_dtype(df_processed[col]):
+                if hasattr(df_processed[col], 'cat'):
                     df_processed[col] = df_processed[col].astype(str)
 
                 if missing_rate > 0.3:
@@ -473,7 +474,7 @@ def enhanced_categorical_encoding(df, categorical_columns):
     for col in categorical_columns:
         try:
             # Convert to string if categorical to avoid setitem error
-            if pd.api.types.is_categorical_dtype(df_processed[col]):
+            if hasattr(df_processed[col], 'cat'):
                 df_processed[col] = df_processed[col].astype(str)
 
             cardinality = df_processed[col].nunique()
@@ -556,9 +557,20 @@ def preprocess_insurance_claims_optimized(df, enable_large_file_handling=True, e
         final_features: List of final features for modeling
         preprocessing_metadata: Dictionary with preprocessing statistics
     """
-    # Check if dataset is large
-    if enable_large_file_handling and len(df) > 100000:  # 100k+ rows
-        return preprocess_large_dataset(df)
+    # Check if input is a file path or large dataset
+    if isinstance(df, str):
+        return preprocess_large_dataset(
+            df,
+            enable_outlier_detection=enable_outlier_detection,
+            enable_data_validation=enable_data_validation
+        )
+
+    if enable_large_file_handling and len(df) > 50000:
+        return preprocess_large_dataset(
+            df,
+            enable_outlier_detection=enable_outlier_detection,
+            enable_data_validation=enable_data_validation
+        )
     
     # Original preprocessing for smaller datasets
     # Work in-place to avoid unnecessary copy
@@ -621,7 +633,7 @@ def preprocess_insurance_claims_optimized(df, enable_large_file_handling=True, e
             continue
     
     # 3. ENHANCED CATEGORICAL ENCODING
-    categorical_columns = df_processed.select_dtypes(include=['object', 'category']).columns.tolist()
+    categorical_columns = df_processed.select_dtypes(include=['object', 'category']).columns.tolist()  # type: ignore[arg-type]
     
     # Exclude date columns from categorical processing
     categorical_columns = [col for col in categorical_columns if col not in date_columns]
@@ -635,7 +647,7 @@ def preprocess_insurance_claims_optimized(df, enable_large_file_handling=True, e
         encoding_metadata = {}
     
     # 4. NUMERICAL FEATURE ENGINEERING - Automatic detection and enhancement
-    numerical_columns = df_processed.select_dtypes(include=[np.number]).columns.tolist()
+    numerical_columns = df_processed.select_dtypes(include=[np.number]).columns.tolist()  # type: ignore[arg-type]
     
     # Remove encoded columns from original numerical list to avoid duplication
     original_numerical = [col for col in numerical_columns if not col.endswith('_encoded')]
@@ -830,7 +842,7 @@ def preprocess_insurance_claims_optimized(df, enable_large_file_handling=True, e
         print(f"Interaction features optimization error: {e}")
     
     # 7. FINAL FEATURE SELECTION - Get all numerical features
-    all_numerical = df_processed.select_dtypes(include=[np.number]).columns.tolist()
+    all_numerical = df_processed.select_dtypes(include=[np.number]).columns.tolist()  # type: ignore[arg-type]
     
     # Pre-calculate missing rates and stds in bulk for faster filtering
     missing_rates = df_processed[all_numerical].isnull().sum() / len(df_processed)

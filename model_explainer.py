@@ -469,13 +469,14 @@ class ConceptDriftDetector:
             drift_report: Dictionary with drift details
         """
         if self.reference_data is None:
-            st.error("Reference data not set. Call set_reference() first.")
+            logger.warning("Reference data not set for ConceptDriftDetector.")
             return False, {}
             
         if not SCIPY_AVAILABLE:
-            st.error("scipy not available for statistical tests")
+            logger.warning("scipy not available for statistical tests.")
             return False, {}
             
+        self.drifted_features = []
         drift_report = {
             'method': method,
             'threshold': self.threshold,
@@ -487,7 +488,7 @@ class ConceptDriftDetector:
             # Ensure both datasets have same columns
             common_cols = set(self.reference_data.columns) & set(new_data.columns)
             if len(common_cols) == 0:
-                st.error("No common features between reference and new data")
+                logger.warning("No common features between reference and new data for drift detection.")
                 return False, drift_report
                 
             common_cols = list(common_cols)
@@ -514,12 +515,12 @@ class ConceptDriftDetector:
                         drift_report['overall_drift'] = True
                         self.drifted_features.append(feature)
             
-            self.drift_detected = drift_report['overall_drift']
+            self.drift_detected = bool(drift_report['overall_drift'])
             
             return self.drift_detected, drift_report
             
         except Exception as e:
-            st.error(f"Error detecting concept drift: {str(e)}")
+            logger.error(f"Error detecting concept drift: {str(e)}", exc_info=True)
             return False, drift_report
     
     def plot_drift_report(self, drift_report):
