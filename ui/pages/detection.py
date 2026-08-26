@@ -8,6 +8,8 @@ from ui.utils import (
     render_schema_readiness_card,
     TEMPLATE_CORE_COLUMNS,
 )
+from agentic_copilot import AgenticInvestigatorCopilot, ClaimContextBuilder
+from rag_engine import get_rag_knowledge_base
 import shutil
 
 
@@ -786,8 +788,122 @@ def show_detection_page():
                     ]:
                         flag_rows.append({"Category": label, "Flag": int(selected_row.get(flag_col, 0) or 0)})
                     st.dataframe(pd.DataFrame(flag_rows), use_container_width=True, hide_index=True)
-        else:
-            st.info("Tidak ada data untuk ditampilkan pada panel detail claim.")
+
+                    # ── AGENTIC AI INVESTIGATOR COPILOT & BAP DRAFTING ────────
+                    st.markdown("---")
+                    st.subheader("🤖 AI Investigator Copilot & Case Dossier Generator")
+                    st.caption(
+                        "Gunakan Agentic AI berbasis RAG untuk menyusun **Berita Acara Pemeriksaan (BAP)**, "
+                        "mengkaji dasar regulasi (*Permenkes, INA-CBGs, FORNAS*), dan merumuskan rekomendasi audit."
+                    )
+
+                    copilot_config_cols = st.columns([1.5, 2, 1.5])
+                    with copilot_config_cols[0]:
+                        provider_choice = st.selectbox(
+                            "LLM Engine",
+                            ["Heuristic Engine (Offline)", "Google Gemini", "OpenAI / Azure", "Local Ollama"],
+                            key=f"copilot_provider_{selected_claim}"
+                        )
+                    with copilot_config_cols[1]:
+                        api_key_input = ""
+                        if provider_choice in ["Google Gemini", "OpenAI / Azure"]:
+                            api_key_input = st.text_input(
+                                "API Key",
+                                type="password",
+                                help="Masukkan API Key untuk LLM. Jika dikosongkan, Copilot otomatis menggunakan Heuristic Fallback.",
+                                key=f"copilot_key_{selected_claim}"
+                            )
+                        elif provider_choice == "Local Ollama":
+                            st.caption("Endpoint: `http://localhost:11434/api/generate` (Model: `llama3`)")
+                    with copilot_config_cols[2]:
+                        investigator_input = st.text_input(
+                            "Nama Auditor",
+                            value="Investigator Senior ASTINA",
+                            key=f"copilot_auditor_{selected_claim}"
+                        )
+
+                    provider_map = {
+                        "Heuristic Engine (Offline)": "heuristic",
+                        "Google Gemini": "gemini",
+                        "OpenAI / Azure": "openai",
+                        "Local Ollama": "ollama"
+                    }
+                    selected_provider = provider_map.get(provider_choice, "heuristic")
+
+                    copilot_engine = AgenticInvestigatorCopilot(
+                        provider=selected_provider,
+                        api_key=api_key_input,
+                        investigator_name=investigator_input if 'investigator_name' in locals() else "Investigator Senior ASTINA"
+                    )
+
+                    # Build sanitized context (PII Masked)
+                    claim_ctx = ClaimContextBuilder.build_sanitized_context(
+                        claim_row=selected_row,
+                        shap_contributions=st.session_state.get('shap_contributions', {}),
+                        mask_sensitive=True
+                    )
+
+                    action_col1, action_col2 = st.columns(2)
+                    with action_col1:
+                        btn_gen_bap = st.button("📑 Generate Draf BAP & Resume Medis", key=f"btn_bap_{selected_claim}", type="primary", use_container_width=True)
+                    with action_col2:
+                        btn_view_rag = st.button("⚖️ Cek Dasar Regulasi Terkait (RAG)", key=f"btn_rag_{selected_claim}", use_container_width=True)
+
+                    # Session key for generated dossier
+                    dossier_key = f"generated_bap_{selected_claim}"
+
+                    if btn_gen_bap:
+                        with st.spinner("🤖 Menyusun Berita Acara Pemeriksaan (BAP) dengan Agentic AI & RAG..."):
+                            dossier_res = copilot_engine.generate_investigation_dossier(
+                                context=claim_ctx,
+                                investigator_name=investigator_input
+                            )
+                            st.session_state[dossier_key] = dossier_res
+
+                    if btn_view_rag:
+                        with st.spinner("🔍 Mencari pasal regulasi relevan di RAG Knowledge Base..."):
+                            rag_kb = get_rag_knowledge_base()
+                            matched_docs = rag_kb.retrieve(
+                                query=" ".join(claim_ctx.get("active_rules", [])) + f" {claim_ctx.get('service_code')} {claim_ctx.get('diagnosis_code')}",
+                                top_k=3
+                            )
+                            st.markdown("#### 📚 Regulasi Terkait Kasus Ini (RAG Knowledge Base)")
+                            for doc in matched_docs:
+                                st.info(f"**{doc['title']}** ({doc['category']})\n\n{doc['content']}")
+
+                    if dossier_key in st.session_state:
+                        dossier_data = st.session_state[dossier_key]
+                        st.markdown("---")
+                        st.markdown(dossier_data.get("dossier_text", ""))
+                        
+                        st.download_button(
+                            label="📥 Unduh Dokumen BAP (.md)",
+                            data=dossier_data.get("dossier_text", ""),
+                            file_name=f"BAP_{selected_claim}_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.md",
+                            mime="text/markdown",
+                            key=f"dl_bap_{selected_claim}"
+                        )
+
+                    # Interactive Q&A for Investigator
+                    st.markdown("##### 💬 Tanya Copilot tentang Klaim Ini")
+                    q_col, btn_q_col = st.columns([4, 1])
+                    with q_col:
+                        custom_q = st.text_input(
+                            "Pertanyaan investigasi:",
+                            placeholder="Contoh: Apakah kombinasi diagnosis dan tindakan ini lazim untuk rawat jalan?",
+                            key=f"custom_q_{selected_claim}",
+                            label_visibility="collapsed"
+                        )
+                    with btn_q_col:
+                        btn_ask = st.button("Tanyakan", key=f"btn_ask_{selected_claim}", use_container_width=True)
+
+                    if btn_ask and custom_q:
+                        with st.spinner("🤖 Menganalisis..."):
+                            answer = copilot_engine.answer_investigator_query(
+                                context=claim_ctx,
+                                user_question=custom_q
+                            )
+                            st.success(answer)
 
         # Download results
         st.subheader("💾 Unduh Hasil")

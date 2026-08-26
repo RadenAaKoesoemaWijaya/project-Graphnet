@@ -203,4 +203,20 @@ def optimize_memory_usage_aggressive(df):
 
     return df
 
-import numpy as np  # Add this import at the top of the file
+# =============================================================================
+# AGENTIC AI COPILOT & RAG CONFIGURATION
+# =============================================================================
+LLM_COPILOT_CONFIG = {
+    'default_provider': os.getenv('LLM_PROVIDER', 'heuristic'),  # 'gemini', 'openai', 'ollama', 'heuristic'
+    'default_model': os.getenv('LLM_MODEL_NAME', 'gemini-1.5-flash'),
+    'ollama_endpoint': os.getenv('LLM_ENDPOINT_URL', 'http://localhost:11434/api/generate'),
+    'temperature': 0.2,
+    'max_tokens': 2048,
+    'enable_pii_masking': True,
+}
+
+RAG_CONFIG = {
+    'enabled': True,
+    'top_k': 3,
+    'similarity_threshold': 0.35,
+}
