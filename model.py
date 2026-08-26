@@ -1,3 +1,6 @@
+import numpy as np
+import pandas as pd
+
 try:
     import torch
     import torch.nn as nn
@@ -5,15 +8,119 @@ try:
     from torch_geometric.nn import GATConv, global_add_pool, global_mean_pool
     from torch_geometric.data import Data
     TORCH_AVAILABLE = True
-except ImportError:  # pragma: no cover - optional deep learning dependency
-    torch = None
-    nn = None
+except (ImportError, OSError, Exception):  # pragma: no cover - optional deep learning dependency / Windows DLL issues
+    import sys
+    sys.modules.pop('torch', None)
+    sys.modules.pop('torch_geometric', None)
+    TORCH_AVAILABLE = False
+
+if not TORCH_AVAILABLE:
+    class _DummyModule:
+        def __init__(self, *args, **kwargs):
+            pass
+        def __call__(self, *args, **kwargs):
+            return self
+        def parameters(self):
+            return []
+        def eval(self):
+            return self
+        def train(self):
+            return self
+        def to(self, *args, **kwargs):
+            return self
+
+    class _DummyNN:
+        Module = _DummyModule
+        ModuleList = list
+        Sequential = list
+        Linear = _DummyModule
+        ReLU = _DummyModule
+        BatchNorm1d = _DummyModule
+        Dropout = _DummyModule
+        CrossEntropyLoss = _DummyModule
+        MSELoss = _DummyModule
+
+    class _DummyTensor(np.ndarray):
+        def __new__(cls, input_array, dtype=None):
+            arr = np.asarray(input_array, dtype=dtype)
+            return arr.view(cls)
+        def t(self):
+            return _DummyTensor(self.T)
+        def contiguous(self):
+            return self
+        def to(self, *args, **kwargs):
+            return self
+        def cpu(self):
+            return self
+        def numpy(self):
+            return np.asarray(self)
+        def dim(self):
+            return self.ndim
+        def size(self, dim=None):
+            if dim is None:
+                return self.shape
+            return self.shape[dim]
+
+    class _DummyDevice:
+        def __init__(self, type_str='cpu'):
+            self.type = str(type_str)
+        def __str__(self):
+            return self.type
+        def __repr__(self):
+            return f"device(type='{self.type}')"
+
+    class _DummyTorch:
+        nn = _DummyNN
+        Tensor = _DummyTensor
+        device = _DummyDevice
+
+        @staticmethod
+        def FloatTensor(*args, **kwargs):
+            if len(args) == 1:
+                return _DummyTensor(args[0], dtype=np.float32)
+            return _DummyTensor(args, dtype=np.float32)
+
+        @staticmethod
+        def LongTensor(*args, **kwargs):
+            if len(args) == 1:
+                return _DummyTensor(args[0], dtype=np.int64)
+            return _DummyTensor(args, dtype=np.int64)
+
+        @staticmethod
+        def as_tensor(x, *args, **kwargs):
+            return _DummyTensor(np.asarray(x))
+
+        @staticmethod
+        def manual_seed(seed):
+            pass
+
+        class cuda:
+            @staticmethod
+            def is_available():
+                return False
+            @staticmethod
+            def manual_seed_all(seed):
+                pass
+            @staticmethod
+            def get_device_properties(*args):
+                return None
+            @staticmethod
+            def get_device_name(*args):
+                return "CPU"
+
+        class backends:
+            class cudnn:
+                deterministic = True
+                benchmark = False
+
+    torch = _DummyTorch()
+    nn = torch.nn
     F = None
-    GATConv = None
+    GATConv = _DummyModule
     global_add_pool = None
     global_mean_pool = None
-    Data = None
-    TORCH_AVAILABLE = False
+    Data = _DummyModule
+
 
 import numpy as np
 import pandas as pd
@@ -105,27 +212,27 @@ def get_adaptive_gnn_threshold(device, feature_dim, num_nodes):
         Adaptive threshold for using NeighborLoader
     """
     try:
-        if device.type == 'cuda' and torch.cuda.is_available():
+        if device is not None and getattr(device, 'type', None) == 'cuda' and torch is not None and torch.cuda.is_available():
             gpu_memory = torch.cuda.get_device_properties(0).total_memory
-            # More conservative threshold for smaller GPUs
+            # Conservative threshold for GPUs to prevent OOM
             if gpu_memory < 4 * 1024**3:  # < 4GB
-                return 5000
+                return 3000
             elif gpu_memory < 8 * 1024**3:  # < 8GB
-                return 10000
+                return 5000
             else:  # >= 8GB
-                return 20000
+                return 8000
         else:
-            # CPU: more conservative threshold
+            # CPU: conservative threshold
             try:
                 import psutil
                 available_ram = psutil.virtual_memory().available
                 if available_ram < 8 * 1024**3:  # < 8GB RAM
-                    return 3000
+                    return 2000
                 elif available_ram < 16 * 1024**3:  # < 16GB RAM
-                    return 5000
+                    return 3000
                 else:  # >= 16GB RAM
-                    return 10000
-            except ImportError:
+                    return 5000
+            except (ImportError, Exception):
                 # psutil not available, use conservative default
                 return 3000
     except Exception as e:
@@ -345,12 +452,15 @@ def _set_global_seeds(seed: int = 42):
     import random as _random
     _random.seed(seed)
     np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-    # Performance-friendly defaults for cuDNN while keeping determinism
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+    if TORCH_AVAILABLE:
+        try:
+            torch.manual_seed(seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(seed)
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
+        except Exception:
+            pass
     os.environ['PYTHONHASHSEED'] = str(seed)
 
 class InsuranceAnomalyGNNModel(torch.nn.Module):
@@ -2172,7 +2282,7 @@ class CombinedAnomalyDetector:
         _set_global_seeds(42)
 
         # GPU detection and optimization
-        if torch is not None:
+        if TORCH_AVAILABLE:
             if device == 'cpu':
                 if torch.cuda.is_available():
                     device = torch.device('cuda')
@@ -2216,7 +2326,7 @@ class CombinedAnomalyDetector:
             self.isolation_forest.fit(features_scaled)
         
         # Train Autoencoder
-        if 'autoencoder' in self.algorithms:
+        if 'autoencoder' in self.algorithms and TORCH_AVAILABLE:
             input_dim = features_scaled.shape[1]
             encoding_dim = self.autoencoder_params.get('encoding_dim', 32)
             # QW4: VAE and denoising toggles
@@ -2551,7 +2661,7 @@ class CombinedAnomalyDetector:
 
         # GNN training (if graph is available and GNN is enabled)
         # Need pseudo-labels for the graph nodes; reuse supervised labels if available
-        if edge_index is not None and (
+        if TORCH_AVAILABLE and edge_index is not None and (
             'gnn' in self.algorithms or self.gnn_weight > 0 or optimize_hyperparams
         ):
             # Determine labels for GNN training
@@ -2884,9 +2994,9 @@ class CombinedAnomalyDetector:
         if edge_attr is not None:
             data.edge_attr = edge_attr.cpu()
         batch_size = int(self.gnn_params.get(
-            'batch_size', 2048 if device.type == 'cuda' else 512
+            'batch_size', 1024 if getattr(device, 'type', 'cpu') == 'cuda' else 512
         ))
-        neighbors = self.gnn_params.get('num_neighbors', [15] * num_layers)
+        neighbors = self.gnn_params.get('num_neighbors', [15, 10] if num_layers == 2 else [15] * num_layers)
         if isinstance(neighbors, int):
             neighbors = [neighbors] * num_layers
         neighbors = list(neighbors)
@@ -2896,10 +3006,12 @@ class CombinedAnomalyDetector:
         train_loader = NeighborLoader(
             data, input_nodes=torch.as_tensor(train_idx),
             num_neighbors=neighbors, batch_size=batch_size, shuffle=True,
+            num_workers=0,
         )
         val_loader = NeighborLoader(
             data, input_nodes=torch.as_tensor(val_idx),
             num_neighbors=neighbors, batch_size=batch_size, shuffle=False,
+            num_workers=0,
         )
         optimizer = torch.optim.AdamW(
             self.gnn_model.parameters(),
@@ -3169,7 +3281,8 @@ class CombinedAnomalyDetector:
         val_mask[val_idx] = True
 
         # Use sampled subgraphs for large graphs to bound per-step memory.
-        sampling_threshold = int(self.gnn_params.get('sampling_threshold_nodes', 20000))
+        adaptive_thresh = get_adaptive_gnn_threshold(device, num_features, num_nodes)
+        sampling_threshold = int(self.gnn_params.get('sampling_threshold_nodes', adaptive_thresh))
         use_neighbor_sampling = bool(self.gnn_params.get(
             'use_neighbor_sampling', num_nodes > sampling_threshold
         ))
@@ -3481,30 +3594,44 @@ class CombinedAnomalyDetector:
                         adaptive_threshold = get_adaptive_gnn_threshold(device, features_scaled.shape[1], num_nodes)
                         
                         if num_nodes > adaptive_threshold:
-                            from torch_geometric.loader import NeighborLoader
-                            data = Data(x=features_tensor, edge_index=ei)
-                            if edge_attr is not None:
-                                data.edge_attr = edge_attr
-                            # Use dynamic batch size for NeighborLoader
-                            loader_batch_size = get_optimal_batch_size(
-                                device, 
-                                num_nodes, 
-                                features_scaled.shape[1], 
-                                default_batch=2048
-                            )
-                            loader = NeighborLoader(
-                                data,
-                                num_neighbors=[-1],  # Use all neighbors for inference
-                                batch_size=loader_batch_size,
-                                shuffle=False
-                            )
-                            gnn_probs_list = []
-                            for batch in loader:
-                                out = self.gnn_model(batch.x, batch.edge_index, None, getattr(batch, 'edge_attr', None))
-                                # Only take the predictions for the seed nodes
-                                probs = torch.softmax(out[:batch.batch_size], dim=1)[:, 1]
-                                gnn_probs_list.append(probs.cpu().numpy())
-                            gnn_probabilities = np.concatenate(gnn_probs_list)
+                            try:
+                                from torch_geometric.loader import NeighborLoader
+                                data = Data(x=features_tensor, edge_index=ei)
+                                if edge_attr is not None:
+                                    data.edge_attr = edge_attr
+                                # Use dynamic batch size for NeighborLoader
+                                loader_batch_size = get_optimal_batch_size(
+                                    device, 
+                                    num_nodes, 
+                                    features_scaled.shape[1], 
+                                    default_batch=1024
+                                )
+                                # Use bounded fanout [15, 10] instead of [-1] to prevent neighbor explosion OOM
+                                loader = NeighborLoader(
+                                    data,
+                                    num_neighbors=[15, 10],
+                                    batch_size=loader_batch_size,
+                                    shuffle=False,
+                                    num_workers=0
+                                )
+                                gnn_probs_list = []
+                                for batch in loader:
+                                    out = self.gnn_model(batch.x, batch.edge_index, None, getattr(batch, 'edge_attr', None))
+                                    # Only take the predictions for the seed nodes
+                                    probs = torch.softmax(out[:batch.batch_size], dim=1)[:, 1]
+                                    gnn_probs_list.append(probs.cpu().numpy())
+                                gnn_probabilities = np.concatenate(gnn_probs_list)
+                            except Exception as sampler_err:
+                                logger.warning("NeighborLoader inference failed (%s). Using chunked direct forward.", sampler_err)
+                                # Fallback chunked forward without full-batch OOM
+                                chunk_size = min(2048, max(256, num_nodes // 10))
+                                gnn_probs_list = []
+                                for i in range(0, num_nodes, chunk_size):
+                                    chunk_end = min(i + chunk_size, num_nodes)
+                                    out = self.gnn_model(features_tensor[i:chunk_end], None, None, None)
+                                    probs = torch.softmax(out, dim=1)[:, 1]
+                                    gnn_probs_list.append(probs.cpu().numpy())
+                                gnn_probabilities = np.concatenate(gnn_probs_list)
                         else:
                             # Direct forward for smaller graphs (use real batch_tensor)
                             out = self.gnn_model(features_tensor, ei, batch_tensor, edge_attr)

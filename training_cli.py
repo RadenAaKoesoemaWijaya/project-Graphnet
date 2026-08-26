@@ -97,7 +97,7 @@ def main(argv=None) -> int:
     try:
         import torch
         from model import CombinedAnomalyDetector, create_claim_graph
-    except Exception as e:
+    except (Exception, OSError) as e:
         logger.error("Failed to import model: %s", e)
         return 2
 

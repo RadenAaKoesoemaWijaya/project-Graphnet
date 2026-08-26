@@ -1,7 +1,10 @@
 import plotly.express as px
 import numpy as np
 import pandas as pd
-import torch
+try:
+    import torch
+except (ImportError, OSError, Exception):
+    torch = None
 from ui.utils import *
 from state_manager import *
 def show_training_page():
@@ -975,8 +978,8 @@ def show_training_page():
                             "Jumlah node untuk visualisasi",
                             min_value=1,
                             max_value=max(1, int(node_features.shape[0]) if node_features is not None else total_edges),
-                            value=min(5000, max(1, int(node_features.shape[0]) if node_features is not None else total_edges)),
-                            step=100,
+                            value=min(300, max(1, int(node_features.shape[0]) if node_features is not None else total_edges)),
+                            step=50,
                             key="gnn_visualization_node_limit",
                         ))
                         max_nodes = requested_nodes

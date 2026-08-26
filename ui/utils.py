@@ -17,9 +17,18 @@ if not hasattr(sys, 'get_int_max_str_digits'):
 # Suppress Polars CPU feature check warnings
 os.environ["POLARS_SKIP_CPU_CHECK"] = "1"
 
-import torch
-import torch.nn.functional as F
-from torch_geometric.data import Data
+try:
+    import torch
+    import torch.nn.functional as F
+    from torch_geometric.data import Data
+    TORCH_AVAILABLE = True
+except (ImportError, OSError, Exception):
+    sys.modules.pop('torch', None)
+    sys.modules.pop('torch_geometric', None)
+    torch = None
+    F = None
+    Data = None
+    TORCH_AVAILABLE = False
 import plotly.express as px
 import plotly.graph_objects as go
 import networkx as nx
