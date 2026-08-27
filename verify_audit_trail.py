@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """Verify audit_trail Cloud Logging integration"""
-from audit_trail import AuditTrail, CLOUD_LOGGING_AVAILABLE
+import sys
 import os
+
+if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+from audit_trail import AuditTrail, CLOUD_LOGGING_AVAILABLE
 
 print('AUDIT TRAIL VERIFICATION')
 print('=' * 60)

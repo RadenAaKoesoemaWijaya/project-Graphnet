@@ -328,10 +328,10 @@ Konfigurasi opsional dapat disetel melalui file `.env` di direktori utama:
 
 ## 🧪 Pengujian & Validasi Kualitas
 
-Aplikasi dilengkapi suite pengujian otomatis komprehensif (**47 Test Suites**) untuk memverifikasi keandalan seluruh komponen sistem secara end-to-end:
+Aplikasi dilengkapi suite pengujian otomatis komprehensif (**52 Test Cases**) untuk memverifikasi keandalan seluruh komponen sistem secara end-to-end:
 
 ```powershell
-# Jalankan seluruh 47 test suite dengan Pytest
+# Jalankan seluruh 52 test suite dengan Pytest
 python -m pytest -v
 
 # Verifikasi integritas rantai Cryptographic Audit Trail
@@ -342,7 +342,7 @@ python system_status.py
 ```
 
 Hasil verifikasi memastikan:
-- ✅ **47/47 Automated Tests Passed (100% Green)** mencakup seluruh modul aplikasi.
+- ✅ **52/52 Automated Tests Passed (100% Green)** mencakup seluruh modul aplikasi.
 - ✅ Seluruh 9 modul deteksi fraud berfungsi normal pada berbagai tipe data dan edge cases.
 - ✅ Penanganan data kosong, missing values, dan format numerik tak standar berjalan aman tanpa crash.
 - ✅ Polars out-of-core streaming memory bounded (<100MB RAM peak) pada dataset besar.

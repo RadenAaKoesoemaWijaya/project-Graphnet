@@ -39,7 +39,7 @@ def test_feature_importance():
     except ImportError as e:
         print(f"❌ Import failed: {e}")
         print("   Ensure model.py and model_explainer.py exist")
-        return False
+        raise
     
     try:
         # Initialize detector with only Isolation Forest algorithm (faster for testing)
@@ -60,39 +60,19 @@ def test_feature_importance():
         
         # Initialize explainers
         print("🔍 Initializing SHAP explainers...")
-        if not explainer.initialize_explainers(X[:50]):
-            print("❌ Failed to initialize explainers")
-            return False
+        assert explainer.initialize_explainers(X[:50]), "Failed to initialize explainers"
         print("   ✓ SHAP explainers initialized")
         
         # Test: Get feature importance for Isolation Forest with X
         print("\n📈 Computing feature importance for Isolation Forest...")
         importance_df = explainer.get_feature_importance('isolation_forest', X=X)
         
-        if importance_df is None:
-            print("❌ Feature importance returned None")
-            return False
-        
-        if not isinstance(importance_df, pd.DataFrame):
-            print(f"❌ Expected DataFrame, got {type(importance_df)}")
-            return False
-        
-        if len(importance_df) == 0:
-            print("❌ Feature importance DataFrame is empty")
-            return False
-        
-        # Validate structure
-        if 'feature' not in importance_df.columns:
-            print(f"❌ Missing 'feature' column. Got: {importance_df.columns.tolist()}")
-            return False
-        
-        if 'importance' not in importance_df.columns:
-            print(f"❌ Missing 'importance' column. Got: {importance_df.columns.tolist()}")
-            return False
-        
-        if importance_df['importance'].sum() <= 0:
-            print("❌ Importance scores are all zero or negative")
-            return False
+        assert importance_df is not None, "Feature importance returned None"
+        assert isinstance(importance_df, pd.DataFrame), f"Expected DataFrame, got {type(importance_df)}"
+        assert len(importance_df) > 0, "Feature importance DataFrame is empty"
+        assert 'feature' in importance_df.columns, f"Missing 'feature' column. Got: {importance_df.columns.tolist()}"
+        assert 'importance' in importance_df.columns, f"Missing 'importance' column. Got: {importance_df.columns.tolist()}"
+        assert importance_df['importance'].sum() > 0, "Importance scores are all zero or negative"
         
         print(f"   ✓ Feature importance computed for {len(importance_df)} features")
         print("\n   Top 5 Important Features:")
@@ -114,7 +94,6 @@ def test_feature_importance():
         print(f"  • SHAP KernelExplainer: ✓ Initialized")
         print(f"  • Data validation: ✓ Passed")
         print(f"  • Error handling: ✓ Graceful")
-        return True
         
     except Exception as e:
         print(f"\n❌ Error during test: {e}")
@@ -123,5 +102,5 @@ def test_feature_importance():
         raise
 
 if __name__ == "__main__":
-    success = test_feature_importance()
-    sys.exit(0 if success else 1)
+    test_feature_importance()
+    sys.exit(0)

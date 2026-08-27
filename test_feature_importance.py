@@ -15,15 +15,20 @@ sys.path.insert(0, str(Path(__file__).parent))
 def test_feature_importance():
     """Test feature importance with sample data"""
     
-    # Load sample dataset
+    # Load sample dataset or fallback
     sample_file = Path("sample_healthcare_claims_500.csv")
-    if not sample_file.exists():
-        print(f"❌ Sample dataset not found: {sample_file}")
-        print("   Run: python generate_sample_dataset.py")
-        return False
-    
-    print(f"📊 Loading sample dataset: {sample_file}")
-    df = pd.read_csv(sample_file)
+    if sample_file.exists():
+        print(f"📊 Loading sample dataset: {sample_file}")
+        df = pd.read_csv(sample_file)
+    elif Path("test_claims.csv").exists():
+        print("📊 Loading test dataset: test_claims.csv")
+        df = pd.read_csv("test_claims.csv")
+    else:
+        print("📊 Generating synthetic dataset for test")
+        np.random.seed(42)
+        df = pd.DataFrame({
+            f"feature_{i}": np.random.randn(100) * 50 for i in range(10)
+        })
     print(f"   ✓ Loaded {len(df)} rows × {len(df.columns)} columns")
     
     # Prepare features (exclude non-numeric columns and target columns)
@@ -45,11 +50,12 @@ def test_feature_importance():
         print("\n🔧 Initializing CombinedAnomalyDetector...")
         detector = CombinedAnomalyDetector(
             random_state=42,
-            verbose=False
+            verbose=False,
+            algorithms=['isolation_forest']
         )
         
         print("🎓 Training on sample data...")
-        detector.fit(X, fit_isolation_forest=True, fit_xgboost=False)  # Quick test with IF only
+        detector.fit(X)  # Quick test with IF only
         print("✓ Detector trained successfully")
         
         print("\n🧠 Initializing ModelExplainer...")
@@ -59,17 +65,13 @@ def test_feature_importance():
         )
         
         print("🔍 Initializing explainers...")
-        if not explainer.initialize_explainers(X[:100]):  # Use first 100 samples
-            print("❌ Failed to initialize explainers")
-            return False
+        assert explainer.initialize_explainers(X[:min(50, len(X))]), "Failed to initialize explainers"
         print("✓ Explainers initialized")
         
         print("\n📈 Computing feature importance for Isolation Forest...")
         importance_df = explainer.get_feature_importance('isolation_forest', X=X)
         
-        if importance_df is None:
-            print("❌ Feature importance returned None")
-            return False
+        assert importance_df is not None, "Feature importance returned None"
         
         print(f"✓ Feature importance computed: {len(importance_df)} features")
         print("\nTop 10 Features:")
@@ -82,7 +84,6 @@ def test_feature_importance():
         assert importance_df['importance'].sum() > 0, "Importance scores sum to zero"
         
         print("\n✅ All feature importance tests PASSED!")
-        return True
         
     except ImportError as e:
         print(f"❌ Import error: {e}")
@@ -95,5 +96,5 @@ def test_feature_importance():
         raise
 
 if __name__ == "__main__":
-    success = test_feature_importance()
-    sys.exit(0 if success else 1)
+    test_feature_importance()
+    sys.exit(0)
