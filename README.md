@@ -9,6 +9,7 @@ Aplikasi ini dilengkapi antarmuka interaktif berbasis **Streamlit**, mendukung p
 ## 🚀 Fitur Utama
 
 - **🧠 Hybrid Detection Engine**: Menggabungkan probabilitas anomali statistik ML/GNN dengan validasi deterministik kepatuhan 9 aturan bisnis asuransi.
+- **🎯 Intelligent Feature Selection & Redundancy Filtering**: Modul seleksi fitur multivariat adaptif di UI Praproses yang mencakup SelectKBest (ANOVA F-Score & Mutual Information), Tree-based Feature Importance (ExtraTrees/RandomForest/LightGBM), Filter Multikolinearitas Terbobot Skor, Filter Low-Variance Skala Invarian, serta Reduksi Dimensi PCA interaktif dengan *live explained variance preview*.
 - **⚡ Smart Training Profiles & Complexity Estimator**: Antarmuka pelatihan interaktif dengan preset adaptif (⚡ *Mode Cepat* ~10-30 dtk, ⚖️ *Mode Seimbang* ~1-2 mnt, 🧠 *Mode Lengkap* Deep Graph, 🛠️ *Kustom*) serta monitor estimasi beban komputasi & rekomendasi hardware (CPU vs GPU) *real-time*.
 - **🕸️ Graph Neural Network (GNN)**: Analisis relasional berbasis `GATConv` (Star Graph, Heterogeneous Graph, & k-NN Graph) untuk membongkar sindikat kolusi faskes, dokter, dan pasien (*fraud rings*) dengan evaluasi metrik periodik teroptimasi.
 - **🤖 Agentic AI Copilot & RAG**: Asisten investigasi cerdas berbasis Retrieval-Augmented Generation (RAG) dan FAISS yang memahami regulasi medis, standar ICD-10/CPT, serta memberikan rekomendasi tindakan investigasi terarah.
@@ -39,14 +40,14 @@ Aplikasi ini dilengkapi antarmuka interaktif berbasis **Streamlit**, mendukung p
 
 ```text
 project-Graphnet/
-├── main.py                          # Entry point aplikasi web Streamlit
+├── main.py                          # Entry point aplikasi web Streamlit & routing navigasi
 ├── run.py                           # Production & local runtime launcher
 ├── config.py                        # Konfigurasi global, limit memori, & parameter aturan
 ├── fraud_risk_pipeline.py           # Pipeline orkestrasi skoring risiko hybrid
-├── preprocessing_optimized.py       # Pipeline data preprocessing & feature engineering
+├── preprocessing_optimized.py       # Pipeline data preprocessing, feature engineering & feature selection
 ├── large_file_processor.py          # Streaming chunk processor untuk dataset skala besar
 ├── file_handler.py                  # IO file handler (CSV/Excel/Parquet streaming)
-├── model.py                         # Arsitektur ML Ensemble (Autoencoder, XGBoost, GNN)
+├── model.py                         # Arsitektur ML Ensemble (Autoencoder, XGBoost, GNN, Optuna)
 ├── model_registry.py                # Manajemen versi model & metadata training
 ├── model_explainer.py               # Modul interpretasi model (SHAP & LIME)
 ├── agentic_copilot.py               # AI Copilot investigasi berbasis LLM & Agentic reasoning
@@ -67,16 +68,27 @@ project-Graphnet/
 ├── ui/                              # Antarmuka Pengguna Streamlit
 │   ├── sidebar.py                   # Navigasi, telemetry status, & switch dataset
 │   ├── utils.py                     # Visual helper, grafik Plotly, & smart alignment
+│   ├── ui_components.py             # Custom glassmorphic CSS, navbar, pills & breadcrumbs
 │   └── pages/                       # Modul Halaman Aplikasi
 │       ├── home.py                  # Dashboard ikhtisar & status sistem
-│       ├── data_collection.py       # Upload dataset, validasi skema, & preprocessing
+│       ├── data_collection.py       # Upload dataset, validasi skema, preprocessing & feature selection
 │       ├── training.py              # Pelatihan model ML Ensemble & GNN
 │       ├── evaluation.py            # Evaluasi performa, metrik confusion matrix, & XAI
-│       ├── detection.py             # Deteksi fraud batch, rule audit, & review table
+│       ├── detection.py             # Deteksi fraud batch, rule audit, review table & AI Copilot
 │       └── status.py                # Telemetri performa sistem & audit logging
 │
-├── tests/                           # Unit test & integrasi otomatis (Pytest)
-│   └── test_detection_modules.py    # Test suite komprehensif 9 modul aturan & ML
+├── tests/                           # Unit test & integrasi otomatis (Pytest) - 53 Test Cases
+│   ├── conftest.py                  # Pytest fixtures & setup lingkungan uji
+│   ├── test_agentic_copilot.py      # Uji fungsionalitas Copilot & FAISS RAG engine
+│   ├── test_app_startup.py          # Uji startup & integritas import modul utama
+│   ├── test_detection_modules.py    # Test suite komprehensif 9 modul aturan & ML
+│   ├── test_feature_selection.py    # Uji metode seleksi fitur, multikolinearitas & varians
+│   ├── test_gnn_minibatch.py        # Uji mini-batch sampling & forward pass GNN
+│   ├── test_graph_scaling.py        # Uji penskalaan graf & edge budget limit
+│   ├── test_large_file_ingestion.py # Uji streaming CSV-to-Parquet chunk ingestion
+│   ├── test_optuna_ensemble_and_drift.py # Uji optimasi Optuna & deteksi pergeseran data
+│   ├── test_pipeline_edge_cases.py  # Uji edge cases & robustness data tak standar
+│   └── test_streaming_preprocessing_memory.py # Uji batasan memori streaming preprocessing
 │
 ├── .cloudrun/                       # Konfigurasi & skrip deploy Google Cloud Run
 │   ├── deploy.ps1                   # Skrip deploy otomatis PowerShell
@@ -268,12 +280,18 @@ flowchart TD
 * **Proses:** Data klaim divalidasi keutuhannya melalui `DataValidator` dan disanitasi oleh `DataSanitizer`.
 * **Peran Krusial:** Sistem menetapkan identifier stabil `_astina_row_id` pada setiap baris klaim sebelum partisi chunk/sorting agar hasil prediksi ML, GNN, dan bendera aturan bisnis selalu merujuk pada entitas klaim yang sama.
 
-### 2. Preprocessing & Feature Engineering
-* **Proses:** Deteksi outlier IQR (`detect_and_handle_outliers`), ekstraksi fitur temporal, encoding variabel kategori optimal (*Target Encoding* / *Frequency Encoding*), dan pembentukan fitur domain asuransi:
+### 2. Preprocessing, Feature Engineering & Selection
+* **Proses Preprocessing & Feature Engineering:** Deteksi outlier IQR (`detect_and_handle_outliers`), ekstraksi fitur temporal, encoding variabel kategori optimal (*Target Encoding* / *Frequency Encoding*), dan pembentukan fitur domain asuransi:
   * `payment_ratio`: Rasio nominal dibayar terhadap nominal ditagihkan.
   * `allowance_ratio`: Rasio nominal disetujui terhadap nominal ditagihkan.
   * `high_amount_quick_submit`: Indikator klaim bernominal kuartil atas yang diajukan dalam durasi waktu kilat.
   * `zscore`: Standarisasi deviasi statistik pada variabel moneter utama.
+* **Seleksi Fitur Cerdas (*Intelligent Feature Selection*):**
+  * **SelectKBest**: Pemeringkatan fitur berbasis korelasi statistik ANOVA F-Score (`f_classif`) atau *Mutual Information Gain* (`mutual_info_classif`).
+  * **Tree-based Feature Importance**: Penilaian signifikansi fitur non-linear menggunakan *Random Forest*, *ExtraTrees*, atau *LightGBM* dengan *pseudo-labeling* otomatis.
+  * **Filter Multikolinearitas Terbobot Skor**: Eliminasi fitur redundan berkorelasi tinggi ($r > 0.90$) dengan memprioritaskan fitur yang memiliki skor kepentingan (*importance score*) lebih tinggi.
+  * **Filter Low-Variance Skala Invarian**: Pembersihan fitur konstan atau minim varians melalui normalisasi varians $[0, 1]$ yang aman untuk rasio berskala kecil.
+  * **Reduksi Dimensi PCA**: Proyeksi komponen utama (*Principal Component Analysis*) interaktif dengan visualisasi persentase *cumulative explained variance*.
 
 ### 3. Estimasi Skor Statistik ML Ensemble & Smart Training Profiles
 * **Fitur Presets Pelatihan Cerdas:**
@@ -337,11 +355,11 @@ Konfigurasi opsional dapat disetel melalui file `.env` di direktori utama:
 
 ## 🧪 Pengujian & Validasi Kualitas
 
-Aplikasi dilengkapi suite pengujian otomatis komprehensif (**52 Test Cases**) untuk memverifikasi keandalan seluruh komponen sistem secara end-to-end:
+Aplikasi dilengkapi suite pengujian otomatis komprehensif (**53 Test Cases**) untuk memverifikasi keandalan seluruh komponen sistem secara end-to-end:
 
 ```powershell
-# Jalankan seluruh 52 test suite dengan Pytest
-python -m pytest -v
+# Jalankan seluruh 53 test suite dengan Pytest
+python -m pytest tests/ -v
 
 # Verifikasi integritas rantai Cryptographic Audit Trail
 python verify_audit_trail.py
@@ -351,8 +369,10 @@ python system_status.py
 ```
 
 Hasil verifikasi memastikan:
-- ✅ **52/52 Automated Tests Passed (100% Green)** mencakup seluruh modul aplikasi.
+- ✅ **53/53 Automated Tests Passed (100% Green)** mencakup seluruh modul aplikasi.
 - ✅ Seluruh 9 modul deteksi fraud berfungsi normal pada berbagai tipe data dan edge cases.
+- ✅ Seleksi fitur (SelectKBest, Tree Importance, Filter Multikolinearitas, Low-Variance Filter, PCA) terverifikasi matematis.
+- ✅ Agentic Copilot dan FAISS Knowledge RAG merespons analisis investigasi secara akurat.
 - ✅ Penanganan data kosong, missing values, dan format numerik tak standar berjalan aman tanpa crash.
 - ✅ Polars out-of-core streaming memory bounded (<100MB RAM peak) pada dataset besar.
 - ✅ Proteksi UI Guard aktif mencegah error kalkulasi SHAP/LIME pada model non-kompatibel.

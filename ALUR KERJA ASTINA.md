@@ -1,1106 +1,442 @@
-# ALUR KERJA ASTINA
+# ALUR KERJA ASTINA (Analisis Sistem Transaksi Identifikasi Nilai Anomali)
+
+Dokumen ini mendokumentasikan secara menyeluruh arsitektur, alur kerja *end-to-end*, logika matematika agregasi risiko, spesifikasi modul kecerdasan buatan (*Machine Learning*, *Graph Neural Network*, *Agentic Copilot RAG*), seleksi fitur adaptif, tata kelola data, pengujian, serta pedoman operasional sistem ASTINA.
+
+---
 
 ## 1. Ringkasan Sistem
 
-ASTINA adalah aplikasi Streamlit untuk deteksi fraud dan anomali klaim asuransi kesehatan. Sistem menggabungkan:
+**ASTINA** adalah platform analitik dan investigasi fraud klaim asuransi kesehatan berbasis **Hybrid AI Enterprise** yang menggabungkan:
 
-- preprocessing dan feature engineering otomatis;
-- model machine learning ensemble;
-- Graph Neural Network (GNN) untuk hubungan antar klaim;
-- sembilan kelompok business rules;
-- explainable AI menggunakan SHAP dan LIME;
-- evaluasi model dan monitoring;
-- registry model, cache, audit trail, serta sinkronisasi artefak ke Google Cloud Storage.
+- **Automated Preprocessing & Domain Feature Engineering**: Ekstraksi temporal, rasio moneter domain asuransi, deteksi outlier IQR, dan encoding variabel kategorik otomatis.
+- **Intelligent Feature Selection & Redundancy Filtering**: Seleksi multivariat SelectKBest (ANOVA F-Score & Mutual Information), Tree-based Feature Importance (Random Forest, ExtraTrees, LightGBM), filter multikolinearitas terbobot skor, filter *low-variance* skala invarian, serta reduksi dimensi PCA interaktif.
+- **Machine Learning Ensemble**: Kombinasi multi-model *Isolation Forest*, *PyTorch Deep Autoencoder*, *XGBoost / LightGBM*, dan *DBSCAN/HDBSCAN*.
+- **Relational Graph Neural Network (GNN)**: Analisis relasional berbasis `GATConv` (Graph Attention Network) pada topologi *Star Graph*, *Heterogeneous Graph*, dan *k-NN Graph* untuk membongkar sindikat kolusi massal (*fraud rings*).
+- **9 Modul Rule-Based Business Engine**: Audit kepatuhan deterministik terhadap 9 kategori fraud klaim medis asuransi kesehatan.
+- **Agentic AI Copilot & Knowledge RAG**: Asisten investigasi berbasis *Retrieval-Augmented Generation* (FAISS vector store) yang memahami standar medis ICD-10, CPT, dan regulasi audit klaim asuransi.
+- **Explainable AI (XAI)**: Atribusi fitur global dan lokal berbasis SHAP (*SHapley Additive exPlanations*) dan LIME (*Local Interpretable Model-agnostic Explanations*).
+- **Cryptographic Audit Trail**: Pencatatan riwayat audit forensik berantai hash SHA-256 anti-tamper untuk integritas pembuktian hukum dan kepatuhan compliance.
+- **Modern Glassmorphic UI & 5-Stage Visual Breadcrumbs**: Antarmuka responsif Streamlit dengan *live telemetry pills* status data, akselerasi GPU/CPU, dan pelacak alur investigasi.
 
-Tujuan alur kerja adalah mengubah data klaim mentah menjadi skor risiko yang dapat ditindaklanjuti oleh investigator.
+---
 
-## 2. Arsitektur Tingkat Tinggi
+## 2. Arsitektur Sistem Tingkat Tinggi
 
 ```mermaid
 flowchart TD
-    A[Browser/User] --> B[Streamlit main.py]
-    B --> C[Sidebar and Page Router]
-    C --> D[Data Collection]
-    D --> E[Upload Validation and Quota]
-    E --> F[File Handler]
-    F --> G[Raw DataFrame and EDA]
-    G --> H[Preprocessing and Feature Engineering]
-    H --> I[Processed Parquet]
-    I --> J[State Manager and Cache]
-    J --> K[Training Page]
-    K --> L[Train/Test Split]
-    L --> M[ML Ensemble]
-    L --> N[Graph Builder]
-    N --> O[GNN Training]
-    M --> P[Model and Registry]
-    O --> P
-    P --> Q[Evaluation]
-    P --> R[Detection and Investigation]
-    R --> S[Business Rules]
-    R --> T[Risk Aggregation]
-    Q --> U[Metrics, XAI, Charts]
-    S --> T
-    T --> V[Dashboard, Export, Audit]
-    P -. optional .-> W[GCS]
+    subgraph INGESTION["1. Data Ingestion & Validation"]
+        A[File Klaim CSV / XLSX / Parquet] --> B[check_upload_quota & check_file_size]
+        B --> C[read_file_with_optimization / stream_csv_to_parquet]
+        C --> D[DataValidator & DataSanitizer]
+        D --> E[Schema Readiness Check 14 Kolom Inti]
+        E --> F[Injeksi Stable _astina_row_id]
+    end
+
+    subgraph PREPROCESSING["2. Preprocessing, Feature Engineering & Selection"]
+        F --> G[enhanced_missing_handling & Outlier Capping]
+        G --> H[Domain Feature Engineering payment_ratio, zscore, dll]
+        H --> I[Categorical Encoding Target/Frequency/One-Hot]
+        I --> J[Intelligent Feature Selection & Filtering]
+        J --> K[SelectKBest / Tree Importance / Corr Filter / PCA]
+        K --> L[Simpan ke Parquet Cache & State Manager]
+    end
+
+    subgraph TRAINING["3. Multi-Model Training Engine"]
+        L --> M[Train / Test Split Stratified]
+        M --> N[Smart Training Profiles Cepat / Seimbang / Lengkap / Kustom]
+        N --> O[ML Ensemble IF, Autoencoder, XGBoost]
+        N --> P[Graph Construction Star, Hetero, k-NN]
+        P --> Q[GNN Training GATConv + Mini-Batch NeighborLoader]
+        O --> R[Optuna Hyperparameter & Weight Tuning]
+        Q --> R
+        R --> S[Model Checkpoints & Model Registry]
+    end
+
+    subgraph INFERENCE["4. Hybrid Detection & Risk Aggregation"]
+        T[Data Klaim Uji / Inferensi Baru] --> U[Smart Feature Alignment & Imputasi Median Training]
+        U --> V[ML Anomaly Score Estimation]
+        U --> W[GNN Relational Graph Inference]
+        T --> X[9 Modul Business Rules Audit Engine]
+        V --> Y[Hybrid Risk Score Aggregator]
+        W --> Y
+        X --> Y
+        Y --> Z[Final Risk Score, Flag & Severity Low / Medium / High]
+    end
+
+    subgraph INVESTIGATION["5. XAI, Copilot & Audit Trail"]
+        Z --> AA[Tabel Review Fraud & Filter Severity]
+        Z --> AB[Explainable AI SHAP Summary & LIME Local]
+        Z --> AC[Agentic AI Copilot & FAISS RAG Query]
+        Z --> AD[Cryptographic Audit Trail SHA-256 Chaining]
+        S -. Sync .-> AE[Google Cloud Storage GCS]
+    end
 ```
 
-### Komponen utama
+### Tabel Komponen Utama
 
-| Komponen | Lokasi | Tanggung jawab |
-|---|---|---|
-| Entry point | `main.py` | Konfigurasi Streamlit, inisialisasi state, routing halaman, error boundary |
-| UI utilities | `ui/utils.py` | Helper data, chart, alignment fitur, konfigurasi tampilan |
-| Sidebar | `ui/sidebar.py` | Navigasi, status dataset, status model, status perangkat |
-| File handler | `file_handler.py` | Temporary upload, pembacaan file, optimasi dtype, Parquet |
-| Validator | `data_validator.py` | Integritas, tipe kolom, range, validasi ML |
-| Preprocessor | `preprocessing_optimized.py` | Missing value, tanggal, encoding, outlier, feature engineering |
-| Large-file processor | `large_file_processor.py` | Pemrosesan per chunk dan paralel |
-| State manager | `state_manager.py` | State Streamlit, path processed data, split dataset |
-| Cache | `cache_manager.py` | Hash file, cache Parquet, metadata, eviction |
-| Model engine | `model.py` | Ensemble ML, autoencoder, XGBoost, DBSCAN, GNN, save/load |
-| Rule pipeline | `fraud_risk_pipeline.py` | Agregasi sembilan kelompok rules |
-| Model registry | `model_registry.py` | Versi model dan metadata |
-| Cloud storage | `cloud_storage.py` | Mirror dan restore artefak ke GCS |
-| Monitoring | `metrics.py`, `enhanced_metrics.py` | Counter, gauge, durasi, metrik operasi |
-| Audit | `audit_trail.py` | Audit upload, preprocessing, training, deteksi |
+| Komponen | Berkas Sumber | Tanggung Jawab Utama |
+| :--- | :--- | :--- |
+| **Entry Point & Router** | `main.py` | Konfigurasi Streamlit, top navbar, inisialisasi state, error boundary |
+| **UI Components & Styles** | `ui_components.py` | Glassmorphic CSS, breadcrumb tracker, live telemetry pills |
+| **UI Sidebar & Nav** | `ui/sidebar.py` | Navigasi menu, status kesiapan pipeline (0–100%), telemetri hardware |
+| **UI Utilities & Charts** | `ui/utils.py` | Smart feature alignment, visual helper, chart Plotly, export data |
+| **File Handler** | `file_handler.py` | Streaming CSV-to-Parquet, optimasi memory dtype, buffer IO |
+| **Large File Processor** | `large_file_processor.py` | Chunking dataset, memory-bounded preprocessing per batch |
+| **Data Validator & Sanitizer** | `data_validator.py` | Integritas kolom, sanitasi tipe data, evaluasi skema 14 kolom inti |
+| **Data Preprocessing & Selection**| `preprocessing_optimized.py` | Imputasi, outlier capping, domain features, SelectKBest, Corr filter, PCA |
+| **Model Engine & GNN** | `model.py` | CombinedAnomalyDetector, Autoencoder PyTorch, GNN GATConv, Optuna |
+| **Model Explainer (XAI)** | `model_explainer.py` | Atribusi SHAP Tree/KernelExplainer, LIME tabular explanations |
+| **Agentic AI Copilot** | `agentic_copilot.py` | AI assistant investigasi fraud, multi-provider LLM & reasoning |
+| **RAG Knowledge Base** | `rag_engine.py` | Indexing FAISS, semantic search ICD-10, CPT, regulasi medis |
+| **Business Rule Pipeline** | `fraud_risk_pipeline.py` | Orkestrasi 9 kelompok aturan kepatuhan klaim asuransi |
+| **Cryptographic Audit Trail** | `audit_trail.py` | Pencatatan rantai log hash SHA-256 anti-tamper |
+| **Audit Verification** | `verify_audit_trail.py` | Skrip verifikasi integritas rantai blok hash audit trail |
+| **State Manager** | `state_manager.py` | Manajemen transisi halaman, session state Streamlit, caching path |
+| **Cache Manager** | `cache_manager.py` | Multi-tier Parquet & session cache, eviction policy |
+| **Model Registry** | `model_registry.py` | Versi model, schema metadata, dynamic model loader |
+| **Cloud Storage** | `cloud_storage.py` | Sinkronisasi model dan checkpoint ke Google Cloud Storage (GCS) |
+| **System Telemetry** | `system_status.py` | Monitoring utilisasi CPU, RAM, GPU/VRAM, dan hardware specs |
 
-## 3. Startup dan Routing
+---
 
-### 3.1 Entry point
+## 3. Startup, Top Navbar, dan Alur Navigasi
 
-Aplikasi dijalankan dengan:
+### 3.1 Startup Flow
+
+Aplikasi diaktifkan melalui terminal atau *production launcher*:
 
 ```powershell
+# Jalankan menggunakan Streamlit
 .\.venv\Scripts\Activate.ps1
 streamlit run main.py
-```
 
-Atau melalui launcher:
-
-```powershell
+# Atau menggunakan production launcher
 python run.py
 ```
 
-`main.py` melakukan langkah berikut:
+`main.py` mengeksekusi tahapan inisialisasi:
+1. Memanggil `st.set_page_config()` pada baris pertama (judul, favicon, layout wide).
+2. Menginjeksikan *glassmorphic custom CSS* dari `ui_components.py`.
+3. Menginisialisasi session state bawaan (`page="home"`, `is_processing=False`, dll).
+4. Merender **Glassmorphic Top Navbar**:
+   - Menampilkan *Live Telemetry Pills*: Baris & Fitur Data Terproses, Status Model Terlatih, Akselerasi Akses (CPU / CUDA GPU), dan Status Agentic Copilot.
+   - Menampilkan **5-Stage Visual Breadcrumb Tracker**:
+     `1. Unggah Data` ➔ `2. Praproses & Fitur` ➔ `3. Pelatihan` ➔ `4. Evaluasi` ➔ `5. Deteksi`.
+5. Merender `ui/sidebar.py` (Progress Kesiapan 0%–100%, Spesifikasi Dataset, Switch Dataset).
+6. Melakukan *safe routing* ke modul halaman aktif dengan *page-level try-except error boundary*.
 
-1. Mengimpor Streamlit dan konfigurasi dasar.
-2. Menetapkan `st.set_page_config()` satu kali sebelum command UI lain.
-3. Mengaktifkan custom CSS dari `ui_components.py`.
-4. Mengimpor sidebar dan semua page module.
-5. Menginisialisasi state default.
-6. Menjalankan `render_sidebar()`.
-7. Memilih page berdasarkan `st.session_state["page"]`.
-8. Menangkap exception pada page-level dan menyediakan navigasi kembali ke home.
-
-### 3.2 State awal
-
-State yang dibuat oleh `main()`:
-
-- `page = "home"`
-- `is_processing = False`
-- `processing_message = ""`
-- `page_before_processing = None`
-
-Nilai page yang valid didefinisikan oleh `state_manager.VALID_PAGES`:
-
-- `home`
-- `collect`
-- `train`
-- `evaluate`
-- `detect`
-- `status`
-
-Perubahan halaman menggunakan `state_manager.navigate_to_page()`. Fungsi ini memvalidasi nama page dan memanggil `st.rerun()` hanya bila page berubah.
-
-## 4. Halaman dan Fungsi Fitur
-
-### 4.1 Home
-
-File: `ui/pages/home.py`
-
-Fungsi utama:
-
-- menampilkan ringkasan ASTINA;
-- menampilkan shortcut menuju pengumpulan data, training, evaluasi, dan deteksi;
-- memberikan konteks status sistem kepada pengguna.
-
-### 4.2 Data Collection
-
-File: `ui/pages/data_collection.py`
-
-Fungsi utama: `show_data_collection_page()`.
-
-Fungsi yang dijalankan:
-
-1. Menampilkan `st.file_uploader()`.
-2. Menerima CSV, XLSX, XLS, dan Parquet.
-3. Memeriksa quota dengan `check_upload_quota()`.
-4. Membaca informasi file melalui `get_file_info()`.
-5. Menampilkan ukuran file, kategori, dan rekomendasi chunk.
-6. Memanggil `load_and_validate_raw_data()`.
-7. Menampilkan hasil validasi.
-8. Menampilkan EDA dan sample data.
-9. Menyediakan pilihan preprocessing.
-10. Menjalankan preprocessing saat tombol `Proses Data` ditekan.
-11. Menyimpan output ke Parquet.
-12. Mengisi state downstream untuk training.
-13. Menulis audit trail dan metrics.
-
-Fungsi cached:
-
-```python
-load_and_validate_raw_data(uploaded_file)
-```
-
-Fungsi ini mengembalikan:
+### 3.2 Daftar Halaman Aplikasi
 
 ```text
-DataFrame, memory_info, is_valid, validation_results
+[Home] ──> [Data Collection] ──> [Training] ──> [Evaluation] ──> [Detection] ──> [Status]
 ```
 
-Opsi preprocessing yang tersedia:
+1. `home`: Dashboard ikhtisar sistem, status ringkas, dan shortcut alur kerja.
+2. `collect`: Upload dataset, validasi skema 14 kolom, EDA, preprocessing, dan seleksi fitur interaktif.
+3. `train`: Split data, Smart Training Profiles, estimasi beban komputasi, training ensemble ML & GNN.
+4. `evaluate`: Evaluasi performa test set, Confusion Matrix, ROC/PR Curves, SHAP/LIME, dan analisis GNN.
+5. `detect`: Deteksi batch klaim baru, eksekusi 9 aturan bisnis, tabel review fraud, XAI, dan AI Copilot.
+6. `status`: Telemetri beban perangkat, pemantauan cache, log sistem, dan verifikasi Cryptographic Audit Trail.
 
-- optimasi file besar;
-- deteksi outlier;
-- validasi data;
-- penghapusan duplikasi;
-- subset kolom untuk pengecekan duplikasi.
+---
 
-### 4.3 Training
+## 4. Rincian Modul Halaman
 
-File: `ui/pages/training.py`
+### 4.1 Home (`ui/pages/home.py`)
+- Menampilkan kartu metrik arsitektur *Hybrid AI*.
+- Menampilkan ringkasan status kesiapan pipeline data dan model aktif.
+- Menyediakan tombol aksi cepat menuju modul *Data Collection* atau *Detection*.
 
-Fungsi utama:
+### 4.2 Data Collection & Preprocessing (`ui/pages/data_collection.py`)
+- **File Uploader Multi-Format**: Menerima `.csv`, `.xlsx`, `.xls`, dan `.parquet` hingga batas 3 GiB.
+- **Validasi Kuota & Ukuran**: Memeriksa kuota harian dan alokasi memori melalui `rate_limit.py`.
+- **Schema Readiness Card**: Evaluasi otomatis ketersediaan 14 kolom inti (100% Lengkap, 70–99% Parsial, <70% Ditolak).
+- **Exploratory Data Analysis (EDA)**: Distribusi nilai numerik, visualisasi *missing value*, dan analisis korelasi awal.
+- **Opsi Preprocessing Terpadu**:
+  - Deteksi dan capping outlier berbasis IQR.
+  - Ekstraksi fitur tanggal (*day_of_week*, *month*, *quarter*).
+  - Pembentukan rasio domain asuransi (*payment_ratio*, *allowance_ratio*, *zscore*, *high_amount_quick_submit*).
+  - Pilihan strategi encoding kategori (*Target Encoding*, *Frequency Encoding*, *One-Hot Encoding*).
+- **Modul Seleksi Fitur Cerdas (Interactive Feature Selection UI)**:
+  - **Metode Seleksi**:
+    - *SelectKBest (ANOVA F-Score)*: Memilih $K$ fitur dengan variansi antar-kelas tertinggi.
+    - *SelectKBest (Mutual Information)*: Mengukur ketergantungan non-linear antara fitur dan target/pseudo-label.
+    - *Tree-based Feature Importance*: Memanfaatkan *Random Forest*, *ExtraTrees*, atau *LightGBM* dengan *pseudo-labeling* otomatis untuk mengukur kontribusi fitur secara non-linear.
+  - **Filter Redundansi Cerdas**:
+    - *Filter Multikolinearitas Terbobot Skor*: Mendeteksi pasangan fitur dengan korelasi Pearson $r > 0.90$ dan secara otomatis mempertahankan fitur dengan skor kepentingan lebih tinggi.
+    - *Filter Low-Variance Skala Invarian*: Menghapus fitur konstan atau mendekati konstan dengan menghitung variansi pada data ternormalisasi $[0, 1]$, melindungi fitur rasio berskala kecil agar tidak terhapus keliru.
+  - **Reduksi Dimensi PCA**:
+    - Mereduksi dimensi fitur numerik dengan slider persentase *explained variance ratio* ($80\% - 99\%$) disertai grafik akumulasi varians interaktif.
+- **Simpan & Downstream State**: Menulis DataFrame hasil ke file Parquet terkompresi Zstandard dan memperbarui `state_manager.py`.
 
-- memuat processed dataset;
-- menentukan mode supervised atau unsupervised;
-- memilih fitur;
-- membagi train/test;
-- memilih algoritma;
-- membangun graph untuk GNN;
-- menjalankan training asynchronous;
-- menyimpan checkpoint dan model registry;
-- menampilkan visualisasi graph dan kurva training.
+### 4.3 Training Model (`ui/pages/training.py`)
+- **Data Splitting**: Pembagian data latih (*train*) dan data uji (*test*) dengan metode *Stratified Split* (mempertahankan proporsi label fraud) atau *Random Split*.
+- **Smart Training Profiles & Complexity Estimator**:
+  - ⚡ **Mode Cepat (*Tabular Fast*)**: Isolation Forest (50 tree) + XGBoost, tanpa Autoencoder/GNN/Optuna (~10–30 dtk). Sangat efisien untuk CPU lokal dan serverless Cloud Run.
+  - ⚖️ **Mode Seimbang (*Balanced*)**: Isolation Forest + PyTorch Autoencoder (20 epoch) + XGBoost (~1–2 mnt).
+  - 🧠 **Mode Lengkap (*Deep Graph Ensemble*)**: Seluruh model ensemble, topologi graf GNN, serta optimasi bobot Optuna FPR Minimizer.
+  - 🛠️ **Mode Kustom**: Kebebasan memilih algoritma, parameter epoch, learning rate, sampling neighbor, dan bobot ensemble.
+- **Hardware-Aware Telemetry**: Monitor beban komputasi *real-time* yang mendeteksi ketersediaan GPU NVIDIA CUDA dan memberikan rekomendasi hardware (*Badge*: 🟢 Ringan, 🟡 Sedang, 🔴 Berat).
+- **Asynchronous Training Worker**: Pelatihan berjalan di background thread dengan penulisan progres ke `cache/training_status.json`, mencegah UI Streamlit mengalami *freezing*.
+- **Visualisasi Topologi Graf**: Menampilkan visualisasi interaktif NetworkX + Plotly untuk relasi rujukan antar faskes, dokter, dan pasien.
 
-### 4.4 Evaluation
+### 4.4 Evaluation & Explainability (`ui/pages/evaluation.py`)
+- **Metrik Klasifikasi Supervised**: Evaluasi Accuracy, Precision, Recall, F1-Score, ROC-AUC, PR-AUC, dan Brier Score.
+- **Visualisasi Diagnostik**: Interactive Confusion Matrix heatmap, ROC Curve, dan Precision-Recall Curve.
+- **Explainable AI (XAI)**:
+  - *Global Feature Importance*: SHAP Summary Beeswarm Plot dan Bar Plot atribut signifikansi global.
+  - *Local Instance Explanation*: LIME Waterfall Plot dan Force Plot untuk membedah alasan individual suatu klaim ditandai anomali.
+- **GNN Relational Contribution**: Analisis kontribusi koneksi graf terhadap probabilitas anomali klaim.
 
-File: `ui/pages/evaluation.py`
+### 4.5 Detection & AI Copilot (`ui/pages/detection.py`)
+- **Batch Detection Engine**: Input dataset klaim baru (CSV/XLSX/Parquet) untuk diinspeksi secara serentak.
+- **Smart Feature Alignment**: Otomatis menyelaraskan kolom klaim baru dengan skema fitur model latih, mengimputasi fitur yang hilang menggunakan median data latih (`training_stats`).
+- **9 Business Rules Execution**: Menjalankan 9 modul audit aturan medis secara global untuk mendeteksi pelanggaran deterministik.
+- **Tabel Review Fraud Interaktif**: Menampilkan daftar klaim dengan pengurutan tingkat keparahan (*High Risk*, *Medium Risk*, *Low Risk*), ringkasan bukti pelanggaran, dan opsi ekspor CSV/Excel/JSON.
+- **Agentic AI Copilot & Knowledge RAG**:
+  - Panel obrolan cerdas berbasis LLM yang terintegrasi dengan vector store FAISS.
+  - Menjawab pertanyaan investigator terkait regulasi medis, standar kode ICD-10 / CPT, dan rekomendasi investigasi klinis.
 
-Fungsi utama:
+### 4.6 System Status & Audit (`ui/pages/status.py`)
+- Memonitor utilisasi CPU, RAM, Disk, dan GPU *real-time*.
+- Menyediakan statistik ukuran cache Parquet dan tombol *clear cache*.
+- Menampilkan ringkasan rantai log *Cryptographic Audit Trail* dan memvalidasi keutuhan hash SHA-256.
 
-- memuat detector tersimpan;
-- memuat `test_df`;
-- menyelaraskan fitur evaluasi dengan schema training;
-- menjalankan `predict_anomaly_probability()`;
-- menghitung metrik supervised;
-- menampilkan confusion matrix dan ROC/PR metrics;
-- menampilkan feature importance melalui SHAP/LIME;
-- menampilkan analisis kontribusi GNN dan monitoring.
+---
 
-### 4.5 Detection
+## 5. Spesifikasi 14 Kolom Inti & Evaluasi Kesiapan Skema
 
-File: `ui/pages/detection.py`
+Dataset klaim memerlukan 14 kolom standar berikut untuk memastikan seluruh modul AI dan aturan bisnis berfungsi optimal:
 
-Fungsi utama:
+| No | Nama Kolom | Tipe Data | Contoh Nilai | Modul yang Bergantung |
+| :---: | :--- | :--- | :--- | :--- |
+| 1 | `claim_id` | String/Int | `CLM-01001` | Audit Trail, Duplicate Payment, ID Pelacak |
+| 2 | `patient_id` | String/Int | `PAT-00201` | Repeat Billing, Fuzzy Matching, Topologi Graf GNN |
+| 3 | `provider_id` | String/Int | `PROV-00011` | Provider Capacity, Topologi Graf GNN |
+| 4 | `service_code` | String | `99213` | Phantom Service, Upcoding & Unbundling |
+| 5 | `diagnosis_code` | String | `J06.9`, `E11.9` | Phantom Service, Topologi Graf GNN |
+| 6 | `billing_date` | Date | `2024-01-15` | Repeat Billing, High Amount Quick Submit |
+| 7 | `service_date` | Date | `2024-01-10` | Provider Capacity, Length of Stay |
+| 8 | `billed_amount` | Float | `15000000.0` | ML Ensemble, payment_ratio, allowance_ratio |
+| 9 | `paid_amount` | Float | `12000000.0` | payment_ratio, Inflated Bill & Cloning |
+| 10 | `allowed_amount` | Float | `13500000.0` | allowance_ratio |
+| 11 | `claim_status` | String | `APPROVED` | Duplicate Payment & Claim Status Validator |
+| 12 | `patient_age` | Integer | `45` | Feature Engineering: age_group, age_squared |
+| 13 | `length_of_stay` | Integer | `3` (0 rawat jalan)| Length of Stay & Readmission Rules |
+| 14 | `quantity` | Integer | `10` | Medication & Device Fraud Rules |
 
-- mengimpor model ZIP;
-- menerima data deteksi baru dari CSV atau form manual;
-- menjalankan preprocessing yang konsisten dengan training;
-- melakukan feature alignment;
-- menghitung anomaly probability;
-- menjalankan business rules;
-- menggabungkan skor model dan business risk;
-- menampilkan daftar klaim berisiko;
-- menyediakan export dan detail investigasi.
+---
 
-### 4.6 Status
+## 6. Preprocessing & Seleksi Fitur Cerdas
 
-File: `ui/pages/status.py`.
-
-Page ini meneruskan tampilan ke `system_status.show_system_status_page()`, yang menampilkan kesehatan aplikasi, perangkat, model, cache, dan operasi terakhir.
-
-## 5. Alur Upload dan Validasi
-
-### 5.1 Urutan upload
+### 6.1 Alur Preprocessing Standar
 
 ```text
-File browser
-  -> Streamlit uploader
-  -> check_upload_quota
-  -> check_file_size
-  -> copy ke temporary file
-  -> baca berdasarkan tipe file
-  -> optimasi dtype
-  -> sanitasi string/kolom
-  -> comprehensive_validation
-  -> EDA
-  -> simpan metadata upload
+Input Raw DataFrame
+  │
+  ├── 1. Injeksi _astina_row_id stabil
+  ├── 2. Sanitasi Tipe Data & Missing Handling (Imputasi Median / Mode)
+  ├── 3. Validasi Range & Outlier Capping (IQR Method)
+  ├── 4. Ekstraksi Fitur Temporal Tanggal
+  ├── 5. Domain Feature Engineering (payment_ratio, allowance_ratio, zscore, dll)
+  ├── 6. Categorical Encoding (Target / Frequency / One-Hot)
+  ├── 7. Seleksi Fitur Multivariat & Filter Redundansi
+  └── 8. Output Processed DataFrame + Schema Metadata
 ```
 
-Konfigurasi utama di `config.py`:
+### 6.2 Logika Seleksi Fitur Terintegrasi
 
-- `MAX_FILE_SIZE = 3 GiB`;
-- `CHUNK_SIZE = 50 MiB` untuk konfigurasi umum;
-- `LARGE_DATASET_CONFIG["chunk_size"] = 50_000` baris;
-- caching data upload maksimum satu entry pada page collection.
+1. **SelectKBest ANOVA F-Score (`apply_select_k_best`)**:
+   Menghitung rasio variansi antar-grup terhadap variansi dalam-grup:
+   $$F = \frac{\text{MS}_{\text{between}}}{\text{MS}_{\text{within}}}$$
+   Fitur dengan nilai $F$ tertinggi dipilih sebanyak $K$.
 
-### 5.2 Quota
+2. **SelectKBest Mutual Information (`apply_select_k_best`)**:
+   Menghitung *information gain* non-linear antara fitur $X$ dan target $Y$:
+   $$I(X; Y) = \sum_{x \in X} \sum_{y \in Y} p(x, y) \log \left( \frac{p(x, y)}{p(x)p(y)} \right)$$
 
-Modul `rate_limit.py` menangani:
+3. **Tree-Based Feature Importance (`apply_tree_based_selection`)**:
+   Melatih model pohon keputusan (*Random Forest* / *ExtraTrees* / *LightGBM*) menggunakan *pseudo-label* anomali jika dataset bersifat unsupervised, kemudian mengambil fitur teratas berdasarkan *Gini Importance* atau *Split Gain*.
 
-- quota upload harian;
-- quota training harian;
-- quota inference per menit;
-- concurrent operations;
-- histori request.
+4. **Filter Multikolinearitas Terbobot Skor (`filter_correlated_features`)**:
+   Menghitung matriks korelasi absolut $|r_{ij}|$. Jika $|r_{ij}| > \text{threshold}$ (default $0.90$), sistem membandingkan skor kepentingan fitur $i$ dan $j$, lalu secara cerdas hanya mengeliminasi fitur dengan skor yang lebih rendah:
+   $$\text{Drop } X_j \iff |r_{ij}| > 0.90 \land \text{Score}(X_i) \ge \text{Score}(X_j)$$
 
-Quota disimpan in-process. Karena itu, quota belum bersifat global bila terdapat beberapa worker atau beberapa instance Cloud Run.
+5. **Filter Low-Variance Skala Invarian (`filter_low_variance_features`)**:
+   Menghitung variansi ternormalisasi pada rentang $[0, 1]$:
+   $$\text{Var}_{\text{norm}}(X) = \frac{\text{Var}(X)}{(\max(X) - \min(X))^2}$$
+   Mencegah terhapusnya fitur rasio bernilai kecil ($0.00 - 1.00$) yang memiliki informasi anomali penting.
 
-### 5.3 Validasi
+6. **Reduksi Dimensi PCA (`apply_pca_reduction`)**:
+   Melakukan dekomposisi nilai singular (*SVD*) pada matriks kovarians terstandarisasi untuk menghasilkan komponen ortogonal baru yang mencakup varians kumulatif yang ditargetkan (misalnya $95\%$).
 
-Komponen validasi:
+---
 
-- `DataSanitizer.sanitize_dataframe()`;
-- `DataValidator.check_basic_integrity()`;
-- `DataValidator.check_column_types()`;
-- `DataValidator.check_data_ranges()`;
-- `DataValidator.validate_for_ml()`;
-- `comprehensive_validation()`.
+## 7. Model AI Ensemble & Graph Neural Network
 
-Sanitasi meliputi:
+### 7.1 Combined Anomaly Detector
 
-- normalisasi nama kolom ke lowercase dan underscore;
-- penghapusan null byte;
-- pembersihan control character;
-- pemeriksaan dataset kosong;
-- deteksi kolom konstan;
-- pengukuran missing value;
-- validasi tipe numerik, kategori, dan tanggal.
+Model ensemble menggabungkan berbagai paradigma machine learning:
 
-Hasil validasi membedakan error fatal dan warning. Data yang tidak valid dihentikan sebelum preprocessing.
+1. **Isolation Forest**: Memisahkan anomali melalui pemotongan acak pohon partisi (*isolation depth*).
+2. **PyTorch Deep Autoencoder**: Arsitektur neural network *encoder-bottleneck-decoder* non-linear yang mengukur anomali dari *Reconstruction Loss*:
+   $$\mathcal{L}_{\text{recon}} = \frac{1}{d} \sum_{k=1}^d (x_k - \hat{x}_k)^2$$
+3. **XGBoost / LightGBM**: *Gradient Boosted Decision Trees* yang memprediksi probabilitas anomali berdasarkan fitur terstruktur non-linear.
+4. **DBSCAN / HDBSCAN**: *Density-based spatial clustering* untuk mendeteksi *noise points* terisolasi.
 
-## 6. File Ingestion dan Storage
+### 7.2 Graph Neural Network (GATConv)
 
-Sebelum rule dan model dijalankan, pipeline mempertahankan stable `_astina_row_id` untuk setiap klaim. ID ini menjadi kunci internal untuk mapping score, flag, node GNN, hasil evaluasi, dan export. Mapping tidak bergantung pada posisi baris setelah sorting, sampling, reset index, atau penggabungan data.
+`InsuranceAnomalyGNNModel` memodelkan relasi transaksi klaim sebagai graf:
+- **Node**: Representasi setiap klaim dengan fitur terstandarisasi.
+- **Edges**: Hubungan klaim yang berbagi faskes, dokter, pasien, atau diagnosis sama.
+- **Arsitektur**: Menggunakan `GATConv` (*Graph Attention Network*) dengan multi-head attention:
+  $$\alpha_{ij} = \frac{\exp\left(\text{LeakyReLU}\left(\mathbf{a}^\top [\mathbf{W}\mathbf{h}_i \,\|\, \mathbf{W}\mathbf{h}_j]\right)\right)}{\sum_{k \in \mathcal{N}_i} \exp\left(\text{LeakyReLU}\left(\mathbf{a}^\top [\mathbf{W}\mathbf{h}_i \,\|\, \mathbf{W}\mathbf{h}_k]\right)\right)}$$
+- **Mini-Batch NeighborLoader**: Mendukung *neighborhood sampling* bertingkat untuk menangani graf besar berskala ratusan ribu transaksi tanpa kehabisan memori GPU/RAM.
 
-### 6.1 Temporary upload
+---
 
-`read_file_with_optimization()` menyalin object upload ke temporary file menggunakan buffer 8 MiB. Ini mencegah proses penyalinan upload membuat salinan bytes besar secara eksplisit di memory aplikasi.
+## 8. Agregasi Risiko Hybrid & 9 Modul Aturan Bisnis
 
-### 6.2 CSV
+### 8.1 9 Modul Business Rules
 
-`read_large_csv()` menentukan ukuran chunk berdasarkan ukuran file. Untuk CSV besar, fungsi:
+1. **Repeat Billing**: Mendeteksi pengajuan ulang klaim pasien yang sama untuk tindakan serupa dalam rentang $\le 30$ hari.
+2. **Phantom Service**: Mendeteksi layanan fiktif, tanggal tindakan tidak valid, atau tindakan medis yang tercatat di luar tanggal rawat inap.
+3. **Provider Capacity**: Mengidentifikasi volume layanan dokter/faskes yang melebihi kapasitas fisiologis maksimal per hari kalender.
+4. **Claim Status & Duplicate Payment**: Mendeteksi duplikasi pencairan klaim yang telah berstatus `PAID` atau disetujui sebelumnya.
+5. **Upcoding & Unbundling**: Mendeteksi manipulasi penetapan kode tarif lebih tinggi dan pemecahan tindakan terpadu menjadi tagihan parsial terpisah.
+6. **Inflated Bill & Cloning**: Mengidentifikasi tagihan ekstrem di atas ambang batas benchmark medis dan rekam medis hasil duplikasi (*cloned charts*).
+7. **Length of Stay & Readmission**: Evaluasi lama hari rawat inap yang melampaui batas wajar klinis (*LOS outlier*) serta readmisi pasien dalam waktu singkat.
+8. **Medication & Device Fraud**: Mengaudit kuantitas obat berlebih, dosis di luar batas rasional, dan markup harga alat kesehatan tak wajar.
+9. **Fuzzy Claim Matching**: Pencocokan kemiripan leksikal klaim non-identik berbasis algoritma Levenshtein/Jaro-Winkler.
 
-1. memanggil `stream_csv_to_parquet()`;
-2. membaca CSV dengan `pd.read_csv(..., chunksize=...)`;
-3. mengoptimalkan dtype setiap batch;
-4. menulis batch melalui `pyarrow.parquet.ParquetWriter`;
-5. menutup writer secara aman;
-6. memuat hasil Parquet menjadi satu DataFrame untuk kompatibilitas workflow lama;
-7. menghapus temporary Parquet.
+### 8.2 Formula Agregasi Skor Risiko
 
-Perbaikan ini menghilangkan pola lama berupa menyimpan semua chunk dalam list kemudian menjalankan `pd.concat()` untuk ingestion CSV besar.
+$$\text{Business Risk Score} = 0.40(R_{\text{repeat}}) + 0.20(R_{\text{phantom}}) + 0.15(R_{\text{capacity}}) + 0.15(R_{\text{fuzzy}}) + 0.10(R_{\text{additional}})$$
 
-### 6.3 Parquet
+$$\text{Final Risk Score} = 0.50(\text{Business Risk Score}) + 0.30(\text{ML Anomaly Score}) + 0.20(\text{Duplicate Payment Flag})$$
 
-Parquet dibaca melalui Polars pada `read_with_polars()`, lalu dikonversi ke pandas. Bila Polars gagal, digunakan `pd.read_parquet()`.
+### 8.3 Klasifikasi Tingkat Keparahan (Severity Classification)
 
-### 6.4 Excel dan JSON
+- 🟢 **Low Risk**: $\text{Final Risk Score} < 0.40$
+- 🟡 **Medium Risk**: $0.40 \le \text{Final Risk Score} < 0.65$
+- 🔴 **High Risk**: $\text{Final Risk Score} \ge 0.65$
 
-- Excel menggunakan `pd.read_excel()` dan cocok untuk file kecil/menengah.
-- JSON menggunakan `pd.read_json()`.
-- Excel tidak direkomendasikan untuk file mendekati 3 GiB karena format tersebut tidak efisien untuk streaming tabular.
+---
 
-### 6.5 Processed storage
+## 9. Agentic AI Copilot & Knowledge RAG
 
-`save_processed_data()`:
+Modul `agentic_copilot.py` dan `rag_engine.py` bertindak sebagai asisten cerdas bagi investigator:
 
-- memperbaiki kompatibilitas Arrow;
-- membuat salinan DataFrame untuk serialisasi;
-- menyimpan Parquet ke `TEMP_DATA_DIR`;
-- mengembalikan path file hasil.
+1. **Knowledge Indexing (FAISS)**:
+   - Menyimpan vektor *embedding* dari standar ICD-10, kode CPT, regulasi BPJS/asuransi komersial, dan pedoman fraud medis.
+   - Menggunakan pencarian semantik hibrida (vektor FAISS + BM25 keyword match).
+2. **Multi-Provider LLM Integration**:
+   - Dukungan utama untuk **Google Gemini API** (`GEMINI_API_KEY`).
+   - Fallback otomatis ke **OpenAI API** (`OPENAI_API_KEY`).
+   - Fallback deterministik berbasis *Rule & Heuristic Medical Expert Engine* jika tidak ada koneksi internet / API key.
+3. **Structured Investigative Reasoning**:
+   - Menjelaskan temuan anomali data secara klinis dan finansial.
+   - Memberikan rekomendasi langkah audit forensik (misal: verifikasi berkas rekam medis fisik, konfirmasi langsung ke pasien, audit log faskes).
 
-`load_processed_data()` dapat mengembalikan metadata lazy untuk file besar, tetapi beberapa caller lama masih memuat full DataFrame saat data dibutuhkan.
+---
 
-## 7. Preprocessing dan Feature Engineering
+## 10. Cryptographic Audit Trail & Privasi Data (PII)
 
-Fungsi utama: `preprocess_insurance_claims_optimized()` di `preprocessing_optimized.py`.
+### 10.1 Chained Hash Audit Logging
 
-### 7.1 Urutan standard
-
-1. `enhanced_missing_handling()`.
-2. Validasi range.
-3. Deteksi dan penanganan outlier.
-4. Deteksi kolom tanggal.
-5. Encoding kategori.
-6. Seleksi fitur awal.
-7. Feature engineering numerik.
-8. Filtering fitur final.
-9. Imputasi nilai akhir.
-10. Penyusunan metadata preprocessing.
-
-### 7.2 Missing value
-
-`enhanced_missing_handling()`:
-
-- membuat flag `<feature>_missing`;
-- menghapus kolom dengan missing rate di atas 50 persen;
-- mengisi numerik dengan median;
-- mengisi kategori dengan mode atau `Unknown`.
-
-### 7.3 Range dan outlier
-
-Validasi range memproses pola nama kolom:
-
-- umur dibatasi 0 sampai 120;
-- amount, cost, price, dan fee negatif diubah menjadi absolut;
-- percentage, rate, dan ratio dinormalisasi atau di-clip;
-- count dan quantity negatif diubah menjadi absolut.
-
-Deteksi outlier menggunakan IQR. Aksi default adalah `cap`, bukan menghapus baris.
-
-### 7.4 Tanggal
-
-Kolom yang memiliki nama `date`, `time`, `created`, atau `submitted` dapat menghasilkan:
-
-- day of week;
-- month;
-- year;
-- day;
-- quarter.
-
-### 7.5 Encoding kategori
-
-Strategi dipilih berdasarkan cardinality:
-
-- cardinality sampai 5: one-hot encoding;
-- cardinality sampai 20: factor/label dan frequency encoding;
-- cardinality tinggi: frequency-binned atau frequency encoding;
-- kolom yang menyerupai ID dapat dilewati agar tidak menjadi leakage/noise.
-
-### 7.6 Feature engineering
-
-Fitur yang dapat dibuat mencakup:
-
-- rasio amount antar kolom;
-- `payment_ratio`;
-- `allowance_ratio`;
-- age group;
-- age squared;
-- count log dan count high;
-- time late dan time quick;
-- `high_amount_quick_submit`;
-- z-score;
-- percentile rank;
-- interaksi sampai lima fitur numerik utama.
-
-### 7.7 Dataset besar
-
-Jika `enable_large_file_handling=True` dan jumlah baris melewati threshold, preprocessing didelegasikan ke `preprocess_large_dataset()`:
-
-- chunk default 50.000 baris;
-- pemrosesan maksimal dua worker;
-- backend Joblib saat ini `threading`;
-- penyamaan schema hasil chunk;
-- merge hasil processed chunk;
-- pembersihan fitur ID, missing tinggi, dan variance rendah.
-
-Batas aktual: UI masih menyediakan DataFrame penuh kepada pipeline sebelum pemrosesan chunk. Karena itu, dukungan 3 GiB belum sepenuhnya bounded-memory end-to-end.
-
-Untuk fraud rules, evaluasi dilakukan terhadap dataset global sebelum hasil akhir dikembalikan. Parameter `chunk_size` tidak boleh mengubah pasangan atau group lintas batas chunk. Stable `_astina_row_id` dipertahankan agar hasil rule tetap terkait dengan klaim asal.
-
-## 8. State Management dan Cache
-
-### 8.1 Dataset state
-
-Kunci state yang digunakan:
-
-- `df_processed_path`;
-- `feature_columns`;
-- `preprocessing_metadata`;
-- `processed_data_hash`;
-- `train_df`;
-- `test_df`;
-- `selected_features`;
-- `feature_selection_method`;
-- `original_feature_count`;
-- `final_feature_count`.
-
-### 8.2 Training state
-
-- `current_training_detector`;
-- `current_training_features`;
-- `current_training_mode`;
-- `current_training_label_column`;
-- `training_in_progress`;
-- `detector`;
-- `model_trained`;
-- `training_features`;
-- `training_mode`;
-- `training_label_column`.
-
-### 8.3 Evaluation dan detection state
-
-- `X_eval_test`;
-- `eval_result_df`;
-- `eval_predictions`;
-- `eval_probabilities`;
-- `eval_y_true`;
-- `individual_probs`;
-- `detection_results`;
-- `detection_threshold`;
-- `risk_summary`;
-- `uploaded_data`;
-- `last_drift_detected`;
-- `drift_detector`.
-
-### 8.4 Cache
-
-`cache_manager.py` menyediakan:
-
-- `get_file_hash()`;
-- `save_to_cache()`;
-- `load_from_cache()`;
-- `get_cache_path()`;
-- `clear_old_cache()`;
-- `smart_cache_eviction()`.
-
-Cache menyimpan Parquet dan metadata JSON. Untuk production multi-instance, cache local filesystem tidak cukup sebagai sumber kebenaran tunggal.
-
-## 9. Training Model
-
-### 9.1 Persiapan data
-
-`split_processed_dataset()`:
-
-1. memvalidasi dataset tidak kosong;
-2. mensyaratkan minimal 10 baris;
-3. mencari kandidat kolom `fraud`, `label`, `target`, atau `class`;
-4. memakai stratified split bila label biner tersedia;
-5. fallback ke random split bila stratifikasi gagal;
-6. memastikan train dan test tidak kosong.
-
-### 9.2 Mode training
-
-Mode unsupervised dapat menggunakan:
-
-- Isolation Forest;
-- Autoencoder;
-- DBSCAN/HDBSCAN;
-- GNN.
-
-Mode supervised dapat menggunakan:
-
-- XGBoost;
-- LightGBM;
-- Random Forest;
-- SVM.
-
-Fitur tambahan training:
-
-- Optuna hyperparameter tuning;
-- Stratified K-Fold cross-validation;
-- konfigurasi imbalance/SMOTE;
-- dynamic model weights;
-- early stopping;
-- cancellation event;
-- checkpoint periodik.
-
-### 9.3 CombinedAnomalyDetector
-
-Class utama: `CombinedAnomalyDetector` di `model.py`.
-
-`fit()` melakukan:
-
-1. imputasi melalui `SimpleImputer`;
-2. standardisasi melalui `StandardScaler`;
-3. pelatihan model yang dipilih;
-4. pembuatan pseudo-label bila diperlukan;
-5. pelatihan GNN bila graph tersedia;
-6. penyimpanan metadata feature schema;
-7. pembaruan bobot ensemble.
-
-Model yang didukung:
-
-- `IsolationForest`;
-- `ClaimAnomalyAutoencoder`;
-- `ClaimAnomalyXGBoostModel`;
-- DBSCAN/HDBSCAN;
-- `InsuranceAnomalyGNNModel`.
-
-Default bobot awal:
-
-- Isolation Forest: 0.30;
-- Autoencoder: 0.20;
-- XGBoost: 0.40;
-- GNN: 0.10;
-- DBSCAN: 0.00.
-
-Probabilitas individual dinormalisasi, lalu digabung menjadi overall anomaly probability pada rentang 0 sampai 1.
-
-### 9.4 Training asynchronous
-
-UI training menjalankan background thread dan menulis status ke `cache/training_status.json`.
-
-Status mencakup:
-
-- `status`;
-- `progress`;
-- `message`.
-
-Setelah selesai:
-
-1. detector disimpan ke session state;
-2. model dan scaler disimpan ke disk;
-3. metadata ditulis ke model registry;
-4. artefak opsional dimirror ke GCS;
-5. UI melakukan rerun untuk menampilkan hasil.
-
-Catatan production: file status tunggal dan state in-process belum aman untuk banyak user atau banyak instance sekaligus. Gunakan job ID dan database/queue untuk deployment multi-user.
-
-## 10. Graph Construction dan GNN
-
-### 10.1 Graph builder
-
-Dispatcher: `create_claim_graph()`.
-
-Metode:
-
-- `star`: hubungan shared provider, patient, diagnosis;
-- `knn`: nearest neighbors pada feature matrix;
-- `heterogeneous`: edge relation provider/patient/diagnosis;
-- similarity: cosine similarity atau fallback chain graph.
-
-Fungsi terkait:
-
-- `create_knn_graph()` memakai FAISS bila tersedia dan fallback ke `NearestNeighbors`;
-- `create_heterogeneous_graph()` menambahkan edge type;
-- `create_similarity_graph()` memberi threshold dan edge budget;
-- graph star menghubungkan anggota group ke center node.
-
-Batas default:
-
-- `max_nodes = 20_000`;
-- `max_edges = 200_000`.
-
-Batas ini mencegah ledakan graph, tetapi berarti graph training bukan representasi seluruh dataset bila jumlah node melewati batas.
-
-### 10.2 GNN model
-
-`InsuranceAnomalyGNNModel` memakai GATConv dan menghasilkan prediksi node-level.
-
-`_train_gnn()` menyediakan:
-
-- class-weighted CrossEntropyLoss;
-- AdamW;
-- CosineAnnealingLR;
-- train/validation split;
-- validation F1, precision, recall;
-- early stopping;
-- checkpoint;
-- optional DevNet-style soft labels.
-
-`_train_gnn_sampled()` menyediakan:
-
-- `NeighborLoader`;
-- mini-batch subgraph;
-- loss hanya pada seed nodes;
-- batch validation;
-- configurable neighbors dan batch size;
-- fallback ke full-batch bila backend sampler tidak tersedia.
-
-Konfigurasi yang dapat diberikan melalui `gnn_params`:
-
-- `use_neighbor_sampling`;
-- `sampling_threshold_nodes`;
-- `batch_size`;
-- `num_neighbors`;
-- `num_layers`;
-- `hidden_channels`;
-- `num_heads`;
-- `dropout`.
-
-Default sampling:
-
-- threshold 20.000 node;
-- CPU batch size 512;
-- GPU batch size 2.048;
-- neighbors `[15, 10]`.
-
-### 10.3 Inference GNN
-
-`predict_anomaly_probability()`:
-
-- melakukan full forward untuk graph kecil;
-- memakai adaptive threshold berdasarkan device untuk graph besar;
-- memakai NeighborLoader saat tersedia;
-- mengambil output hanya untuk seed nodes;
-- menggabungkan probabilitas GNN dengan model ensemble lain.
-
-Graph harus tersedia saat evaluasi/detection agar kontribusi GNN tidak menjadi nol. Data baru juga membutuhkan pemetaan node dan edge yang konsisten dengan graph training.
-
-Halaman evaluation dan detection membangun graph dari data yang sudah disejajarkan dengan feature schema, lalu meneruskan `edge_index` ke `predict_anomaly_probability()` ketika detector memiliki model GNN aktif. Untuk graph besar, node tetap mengikuti batas graph yang dikonfigurasi dan node yang tidak masuk graph tidak boleh diberi interpretasi GNN palsu.
-
-## 11. Visualisasi GNN
-
-Visualisasi berada pada `ui/pages/training.py`.
-
-Alurnya:
-
-1. mengambil `edge_index` dari session state;
-2. menentukan jumlah node yang ingin ditampilkan;
-3. membangun NetworkX graph untuk subset node;
-4. menghitung layout;
-5. membangun edge trace Plotly;
-6. membangun node trace Plotly;
-7. mengambil anomaly probability dari `eval_result_df`;
-8. memetakan warna berdasarkan `node_id`;
-9. menampilkan hover text dan anomaly probability.
-
-Perbaikan yang sudah ada:
-
-- jumlah node visualisasi tidak lagi hard-coded sebagai 500;
-- pengguna dapat memilih jumlah node tampilan;
-- edge hanya ditampilkan bila kedua endpoint masuk subset;
-- probability dipetakan berdasarkan `node_id` bila kolom tersebut tersedia.
-- state graph lama dibersihkan sebelum training baru agar visualisasi tidak menampilkan graph dari model sebelumnya;
-- metode graph disimpan dan digunakan kembali pada evaluation/detection;
-- visualisasi menghitung score pada node graph yang sama, memilih node paling anomali, mempertahankan isolated node, dan menggunakan color scale tetap 0 sampai 1;
-- score GNN dibedakan dari score ensemble agar warna graph tidak disalahartikan sebagai probabilitas ensemble.
-- pada graph heterogeneous, edge type dipertahankan sampai renderer dan relasi Provider, Patient, serta Diagnosis ditampilkan dengan warna/legend berbeda.
-- pada training graph heterogeneous, `edge_type` dikonversi menjadi one-hot `edge_attr` untuk `GATConv`, dan `edge_dim` disimpan bersama metadata checkpoint.
-
-Batas operasional:
-
-- NetworkX spring layout mahal untuk graph besar;
-- Plotly SVG tidak cocok untuk jutaan edge;
-- full graph sebaiknya ditampilkan melalui viewport, filter, cluster, atau WebGL;
-- subset visualisasi harus selalu diberi label jumlah node/edge yang ditampilkan dan jumlah graph asli.
-
-## 12. Evaluasi dan Metrik Risiko
-
-### 12.1 Evaluasi model
-
-Evaluasi membuat kolom:
-
-- `anomaly_probability`;
-- `anomaly_prediction`.
-
-Threshold UI default adalah 0.5. Untuk supervised dataset, metrik yang tersedia meliputi:
-
-- accuracy;
-- precision;
-- recall;
-- F1;
-- ROC-AUC;
-- PR-AUC;
-- Brier score;
-- confusion matrix;
-- classification report.
-
-### 12.2 Business risk
-
-Risk pipeline menggunakan `run_integrated_claim_risk_pipeline()` dari `fraud_risk_pipeline.py`.
-
-Kelompok rules:
-
-1. Repeat Billing: `RepeatBillingDetector.detect_repeat_claims()`.
-2. Phantom Service: `PhantomServiceRuleEngine.validate_claims_dataframe()`.
-3. Provider Capacity: `ProviderCapacityValidator.validate_all_providers_batch()`.
-4. Claim Status dan Duplicate Payment: `ClaimStatusValidator.check_duplicate_payment()`.
-5. Upcoding dan Unbundling.
-6. Inflated Bill dan Cloning.
-7. Length of Stay dan Readmission.
-8. Medication dan Device Fraud.
-9. Fuzzy Claim Matching.
-
-Business risk dikombinasikan dengan anomaly score model untuk menghasilkan overall risk dan severity.
-
-Aturan mapping dan agregasi penting:
-
-- provider capacity dipetakan berdasarkan `provider_id` dan tanggal kalender layanan;
-- fuzzy similarity memakai `_astina_row_id`, bukan posisi hasil sorting;
-- duplicate payment mengecualikan `claim_id` saat ini dan hanya status `PAID` yang menjadi duplicate terkonfirmasi;
-- koneksi database yang tidak tersedia dilaporkan sebagai validasi unavailable, bukan diam-diam dianggap tidak ada duplicate;
-- quantity billed lebih besar dari nol dengan quantity delivered nol tetap menjadi kandidat medication/device fraud;
-- provider capacity dan duplicate payment tersedia pada kategori/filter risiko.
-
-### 12.3 Hubungan Rule-Based Detection dengan Hasil Training Model
-
-ASTINA memiliki dua sumber sinyal deteksi yang berbeda tetapi saling melengkapi:
-
-```text
-Data klaim baru
-     │
-     ├── Preprocessing dan feature alignment
-     │       │
-     │       ├── Model hasil training
-     │       │     Isolation Forest / Autoencoder / XGBoost / GNN
-     │       │     -> anomaly_probability dan anomaly_prediction
-     │       │
-     │       └── Rule-based engine
-     │             Repeat Billing / Phantom / Capacity / dan rules lain
-     │             -> *_flag, *_score, reason, status
-     │
-     └── Risk aggregation
-       -> business_risk_score
-       -> final_risk_score
-       -> final_risk_flag dan risk_category
+Setiap aksi kritis dalam sistem (upload dataset, eksekusi preprocessing, training model, inferensi deteksi, ekspor laporan) dicatat ke dalam `logs/audit_trail.jsonl`.
+
+Struktur blok log audit:
+```json
+{
+  "timestamp": "2026-08-27T10:30:00.123456Z",
+  "event_type": "DETECTION_BATCH_COMPLETED",
+  "actor": "investigator_user",
+  "dataset_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "details": {
+    "total_claims": 5000,
+    "high_risk_count": 42
+  },
+  "previous_hash": "a1b2c3d4...",
+  "entry_hash": "9f8e7d6c..."
+}
 ```
 
-#### A. Peran model hasil training
+Rumus rantai hash:
+$$\text{Entry Hash}_k = \text{SHA256}\left(\text{Timestamp}_k \,\|\, \text{Event}_k \,\|\, \text{Details}_k \,\|\, \text{Entry Hash}_{k-1}\right)$$
 
-Model ML belajar pola dari data training yang sudah melalui preprocessing. Hasilnya bersifat probabilistik atau statistik:
+Jika satu karakter log dimanipulasi secara ilegal, verifikasi menggunakan `python verify_audit_trail.py` akan segera mendeteksi kerusakan rantai hash.
 
-- Isolation Forest mencari observasi yang terisolasi dari pola umum;
-- Autoencoder menggunakan reconstruction error untuk mengukur kejanggalan;
-- XGBoost atau model supervised lain mempelajari hubungan fitur dengan label;
-- GNN mempelajari pola node dan hubungan antar klaim melalui `edge_index`.
+### 10.2 Perlindungan Privasi Data Pribadi (PII Masking)
 
-Pada tahap deteksi, data baru harus menggunakan preprocessing dan feature schema yang sama. `CombinedAnomalyDetector.predict_anomaly_probability()` menghasilkan skor setiap model, kemudian menggabungkannya menjadi `anomaly_probability`. Nilai ini merepresentasikan seberapa tidak lazim pola data menurut model yang telah dilatih; nilai tersebut bukan bukti pelanggaran aturan bisnis tertentu.
+Modul `pii_masker.py` melindungi data sensitif sesuai regulasi UU Perlindungan Data Pribadi (UU PDP) dan HIPAA:
+- **NIK / Nomor Pasien**: `317101******0001`
+- **Nama Pasien**: `B**** S*******`
+- **Nomor Rekam Medis**: `RM-***-89`
 
-#### B. Peran rule-based detection
+---
 
-Rule engine tidak dilatih oleh proses ML. Rule ditentukan oleh konfigurasi bisnis, batas operasional, database historis, dan relasi antar klaim. Rule memeriksa kondisi yang dapat dijelaskan secara deterministik, misalnya:
+## 11. Pengujian Kualitas & Quality Gate (53 Test Cases)
 
-- dua klaim pasien/provider/layanan yang terlalu mirip dalam window waktu tertentu;
-- kode layanan tidak valid atau layanan tidak sesuai usia;
-- kapasitas provider pada tanggal layanan terlampaui;
-- klaim serupa sudah memiliki pembayaran `PAID`;
-- jumlah obat yang ditagihkan melebihi jumlah yang dikirim, termasuk delivered nol;
-- pola tagihan, readmission, upcoding, cloning, atau layanan fiktif.
-
-Setiap rule menghasilkan flag, score, dan bila tersedia alasan/evidence. Rule dapat menemukan pelanggaran meskipun anomaly probability model rendah, karena model dan rule menjawab pertanyaan yang berbeda.
-
-#### C. Urutan saat deteksi
-
-1. Data deteksi baru divalidasi dan dinormalisasi.
-2. Fitur disejajarkan dengan fitur training; fitur yang hilang diturunkan atau diisi sesuai kebijakan alignment.
-3. Graph dibangun untuk evaluation/detection bila detector memiliki GNN aktif.
-4. Model hasil training menghasilkan `anomaly_probability`, `anomaly_prediction`, dan skor individual.
-5. `run_integrated_claim_risk_pipeline()` menjalankan business rules pada dataset deteksi secara global.
-6. Hasil rule dipetakan ke klaim menggunakan `_astina_row_id` dan key bisnis seperti provider serta tanggal layanan.
-7. Skor rule digabungkan menjadi `business_risk_score`.
-8. `business_risk_score`, anomaly score ML, dan duplicate payment digabungkan menjadi `final_risk_score`.
-9. Threshold menghasilkan `final_risk_flag`; `risk_category` memilih kategori dominan untuk investigasi.
-10. UI menampilkan score, flag, alasan rule, detail model, dan hasil export.
-
-#### D. Hubungan hasil training dan rule
-
-Hasil training berfungsi sebagai sinyal pola umum dan menjadi salah satu komponen skor akhir. Rule-based detection berfungsi sebagai kontrol bisnis yang dapat menjelaskan dan mengoreksi blind spot model. Hubungannya adalah ensemble dua lapisan, bukan rule yang mengubah bobot internal model secara langsung:
-
-| Kondisi | Interpretasi |
-|---|---|
-| Anomaly ML tinggi, rule rendah | Pola statistik tidak lazim, tetapi belum ada pelanggaran rule yang teridentifikasi. Perlu review berbasis XAI dan konteks klaim. |
-| Anomaly ML rendah, rule tinggi | Klaim mengikuti pola data umum, tetapi melanggar aturan bisnis. Tetap harus masuk antrean investigasi. |
-| Anomaly ML tinggi, rule tinggi | Sinyal statistik dan bukti rule mendukung; prioritas investigasi tinggi. |
-| Keduanya rendah | Tidak ada sinyal kuat dari model atau rule berdasarkan data dan konfigurasi saat ini. Bukan jaminan klaim pasti valid. |
-
-Secara konseptual, pipeline menghitung:
-
-```text
-business_risk_score = weighted rule scores
-final_risk_score = kombinasi business risk + anomaly score ML + duplicate payment
-```
-
-Bobot, threshold, dan status validasi harus disimpan dalam metadata agar keputusan dapat diaudit. Status `validation unavailable`, khususnya ketika database duplicate payment tidak tersedia, tidak boleh ditafsirkan sebagai bukti bahwa klaim aman.
-
-#### E. Contoh alur keputusan
-
-Contoh klaim memiliki `anomaly_probability = 0.32`, tetapi:
-
-- `repeat_billing_flag = 1`;
-- `provider_capacity_flag = 1`;
-- `medication_device_fraud_flag = 1`.
-
-Klaim tetap dapat memperoleh `final_risk_flag = 1` karena business risk mendeteksi kondisi yang tidak bergantung pada skor model. Sebaliknya, klaim dengan anomaly probability tinggi tanpa rule flag perlu diperiksa melalui feature explanation, data pembanding, dan validasi manual.
-
-### 12.4 Investigator output
-
-Output detection dapat berisi:
-
-- claim identifier;
-- individual model probabilities;
-- combined anomaly probability;
-- business rule flags;
-- severity;
-- alasan rule terpicu;
-- feature explanation;
-- rekomendasi investigasi;
-- hasil export.
-
-## 13. Model Save, Registry, dan GCS
-
-### 13.1 Save model
-
-`CombinedAnomalyDetector.save_models()` menyimpan artefak seperti:
-
-- params JSON;
-- Isolation Forest;
-- Autoencoder;
-- XGBoost;
-- GNN;
-- DBSCAN;
-- imputer;
-- scaler.
-
-Metadata mencakup:
-
-- algorithms;
-- training metadata;
-- feature columns;
-- feature dtypes;
-- GNN architecture.
-
-### 13.2 Load model
-
-`load_models()`:
-
-1. meminta artefak yang hilang dari GCS bila enabled;
-2. membaca params JSON;
-3. mengembalikan feature schema;
-4. membangun arsitektur model;
-5. memuat weights dan scaler;
-6. mengembalikan detector yang siap inference.
-
-Nama artefak restore harus memakai basename yang sama dengan prefix model yang disimpan.
-
-### 13.3 Cloud Run persistence
-
-Filesystem Cloud Run bersifat ephemeral. Untuk persistence lintas restart:
-
-- simpan model ke GCS;
-- gunakan bucket production, bukan placeholder;
-- gunakan service account khusus dengan IAM minimum;
-- pertimbangkan database untuk registry, job status, dan audit;
-- jangan menjadikan file local sebagai sumber kebenaran multi-instance.
-
-## 14. Deployment
-
-### 14.1 Localhost
-
-- Python yang direkomendasikan: 3.13;
-- environment: `.venv`;
-- port default: 8501;
-- health endpoint: `/_stcore/health`;
-- pemeriksaan: `HTTP 200` dan body `ok`.
-
-### 14.2 Docker
-
-`Dockerfile` menggunakan multi-stage build:
-
-1. builder memasang dependency;
-2. runtime memakai Python slim;
-3. proses berjalan sebagai `appuser` non-root;
-4. `/app/cache` dan `/app/models` dibuat writable;
-5. healthcheck memakai endpoint Streamlit;
-6. port default 8501;
-7. upload limit 3072 MiB.
-
-Docker Compose:
-
-- mem-publish port 8501;
-- me-mount `./cache` ke `/app/cache`;
-- me-mount `./models` ke `/app/models`;
-- menjalankan healthcheck;
-- mempertahankan artefak model/cache saat restart container.
-
-Command:
-
-```bash
-docker compose up --build -d
-docker compose ps
-docker compose logs -f
-```
-
-### 14.3 Cloud Run
-
-Konfigurasi deployment menargetkan:
-
-- memory 16 GiB;
-- CPU 4;
-- port 8501;
-- request body 3 GiB pada konfigurasi deployment;
-- concurrency 1;
-- min instances 1;
-- max instances 5;
-- timeout 3600 detik;
-- akses private secara default;
-- upload limit Streamlit 3072 MiB.
-
-Script yang tersedia:
-
-- `.cloudrun/deploy.sh` untuk Bash/Linux/macOS/WSL;
-- `.cloudrun/deploy.ps1` untuk PowerShell;
-- `cloudbuild.yaml` untuk build dan deploy otomatis;
-- `.cloudrun/app.yaml` untuk konfigurasi deklaratif.
-
-Sebelum deploy:
-
-1. pasang dan login `gcloud`;
-2. pastikan Docker aktif;
-3. buat atau pilih project Google Cloud;
-4. buat bucket GCS;
-5. siapkan Artifact Registry;
-6. siapkan service account IAM;
-7. atur `GOOGLE_CLOUD_BUCKET`;
-8. verifikasi region dan repository;
-9. deploy image;
-10. panggil endpoint health;
-11. uji restore model dari instance baru.
-
-Untuk file 3 GiB, arsitektur production yang direkomendasikan adalah:
-
-```text
-Browser
-  -> resumable/direct upload ke GCS
-  -> job ingestion
-  -> worker preprocessing
-  -> Parquet partition
-  -> worker training
-  -> model/checkpoint ke GCS
-  -> UI membaca status dan hasil
-```
-
-Mengirim file 3 GiB langsung melalui request Streamlit/Cloud Run bukan jalur paling aman atau hemat resource.
-
-## 15. Error Handling dan Recovery
-
-Lapisan error handling:
-
-- `main.py` menangkap error page-level;
-- `data_collection.py` menyimpan detail processing error;
-- file handler menghapus temporary file pada `finally`;
-- large-file processor membersihkan progress UI dan objek intermediate;
-- training menyimpan status dan mendukung cancellation;
-- model inference melakukan fallback bila GNN gagal;
-- audit dan logger mencatat exception dengan context.
-
-Informasi error yang dipertahankan pada processing failure:
-
-- exception type;
-- message;
-- jumlah baris;
-- jumlah kolom;
-- ukuran file;
-- nama file;
-- timestamp.
-
-Recovery yang direkomendasikan:
-
-1. jangan menghapus input asli;
-2. pertahankan metadata job;
-3. hapus temporary artifact yang tidak lengkap;
-4. tandai job failed secara atomik;
-5. izinkan retry dengan job ID baru;
-6. jangan menimpa checkpoint valid terakhir.
-
-## 16. Keamanan
-
-Kontrol yang sudah tersedia:
-
-- proses container sebagai non-root;
-- XSRF protection dikonfigurasi pada environment;
-- akses Cloud Run default private;
-- quota upload/inference;
-- audit trail;
-- validasi model ZIP terhadap path traversal;
-- extraction ZIP secara streaming ke disk;
-- password database tidak memiliki default production.
-
-Kontrol yang wajib dilengkapi production:
-
-- IAM service account khusus;
-- signed/resumable GCS upload;
-- validasi MIME dan ukuran ZIP;
-- rate limiter terpusat Redis/database;
-- secret manager untuk credential;
-- audit storage terpusat;
-- antivirus atau artifact scanning bila model berasal dari user eksternal;
-- TLS dan identity-aware access di depan aplikasi.
-
-## 17. Pengujian dan Quality Gate
-
-Perintah validasi lokal:
+Seluruh komponen ASTINA diuji secara otomatis menggunakan suite Pytest yang mencakup **53 skenario uji komprehensif** (100% Passed):
 
 ```powershell
+# Menjalankan seluruh test suite
+.\.venv\Scripts\python.exe -m pytest tests/ -v
+```
+
+### Rincian Modul Uji
+
+| Modul Test | Jumlah Uji | Cakupan Verifikasi |
+| :--- | :---: | :--- |
+| `test_agentic_copilot.py` | 5 | Uji pencarian semantik FAISS RAG, inferensi reasoning Copilot, fallback provider |
+| `test_app_startup.py` | 1 | Uji startup aplikasi dan validitas seluruh dependensi import utama |
+| `test_detection_modules.py` | 14 | Uji menyeluruh 9 modul business rules, edge cases, dan integrasi pipeline |
+| `test_feature_selection.py` | 6 | Uji SelectKBest (F-score & MI), Tree Importance, Filter Multikolinearitas, Low-Variance, PCA |
+| `test_gnn_minibatch.py` | 4 | Uji PyTorch GNN mini-batch NeighborLoader, forward pass, dan early stopping |
+| `test_graph_scaling.py` | 2 | Uji batasan node/edge graph builder dan pencegahan OOM pada graf besar |
+| `test_large_file_ingestion.py` | 2 | Uji konversi streaming CSV-to-Parquet per chunk dengan alokasi buffer aman |
+| `test_optuna_ensemble_and_drift.py`| 5 | Uji optimasi hyperparameter Optuna dan deteksi Kolmogorov-Smirnov drift |
+| `test_pipeline_edge_cases.py` | 12 | Uji toleransi data null, data bertipe campuran, sanitasi string, dan extreme amounts |
+| `test_streaming_preprocessing_memory.py` | 2 | Uji batasan pemakaian RAM (<100MB peak) pada pemrosesan streaming skala besar |
+| **Total Test Suite** | **53** | **100% Passed (Green)** |
+
+---
+
+## 12. Panduan Deployment Multi-Environment
+
+### 12.1 Localhost Environment
+```powershell
+# 1. Setup Virtual Environment
+py -3.13 -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip check
-python -m pytest -q
-python -c "import main; print('startup imports ok')"
+
+# 2. Install Dependensi
+pip install -r requirements.txt
+
+# 3. Jalankan Aplikasi
+streamlit run main.py
 ```
 
-Validasi container dan deployment:
+### 12.2 Docker Desktop
+```bash
+# Build dan jalankan container dengan Docker Compose
+docker-compose up --build -d
 
+# Pantau status dan log
+docker-compose ps
+docker-compose logs -f
+```
+
+### 12.3 Google Cloud Run Serverless
 ```powershell
-docker compose config
-docker compose up --build -d
-Invoke-WebRequest http://localhost:8501/_stcore/health
+# Deploy otomatis via PowerShell
+.\.cloudrun\deploy.ps1
 ```
 
-Coverage yang sudah tersedia:
+---
 
-- import aplikasi;
-- business rules;
-- edge case pipeline;
-- feature importance;
-- format edge index GNN;
-- graph node/edge limit;
-- CSV batch-to-Parquet ingestion.
-
-Quality gate terakhir yang tervalidasi pada workspace:
-
-```text
-33 tests passed
-pip check: No broken requirements found
-startup imports: ok
-local health endpoint: HTTP 200, body ok
-deployment YAML: valid
-Docker Compose config: valid
-```
-
-Coverage yang masih harus ditambahkan untuk production:
-
-- upload dan ingestion file 3 GiB nyata atau synthetic equivalent;
-- peak RSS memory dan disk pressure;
-- resumable upload;
-- restart worker;
-- concurrent users;
-- GCS restore dari instance baru;
-- model architecture compatibility untuk semua versi;
-- GNN sampling dengan backend PyG production;
-- visualisasi node ID non-kontigu;
-- ZIP bomb dan malformed archive;
-- rate limit lintas instance;
-- end-to-end upload sampai export detection.
-
-## 18. Status Readiness Saat Ini
-
-### Sudah berjalan
-
-- localhost Streamlit startup;
-- Docker Compose configuration parsing;
-- dependency installation pada Python 3.13;
-- upload limit configuration sampai 3 GiB;
-- CSV ingestion batch-to-Parquet;
-- graph node dan edge cap;
-- GNN sampled training path;
-- visualization node ID mapping;
-- model GCS basename restore;
-- GNN architecture restore;
-- ZIP extraction path validation;
-- regression test suite.
-
-### Belum bebas bottleneck
-
-- UI masih memmaterialisasi DataFrame penuh sebelum preprocessing;
-- preprocessing dan train/test split masih dapat membuat salinan besar;
-- graph training memiliki cap 20.000 node dan 200.000 edge;
-- NeighborLoader bergantung pada backend PyG;
-- fallback tanpa backend sampler masih full-batch;
-- NetworkX/Plotly bukan renderer ideal untuk jutaan edge;
-- status training, cache, registry, dan quota masih sebagian local/in-process;
-- Cloud Run live deployment dan IAM belum dapat dianggap tervalidasi hanya dari static configuration;
-- direct 3 GiB upload sebaiknya diganti dengan GCS resumable upload.
-
-Kesimpulan: ASTINA sudah memiliki fondasi yang sehat untuk localhost dan Docker pada workload kecil/menengah. Untuk production Cloud Run dan dataset 3 GiB, aplikasi memerlukan object-storage upload, worker asynchronous, partitioned preprocessing end-to-end, persistent job store, serta backend GNN sampling yang benar-benar terpasang.
+<p align="center">
+  <b>copyright@2026 TIM ASTINA INDONESIA</b><br>
+  <i>Analisis Sistem Transaksi Identifikasi Nilai Anomali</i>
+</p>
