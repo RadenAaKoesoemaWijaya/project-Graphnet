@@ -153,15 +153,43 @@ def show_training_page():
         return
     
     # Model configuration
-    st.subheader("⚙️ Konfigurasi Model")
+    st.subheader("⚙️ Konfigurasi & Preset Pelatihan")
+
+    # Hardware Detection Banner
+    has_gpu = torch is not None and torch.cuda.is_available()
+    gpu_name = torch.cuda.get_device_name(0) if has_gpu else "CPU Komputasi Standar"
+    
+    if has_gpu:
+        st.success(f"🚀 **Akselerator Hardware Terdeteksi:** {gpu_name} (Siap untuk Deep Learning & GNN cepat)")
+    else:
+        st.info(f"ℹ️ **Perangkat Komputasi:** {gpu_name} | *Catatan: Model neural (Autoencoder & GNN) akan berjalan di CPU.*")
+
+    # Training Profile Presets
+    preset_choice = st.radio(
+        "Pilih Profil Pelatihan:",
+        [
+            "⚡ Mode Cepat (Tabular Fast) — [Rekomendasi Eksperimen Cepat ~10-30 detik]",
+            "⚖️ Mode Seimbang (Balanced) — [Isolation Forest + Autoencoder ~1-2 menit]",
+            "🧠 Mode Lengkap (Deep Graph Ensemble) — [Semua Algoritma + GNN + Optuna]",
+            "🛠️ Mode Kustom (Konfigurasi Manual Sepenuhnya)"
+        ],
+        index=0,
+        help="Pilih preset untuk konfigurasi otomatis atau sesuaikan secara manual."
+    )
+
+    is_fast_preset = "Mode Cepat" in preset_choice
+    is_balanced_preset = "Mode Seimbang" in preset_choice
+    is_deep_preset = "Mode Lengkap" in preset_choice
+    is_custom_preset = "Mode Kustom" in preset_choice
 
     training_mode_options = {
-        "Tanpa supervisi (Isolation Forest / Autoencoder / DBSCAN)": TRAINING_MODE_UNSUPERVISED,
+        "Tanpa supervisi (Isolation Forest / Autoencoder / DBSCAN / GNN)": TRAINING_MODE_UNSUPERVISED,
         "Dengan supervisi (XGBoost/LightGBM/Random Forest/SVM)": TRAINING_MODE_SUPERVISED,
     }
     training_mode_label = st.radio(
         "Pilih mode pelatihan:",
-        list(training_mode_options.keys())
+        list(training_mode_options.keys()),
+        index=0
     )
     training_mode = training_mode_options[training_mode_label]
 
@@ -178,27 +206,27 @@ def show_training_page():
     gnn_weight = 0.0
 
     iso_contamination = 0.05
-    iso_n_estimators = 100
+    iso_n_estimators = 50 if is_fast_preset else (50 if is_balanced_preset else 100)
 
     ae_encoding_dim = 32
     ae_hidden_dims = "64,48"
-    ae_epochs = 100
+    ae_epochs = 20 if is_balanced_preset else (50 if is_deep_preset else 30)
     ae_batch_size = 1024
     ae_early_stopping = True
-    ae_patience = 10
+    ae_patience = 8
     ae_min_delta = 0.0001
 
-    xgb_n_estimators = 200
-    xgb_max_depth = 6
+    xgb_n_estimators = 100 if is_fast_preset else 200
+    xgb_max_depth = 5 if is_fast_preset else 6
     xgb_learning_rate = 0.1
     xgb_extra_params = {}
 
-    # Initialize GNN parameters with defaults to avoid unbound variable errors
+    # Initialize GNN parameters
     algo_options = []
-    gnn_hidden = 64
-    gnn_heads = 4
+    gnn_hidden = 32 if not has_gpu else 64
+    gnn_heads = 2 if not has_gpu else 4
     gnn_dropout = 0.2
-    gnn_epochs = 200
+    gnn_epochs = 30 if not has_gpu else 60
     graph_method = "star"
     graph_k = 5
 
@@ -208,57 +236,71 @@ def show_training_page():
     cv_folds = 5
 
     if training_mode == TRAINING_MODE_UNSUPERVISED:
+        if is_fast_preset:
+            default_algos = ["Isolation Forest"]
+        elif is_balanced_preset:
+            default_algos = ["Isolation Forest", "Autoencoder"]
+        elif is_deep_preset:
+            default_algos = ["Isolation Forest", "Autoencoder", "GNN"]
+        else:
+            default_algos = ["Isolation Forest", "Autoencoder"]
+
         algo_options = st.multiselect(
             "Pilih algoritma tanpa supervisi:",
             ["Isolation Forest", "Autoencoder", "DBSCAN", "GNN"],
-            default=["Isolation Forest", "Autoencoder", "GNN"]  # Include GNN by default for visualization
+            default=default_algos
         )
 
         if not algo_options:
             st.error("❌ Pilih minimal 1 algoritma.")
             return
 
-        col1, col2, col3, col4 = st.columns(4)
+        with st.expander("🛠️ Parameter Algoritma Detail", expanded=is_custom_preset):
+            col1, col2, col3, col4 = st.columns(4)
 
-        with col1:
-            if "Isolation Forest" in algo_options:
-                st.write("**Isolation Forest**")
-                iso_contamination = st.slider("Tingkat Kontaminasi:", 0.01, 0.2, 0.05, 0.01)
-                iso_n_estimators = st.slider("Jumlah Estimator:", 10, 200, 50, 10)
+            with col1:
+                if "Isolation Forest" in algo_options:
+                    st.write("**Isolation Forest**")
+                    iso_contamination = st.slider("Tingkat Kontaminasi:", 0.01, 0.2, 0.05, 0.01)
+                    iso_n_estimators = st.slider("Jumlah Estimator:", 10, 200, iso_n_estimators, 10)
 
-        with col2:
-            if "Autoencoder" in algo_options:
-                st.write("**Autoencoder**")
-                ae_encoding_dim = st.slider("Dimensi Encoding:", 4, 128, 32, 4)
-                ae_hidden_dims = st.text_input("Layer Tersembunyi (pisahkan dengan koma)", "64,48")
-                ae_epochs = st.slider("Jumlah Epoch Pelatihan:", 5, 200, 50, 5)
-                ae_batch_size = st.slider("Ukuran Batch:", 32, 8192, 1024, 32)
-                ae_early_stopping = st.checkbox("Aktifkan penghentian dini", value=True)
-                if ae_early_stopping:
-                    ae_patience = st.slider("Patience penghentian dini:", 1, 50, 10, 1)
-                    ae_min_delta = st.number_input("Delta minimum penghentian dini:", 0.00001, 0.01, 0.0001, format="%.5f")
+            with col2:
+                if "Autoencoder" in algo_options:
+                    st.write("**Autoencoder**")
+                    ae_encoding_dim = st.slider("Dimensi Encoding:", 4, 128, 32, 4)
+                    ae_hidden_dims = st.text_input("Layer Tersembunyi (pisahkan koma):", "64,48")
+                    ae_epochs = st.slider("Epoch Pelatihan:", 5, 150, ae_epochs, 5)
+                    ae_batch_size = st.slider("Ukuran Batch:", 32, 4096, 1024, 64)
+                    ae_early_stopping = st.checkbox("Aktifkan Early Stopping", value=True)
+                    if ae_early_stopping:
+                        ae_patience = st.slider("Patience:", 1, 30, 8, 1)
 
-        with col3:
-            if "DBSCAN" in algo_options:
-                st.write("**DBSCAN**")
-                dbscan_eps = st.slider("eps:", 0.1, 10.0, 0.5, 0.1)
-                dbscan_min_samples = st.slider("min_samples:", 2, 100, 5, 1)
+            with col3:
+                if "DBSCAN" in algo_options:
+                    st.write("**DBSCAN**")
+                    dbscan_eps = st.slider("eps:", 0.1, 10.0, 0.5, 0.1)
+                    dbscan_min_samples = st.slider("min_samples:", 2, 100, 5, 1)
 
-        with col4:
-            if "GNN" in algo_options:
-                st.write("**Graph Neural Network**")
-                gnn_hidden = st.slider("Hidden Channels:", 16, 256, 64, 16)
-                gnn_heads = st.slider("Number of Heads:", 1, 16, 4, 1)
-                gnn_dropout = st.slider("Dropout:", 0.0, 0.8, 0.2, 0.05)
-                gnn_epochs = st.slider("Epochs:", 10, 300, 50, 10)
-                graph_method = st.selectbox("Graph Method:", ["star", "knn", "heterogeneous"])
-                if graph_method == "knn":
-                    graph_k = st.slider("k for k-NN:", 2, 20, 5, 1)
-                else:
-                    graph_k = 5
+            with col4:
+                if "GNN" in algo_options:
+                    st.write("**Graph Neural Network**")
+                    gnn_hidden = st.slider("Hidden Channels:", 16, 256, gnn_hidden, 16)
+                    gnn_heads = st.slider("Heads:", 1, 8, gnn_heads, 1)
+                    gnn_dropout = st.slider("Dropout:", 0.0, 0.8, 0.2, 0.05)
+                    gnn_epochs = st.slider("Epochs GNN:", 10, 200, gnn_epochs, 10)
+                    graph_method = st.selectbox("Graph Method:", ["star", "knn", "heterogeneous"])
+                    if graph_method == "knn":
+                        graph_k = st.slider("k for k-NN:", 2, 20, 5, 1)
+
+        # Optuna Ensemble Weight Tuning Option
+        default_optuna_val = True if is_deep_preset else False
+        enable_optuna_ensemble_weights = st.checkbox(
+            "⚡ Optimasi Bobot Ensemble Dinamis (Optuna FPR Minimizer)",
+            value=default_optuna_val,
+            help="Gunakan Optuna untuk mencari bobot ensemble optimal secara matematis guna meminimalkan False Positive Rate (FPR). Memerlukan waktu ekstra beberapa menit."
+        )
 
         st.subheader("⚖️ Bobot Kombinasi (Unsupervised)")
-
         enabled = {
             'isolation_forest': ("Isolation Forest" in algo_options),
             'autoencoder': ("Autoencoder" in algo_options),
@@ -276,13 +318,13 @@ def show_training_page():
         else:
             w_col1, w_col2, w_col3, w_col4 = st.columns(4)
             with w_col1:
-                iso_weight = st.slider("Bobot Isolation Forest:", 0.0, 1.0, 0.25, 0.05, disabled=not enabled['isolation_forest'])
+                iso_weight = st.slider("Bobot Isolation Forest:", 0.0, 1.0, 0.35 if enabled['isolation_forest'] else 0.0, 0.05, disabled=not enabled['isolation_forest'])
             with w_col2:
-                ae_weight = st.slider("Bobot Autoencoder:", 0.0, 1.0, 0.25, 0.05, disabled=not enabled['autoencoder'])
+                ae_weight = st.slider("Bobot Autoencoder:", 0.0, 1.0, 0.35 if enabled['autoencoder'] else 0.0, 0.05, disabled=not enabled['autoencoder'])
             with w_col3:
-                dbscan_weight = st.slider("Bobot DBSCAN:", 0.0, 1.0, 0.25, 0.05, disabled=not enabled['dbscan'])
+                dbscan_weight = st.slider("Bobot DBSCAN:", 0.0, 1.0, 0.0, 0.05, disabled=not enabled['dbscan'])
             with w_col4:
-                gnn_weight = st.slider("Bobot GNN:", 0.0, 1.0, 0.25, 0.05, disabled=not enabled['gnn'])
+                gnn_weight = st.slider("Bobot GNN:", 0.0, 1.0, 0.30 if enabled['gnn'] else 0.0, 0.05, disabled=not enabled['gnn'])
 
             total_weight = iso_weight + ae_weight + dbscan_weight + gnn_weight
             if total_weight <= 0:
@@ -295,13 +337,6 @@ def show_training_page():
             gnn_weight /= total_weight
 
         use_dynamic_weights = False
-
-        # Optuna Ensemble Weight Tuning Option
-        enable_optuna_ensemble_weights = st.checkbox(
-            "⚡ Optimasi Bobot Ensemble Dinamis (Optuna FPR Minimizer)",
-            value=True,
-            help="Gunakan Optuna untuk mencari bobot ensemble optimal secara matematis guna meminimalkan False Positive Rate (FPR) klaim wajar."
-        )
 
     else:
         supervised_model_type = st.selectbox(
@@ -327,7 +362,7 @@ def show_training_page():
         # Optuna Ensemble Weight Tuning Option
         enable_optuna_ensemble_weights = st.checkbox(
             "⚡ Optimasi Bobot Ensemble Dinamis (Optuna FPR Minimizer)",
-            value=True,
+            value=False,
             help="Gunakan Optuna untuk mencari bobot ensemble optimal secara matematis guna meminimalkan False Positive Rate (FPR)."
         )
 
@@ -341,28 +376,29 @@ def show_training_page():
         if enable_cross_validation:
             cv_folds = st.slider("Jumlah Fold (k):", 2, 10, 5, 1)
 
-        if supervised_model_type in ["XGBoost", "LightGBM"]:
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                xgb_n_estimators = st.slider("Jumlah Estimator:", 25, 500, 200, 25)
-            with col2:
-                xgb_max_depth = st.slider("Kedalaman Maksimum:", 2, 20, 6, 1)
-            with col3:
-                xgb_learning_rate = st.slider("Laju Pembelajaran:", 0.001, 1.0, 0.1, 0.001)
-        elif supervised_model_type == "Random Forest":
-            rf_col1, rf_col2 = st.columns(2)
-            with rf_col1:
-                xgb_n_estimators = st.slider("Jumlah Pohon:", 25, 500, 200, 25)
-            with rf_col2:
-                xgb_max_depth = st.slider("Kedalaman Maksimum:", 2, 50, 10, 1)
-        else:
-            svm_col1, svm_col2, svm_col3 = st.columns(3)
-            with svm_col1:
-                xgb_extra_params['C'] = st.slider("C:", 0.0, 100.0, 1.0, 0.1)
-            with svm_col2:
-                xgb_extra_params['kernel'] = st.selectbox("Kernel:", ["rbf", "linear", "poly", "sigmoid"])
-            with svm_col3:
-                xgb_extra_params['gamma'] = st.selectbox("Gamma:", ["scale", "auto"])
+        with st.expander("🛠️ Parameter Supervised Detail", expanded=is_custom_preset):
+            if supervised_model_type in ["XGBoost", "LightGBM"]:
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    xgb_n_estimators = st.slider("Jumlah Estimator:", 25, 500, xgb_n_estimators, 25)
+                with col2:
+                    xgb_max_depth = st.slider("Kedalaman Maksimum:", 2, 20, xgb_max_depth, 1)
+                with col3:
+                    xgb_learning_rate = st.slider("Laju Pembelajaran:", 0.001, 1.0, xgb_learning_rate, 0.001)
+            elif supervised_model_type == "Random Forest":
+                rf_col1, rf_col2 = st.columns(2)
+                with rf_col1:
+                    xgb_n_estimators = st.slider("Jumlah Pohon:", 25, 500, 200, 25)
+                with rf_col2:
+                    xgb_max_depth = st.slider("Kedalaman Maksimum:", 2, 50, 10, 1)
+            else:
+                svm_col1, svm_col2, svm_col3 = st.columns(3)
+                with svm_col1:
+                    xgb_extra_params['C'] = st.slider("C:", 0.0, 100.0, 1.0, 0.1)
+                with svm_col2:
+                    xgb_extra_params['kernel'] = st.selectbox("Kernel:", ["rbf", "linear", "poly", "sigmoid"])
+                with svm_col3:
+                    xgb_extra_params['gamma'] = st.selectbox("Gamma:", ["scale", "auto"])
 
         iso_weight = 0.0
         ae_weight = 0.0
@@ -370,7 +406,64 @@ def show_training_page():
         gnn_weight = 0.0
         xgb_weight = 1.0
         use_dynamic_weights = False
+
+    # ----------------------------------------------------
+    # DYNAMIC COMPLEXITY & HARDWARE ESTIMATOR (QA BADGE)
+    # ----------------------------------------------------
+    n_samples = len(st.session_state.get('train_df', [])) if 'train_df' in st.session_state else len(df_processed)
     
+    # Calculate complexity score
+    complexity_score = 0
+    if training_mode == TRAINING_MODE_UNSUPERVISED:
+        if "Isolation Forest" in algo_options:
+            complexity_score += 1
+        if "Autoencoder" in algo_options:
+            complexity_score += 3 + (ae_epochs // 20)
+        if "DBSCAN" in algo_options:
+            complexity_score += 2
+        if "GNN" in algo_options:
+            complexity_score += 5 + (gnn_epochs // 15)
+    else:
+        complexity_score += 2
+        if enable_cross_validation:
+            complexity_score += 2 * cv_folds
+
+    if enable_optuna_ensemble_weights:
+        complexity_score += 6
+    if enable_hyperparameter_tuning:
+        complexity_score += 8
+
+    # Apply GPU acceleration factor
+    if has_gpu:
+        complexity_score = max(1, int(complexity_score * 0.45))
+
+    st.markdown("---")
+    st.subheader("📊 Estimasi Beban Komputasi & Rekomendasi QA")
+
+    est_col1, est_col2, est_col3 = st.columns([1.2, 1.2, 2.6])
+
+    with est_col1:
+        if complexity_score <= 4:
+            st.success("🟢 **Beban: Ringan**\n\nEstimasi: **< 30 Detik**")
+        elif complexity_score <= 10:
+            st.warning("🟡 **Beban: Sedang**\n\nEstimasi: **1 – 3 Menit**")
+        else:
+            st.error("🔴 **Beban: Tinggi**\n\nEstimasi: **5 – 15+ Menit**")
+
+    with est_col2:
+        st.metric("Total Data Latih", f"{n_samples:,} baris")
+
+    with est_col3:
+        if complexity_score <= 4:
+            st.info("💡 **Rekomendasi QA:** Konfigurasi sangat efisien dan responsif. Cocok untuk iterasi kilat dan uji coba fitur.")
+        elif complexity_score <= 10:
+            st.info("💡 **Rekomendasi QA:** Keseimbangan optimal antara waktu dan performa deteksi.")
+        else:
+            if not has_gpu:
+                st.warning("⚠️ **Perhatian Hardware:** Anda menjalankan model neural / GNN / Optuna di **CPU**. Pelatihan akan membutuhkan waktu lebih lama. Pertimbangkan gunakan *Mode Cepat* jika membutuhkan hasil segera.")
+            else:
+                st.info("💡 **Rekomendasi QA:** Menggunakan GPU terakselerasi. Model ensemble siap dilatih dengan akurasi optimal.")
+
     xgboost_params = {
         'n_estimators': xgb_n_estimators,
         'max_depth': xgb_max_depth,

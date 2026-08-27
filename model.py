@@ -3713,19 +3713,29 @@ class CombinedAnomalyDetector:
             optimizer.step()
             scheduler.step()
 
-            # Validation
-            self.gnn_model.eval()
-            with torch.no_grad():
-                val_out = self.gnn_model(x, edge_index_tensor, batch_tensor, edge_attr_device)
-                val_loss = criterion(val_out[val_mask], y[val_mask]).item()
-                val_pred = val_out[val_mask].argmax(dim=1).cpu().numpy()
-                val_true = y[val_mask].cpu().numpy()
-                val_f1 = _f1_score(val_true, val_pred, average='binary', zero_division=0)
-                try:
-                    val_prec = precision_score(val_true, val_pred, average='binary', zero_division=0)
-                    val_rec = recall_score(val_true, val_pred, average='binary', zero_division=0)
-                except Exception:
-                    val_prec, val_rec = 0.0, 0.0
+            # Periodic validation evaluation (cadence optimized for CPU/GPU)
+            eval_interval = int(self.gnn_params.get('eval_interval', 5 if getattr(device, 'type', 'cpu') == 'cpu' else 2))
+            should_eval = (epoch % eval_interval == 0) or (epoch == epochs - 1)
+
+            if should_eval:
+                self.gnn_model.eval()
+                with torch.no_grad():
+                    val_out = self.gnn_model(x, edge_index_tensor, batch_tensor, edge_attr_device)
+                    val_loss = criterion(val_out[val_mask], y[val_mask]).item()
+                    val_pred = val_out[val_mask].argmax(dim=1).cpu().numpy()
+                    val_true = y[val_mask].cpu().numpy()
+                    val_f1 = _f1_score(val_true, val_pred, average='binary', zero_division=0)
+                    try:
+                        val_prec = precision_score(val_true, val_pred, average='binary', zero_division=0)
+                        val_rec = recall_score(val_true, val_pred, average='binary', zero_division=0)
+                    except Exception:
+                        val_prec, val_rec = 0.0, 0.0
+            else:
+                # Reuse last calculated metrics to maintain history length
+                val_loss = history['val_loss'][-1] if history['val_loss'] else 0.0
+                val_f1 = history['val_f1'][-1] if history['val_f1'] else 0.0
+                val_prec = history['val_precision'][-1] if history['val_precision'] else 0.0
+                val_rec = history['val_recall'][-1] if history['val_recall'] else 0.0
 
             history['train_loss'].append(float(loss.item()))
             history['val_loss'].append(float(val_loss))
@@ -3753,18 +3763,22 @@ class CombinedAnomalyDetector:
                 except Exception as e:
                     logger.warning(f"Failed to save GNN checkpoint: {e}")
 
-            # Best-checkpoint by val F1
-            if val_f1 > best_val_f1:
-                best_val_f1 = val_f1
-                best_state = {k: v.detach().cpu().clone() for k, v in self.gnn_model.state_dict().items()}
-                patience_counter = 0
-            else:
-                patience_counter += 1
-                if patience_counter >= patience:
-                    logger.info("GNN early stopping at epoch %d (best val F1=%.4f)",
-                                epoch, best_val_f1)
-                    break
-            
+            # Check early stopping only on evaluated epochs
+            if should_eval:
+                if val_f1 > best_val_f1:
+                    best_val_f1 = val_f1
+                    best_state = {k: v.detach().cpu().clone() for k, v in self.gnn_model.state_dict().items()}
+                    patience_counter = 0
+                else:
+                    patience_counter += eval_interval
+                    if patience_counter >= patience:
+                        logger.info("Early stopping at epoch %d! Best val F1: %.4f",
+                                    epoch, best_val_f1)
+                        if best_state is not None:
+                            self.gnn_model.load_state_dict({k: v.to(device) for k, v in best_state.items()})
+                        break
+
+
             # Periodic checkpointing every 10 epochs
             if epoch % 10 == 0 and best_state is not None:
                 try:

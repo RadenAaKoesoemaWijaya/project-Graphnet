@@ -9,7 +9,8 @@ Aplikasi ini dilengkapi antarmuka interaktif berbasis **Streamlit**, mendukung p
 ## 🚀 Fitur Utama
 
 - **🧠 Hybrid Detection Engine**: Menggabungkan probabilitas anomali statistik ML/GNN dengan validasi deterministik kepatuhan 9 aturan bisnis asuransi.
-- **🕸️ Graph Neural Network (GNN)**: Analisis relasional berbasis `GATConv` (Star Graph, Heterogeneous Graph, & k-NN Graph) untuk membongkar sindikat kolusi faskes, dokter, dan pasien (*fraud rings*).
+- **⚡ Smart Training Profiles & Complexity Estimator**: Antarmuka pelatihan interaktif dengan preset adaptif (⚡ *Mode Cepat* ~10-30 dtk, ⚖️ *Mode Seimbang* ~1-2 mnt, 🧠 *Mode Lengkap* Deep Graph, 🛠️ *Kustom*) serta monitor estimasi beban komputasi & rekomendasi hardware (CPU vs GPU) *real-time*.
+- **🕸️ Graph Neural Network (GNN)**: Analisis relasional berbasis `GATConv` (Star Graph, Heterogeneous Graph, & k-NN Graph) untuk membongkar sindikat kolusi faskes, dokter, dan pasien (*fraud rings*) dengan evaluasi metrik periodik teroptimasi.
 - **🤖 Agentic AI Copilot & RAG**: Asisten investigasi cerdas berbasis Retrieval-Augmented Generation (RAG) dan FAISS yang memahami regulasi medis, standar ICD-10/CPT, serta memberikan rekomendasi tindakan investigasi terarah.
 - **🧭 Interactive Top Navbar & Pipeline Tracker**: Status bar modern *glassmorphic* di setiap halaman yang memuat *live telemetry pills* (status baris & fitur data, model aktif, akselerasi GPU/CPU, status Copilot) dan *5-stage visual breadcrumb tracker* (`Unggah Data` ➔ `Praproses & Fitur` ➔ `Pelatihan` ➔ `Evaluasi` ➔ `Deteksi`).
 - **📊 Real-Time Sidebar Status Dashboard**: Panel metrik samping dengan *progress bar* kesiapan pipeline (0%–100%), kartu spesifikasi dataset streaming, metrik model AI/ML, dan monitor kesehatan hardware.
@@ -30,7 +31,7 @@ Aplikasi ini dilengkapi antarmuka interaktif berbasis **Streamlit**, mendukung p
 - **🔍 Explainable AI (SHAP & LIME)**: Visualisasi atribusi fitur (*feature importance*) dan kontribusi lokal untuk transparansi akuntabilitas model.
 - **📊 Real-Time System Telemetry**: Monitoring utilisasi hardware (CPU, RAM, GPU/VRAM), throughput ingestion, dan latensi inferensi.
 - **💻 Headless CLI Training Engine**: Dukungan pelatihan model otomatis melalui baris perintah (`training_cli.py`) untuk integrasi MLOps / CI/CD pipeline.
-- **☁️ Multi-Environment Ready**: Kompatibilitas penuh untuk Local (Windows/Linux/macOS), Docker Desktop, dan Google Cloud Run dengan sinkronisasi Google Cloud Storage (GCS).
+- **☁️ Multi-Environment Ready**: Kompatibilitas penuh untuk Localhost (Windows/Linux/macOS), Docker Desktop, dan Google Cloud Run dengan persistensi volume dan sinkronisasi Google Cloud Storage (GCS).
 
 ---
 
@@ -274,16 +275,24 @@ flowchart TD
   * `high_amount_quick_submit`: Indikator klaim bernominal kuartil atas yang diajukan dalam durasi waktu kilat.
   * `zscore`: Standarisasi deviasi statistik pada variabel moneter utama.
 
-### 3. Estimasi Skor Statistik ML Ensemble
-* **Proses:** Fitur dimasukkan ke dalam `CombinedAnomalyDetector` yang menjalankan ensemble paralel:
+### 3. Estimasi Skor Statistik ML Ensemble & Smart Training Profiles
+* **Fitur Presets Pelatihan Cerdas:**
+  * ⚡ **Mode Cepat (*Tabular Fast*)**: Menggunakan Isolation Forest (50 estimator) + XGBoost, tanpa Autoencoder / GNN / Optuna (~10–30 detik). Sangat direkomendasikan untuk uji coba lokal di CPU dan serverless Cloud Run.
+  * ⚖️ **Mode Seimbang (*Balanced*)**: Isolation Forest + PyTorch Autoencoder (20 epoch) + XGBoost (~1–2 menit).
+  * 🧠 **Mode Lengkap (*Deep Graph Ensemble*)**: Mengaktifkan seluruh model ensemble, topologi graf GNN, serta optimasi bobot dinamis Optuna FPR Minimizer.
+  * 🛠️ **Mode Kustom**: Kebebasan penuh konfigurasi hyperparameter, batch size, threshold, dan bobot algoritma.
+* **Indikator Beban Komputasi & Rekomendasi Hardware:**
+  * Telemetri mendeteksi hardware (GPU CUDA vs CPU Standar) secara otomatis.
+  * Menghitung kompleksitas beban *real-time* dan memberikan *alert badge*: 🟢 **Beban: Ringan** (< 30 dtk), 🟡 **Beban: Sedang** (1–3 mnt), 🔴 **Beban: Tinggi** (5–15+ mnt pada CPU).
+* **Proses:** Fitur dimasukkan ke dalam `CombinedAnomalyDetector` yang menjalankan ensemble terpadu:
   * **Isolation Forest**: Menilai isolasi titik data klaim dari sebaran mayoritas normal.
   * **Autoencoder (PyTorch)**: Mengukur *reconstruction error* dari representasi kompresi non-linear.
   * **XGBoost / LightGBM**: Memprediksi probabilitas fraud berdasarkan pola fitur non-linear historis.
-* **Hasil:** Menggabungkan probabilitas via bobot dinamis Optuna menjadi `anomaly_probability` $\in [0.00, 1.00]$.
+* **Hasil:** Menggabungkan probabilitas menjadi `anomaly_probability` $\in [0.00, 1.00]$.
 
-### 4. Analisis Jaringan Kolusi menggunakan GNN
+### 4. Analisis Jaringan Kolusi menggunakan GNN (Graph Attention Network)
 * **Proses:** Membangun topologi graf (Star Graph, Heterogeneous Graph, k-NN) menghubungkan klaim yang berbagi faskes, dokter, diagnosis, atau pasien yang sama.
-* **Peran Krusial:** `InsuranceAnomalyGNNModel` berbasis `GATConv` (Graph Attention Network) mendeteksi pola sindikat kolusi massal (*fraud rings*).
+* **Peran Krusial:** `InsuranceAnomalyGNNModel` berbasis `GATConv` (Graph Attention Network) mendeteksi pola sindikat kolusi massal (*fraud rings*) dengan evaluasi metrik validasi periodik yang hemat memori dan ramah komputasi multi-device.
 
 ### 5. Audit Kepatuhan 9 Modul Business Rules
 * **Proses:** Mengeksekusi `run_integrated_claim_risk_pipeline()` secara paralel untuk mengaudit 9 kategori fraud klaim medis, menghasilkan bendera biner, bukti penjelasan (*evidence*), dan `business_risk_score`.
