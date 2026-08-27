@@ -925,6 +925,56 @@ def preprocess_insurance_claims_optimized(df, enable_large_file_handling=True, e
     return df_processed, final_features, preprocessing_metadata
 
 @st.cache_data(ttl=1800, max_entries=10)
+def apply_select_k_best(df, feature_columns, target_col=None, k=20, score_func_name="f_classif", sample_size=10000):
+    """
+    Applies SelectKBest feature selection (f_classif or mutual_info_classif).
+    Scalable via sampling and cached for performance.
+    """
+    # Handle lazy loading dict response
+    if isinstance(df, dict):
+        if df.get('lazy'):
+            df = pd.read_parquet(df['path'])
+        else:
+            df = df
+
+    # Sample data if too large for performance
+    if len(df) > sample_size:
+        df_sample = df.sample(n=sample_size, random_state=42)
+    else:
+        df_sample = df
+
+    # Fill missing values with median (fallback 0)
+    X = df_sample[feature_columns].copy()
+    medians = X.median()
+    X = X.fillna(medians).fillna(0)
+
+    # Standardized pseudo-labeling using Isolation Forest if no target provided
+    if target_col is None or target_col not in df.columns:
+        iso = IsolationForest(contamination=0.1, random_state=42)
+        y = iso.fit_predict(X)
+        y = (y == -1).astype(int)
+    else:
+        y = df_sample[target_col].fillna(
+            df_sample[target_col].median() if pd.api.types.is_numeric_dtype(df_sample[target_col]) else df_sample[target_col].mode()[0]
+        )
+
+    # Determine score function
+    score_func = f_classif if score_func_name == "f_classif" else mutual_info_classif
+
+    k_actual = min(k, len(feature_columns))
+    selector = SelectKBest(score_func=score_func, k=k_actual)
+    selector.fit(X, y)
+
+    selected_indices = selector.get_support(indices=True)
+    selected_features = [feature_columns[i] for i in selected_indices]
+
+    scores = selector.scores_
+    scores = np.nan_to_num(scores, nan=0.0, posinf=0.0, neginf=0.0)
+    feature_scores = pd.DataFrame({'Feature': feature_columns, 'Score': scores}).sort_values(by='Score', ascending=False)
+
+    return selected_features, feature_scores
+
+@st.cache_data(ttl=1800, max_entries=10)
 def apply_mutual_info_selection(df, feature_columns, target_col=None, k=20, sample_size=10000):
     """
     Applies Mutual Information selection. Scalable for big data via sampling.
@@ -965,6 +1015,7 @@ def apply_mutual_info_selection(df, feature_columns, target_col=None, k=20, samp
 
     # Get scores for visualization
     scores = selector.scores_
+    scores = np.nan_to_num(scores, nan=0.0, posinf=0.0, neginf=0.0)
     feature_scores = pd.DataFrame({'Feature': feature_columns, 'Score': scores}).sort_values(by='Score', ascending=False)
 
     return selected_features, feature_scores
@@ -1014,6 +1065,7 @@ def apply_tree_based_selection(df, feature_columns, target_col=None, k=20, sampl
     model.fit(X, y)
     
     importances = model.feature_importances_
+    importances = np.nan_to_num(importances, nan=0.0, posinf=0.0, neginf=0.0)
     feature_importances = pd.DataFrame({'Feature': feature_columns, 'Importance': importances}).sort_values(by='Importance', ascending=False)
     
     selected_features = feature_importances.head(k)['Feature'].tolist()
@@ -1052,3 +1104,114 @@ def apply_pca_reduction(df, feature_columns, n_components=0.95):
     explained_variance = pca.explained_variance_ratio_
     
     return df_pca, pca_cols, explained_variance
+
+def filter_correlated_features(df, features, correlation_threshold=0.9, feature_scores_df=None, sample_size=10000):
+    """
+    Filters out highly correlated features (> correlation_threshold).
+    If feature_scores_df (with 'Feature' and score/importance column) is provided,
+    it prioritizes retaining the feature with the higher importance score.
+    """
+    if len(features) <= 1:
+        return features, []
+
+    if isinstance(df, dict):
+        if df.get('lazy'):
+            df = pd.read_parquet(df['path'])
+        else:
+            df = df
+
+    if len(df) > sample_size:
+        df_sample = df.sample(n=sample_size, random_state=42)
+    else:
+        df_sample = df
+
+    # Prepare score lookup dict if available
+    scores_dict = {}
+    if feature_scores_df is not None and isinstance(feature_scores_df, pd.DataFrame):
+        score_col = None
+        for col in ['Score', 'Importance', 'score', 'importance']:
+            if col in feature_scores_df.columns:
+                score_col = col
+                break
+        if score_col and 'Feature' in feature_scores_df.columns:
+            scores_dict = dict(zip(feature_scores_df['Feature'], feature_scores_df[score_col]))
+
+    # Compute correlation matrix on numeric features
+    numeric_features = [f for f in features if f in df_sample.columns and pd.api.types.is_numeric_dtype(df_sample[f])]
+    if len(numeric_features) <= 1:
+        return features, []
+
+    corr_matrix = df_sample[numeric_features].corr().abs()
+    
+    # Identify pairs exceeding threshold
+    to_remove = set()
+    num_cols = len(numeric_features)
+    
+    for i in range(num_cols):
+        col_a = numeric_features[i]
+        if col_a in to_remove:
+            continue
+        for j in range(i + 1, num_cols):
+            col_b = numeric_features[j]
+            if col_b in to_remove:
+                continue
+            
+            corr_val = corr_matrix.loc[col_a, col_b]
+            if not pd.isna(corr_val) and corr_val > correlation_threshold:
+                # If scores are available, drop the one with lower score
+                score_a = scores_dict.get(col_a, 0.0)
+                score_b = scores_dict.get(col_b, 0.0)
+                if score_a >= score_b:
+                    to_remove.add(col_b)
+                else:
+                    to_remove.add(col_a)
+                    break # col_a is removed, move to next i
+
+    kept_features = [f for f in features if f not in to_remove]
+    return kept_features, list(to_remove)
+
+def filter_low_variance_features(df, features, variance_threshold=0.01, sample_size=10000):
+    """
+    Filters out features with normalized variance < variance_threshold or near-zero variance.
+    Normalizes each numeric feature to [0, 1] range first to prevent scale disparity
+    (e.g., probability/ratio features with natural small variances being unfairly removed).
+    """
+    if not features:
+        return features, []
+
+    if isinstance(df, dict):
+        if df.get('lazy'):
+            df = pd.read_parquet(df['path'])
+        else:
+            df = df
+
+    if len(df) > sample_size:
+        df_sample = df.sample(n=sample_size, random_state=42)
+    else:
+        df_sample = df
+
+    to_remove = []
+    for f in features:
+        if f not in df_sample.columns:
+            continue
+        series = df_sample[f].dropna()
+        if len(series) == 0 or not pd.api.types.is_numeric_dtype(series):
+            continue
+        
+        min_val = series.min()
+        max_val = series.max()
+        range_val = max_val - min_val
+        raw_var = float(series.var())
+        
+        # Absolute constant or near-constant noise
+        if range_val <= 1e-5 or raw_var <= 1e-5 or series.nunique() <= 1:
+            to_remove.append(f)
+            continue
+        
+        # Normalized variance on [0, 1] scaled data: Var(X / range) = Var(X) / range^2
+        norm_var = float(raw_var / (range_val ** 2))
+        if norm_var < variance_threshold:
+            to_remove.append(f)
+
+    kept_features = [f for f in features if f not in to_remove]
+    return kept_features, to_remove

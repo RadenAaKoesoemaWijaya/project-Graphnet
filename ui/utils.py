@@ -46,7 +46,12 @@ import re
 from file_handler import read_file_with_optimization, get_file_info, show_file_size_warning, optimize_dataframe_memory, save_processed_data, load_processed_data, cleanup_temp_data
 from cache_manager import get_cache_path
 from config import MAX_FILE_SIZE, LARGE_DATASET_CONFIG
-from preprocessing_optimized import preprocess_insurance_claims_optimized, apply_mutual_info_selection, apply_tree_based_selection, apply_pca_reduction, remove_duplicates
+from preprocessing_optimized import (
+    preprocess_insurance_claims_optimized, apply_select_k_best,
+    apply_mutual_info_selection, apply_tree_based_selection,
+    apply_pca_reduction, filter_correlated_features,
+    filter_low_variance_features, remove_duplicates
+)
 import json
 from model_registry import save_model_version, get_versions, load_model_version
 from ui_components import apply_custom_css, custom_container

@@ -762,104 +762,56 @@ def show_data_collection_page():
                             remove_correlated = st.checkbox(
                                 "Hapus Fitur Berkorelasi Tinggi",
                                 value=True,
-                                help="Hapus fitur yang memiliki korelasi > 0.9 dengan fitur lain"
+                                help="Hapus fitur yang memiliki korelasi > 0.9 dengan fitur lain (mempertahankan fitur dengan skor tertinggi)"
                             )
                         
                             variance_threshold = st.slider(
-                                "Threshold Variansi Minimal:",
+                                "Threshold Variansi Normalisasi Minimal:",
                                 min_value=0.0,
                                 max_value=0.1,
                                 value=0.01,
                                 step=0.001,
-                                help="Hapus fitur dengan variansi < threshold"
+                                help="Hapus fitur dengan variansi normalisasi < threshold"
                             )
                     
                         if st.button("🔧 Terapkan Select K-Best", type="primary"):
                             try:
-                                from sklearn.feature_selection import SelectKBest, f_classif, mutual_info_classif
-                                from sklearn.preprocessing import LabelEncoder
-                            
-                                # Create synthetic labels for unsupervised feature selection
-                                # Use clustering to create pseudo-labels
-                                from sklearn.cluster import KMeans
-                            
-                                if len(df_processed) > 10:  # Need minimum samples
-                                    # Use clustering to create pseudo-labels
-                                    kmeans = KMeans(n_clusters=min(3, len(df_processed)//10), random_state=42)
-                                    # Fill missing values with median for KMeans
-                                    X_kmeans = df_processed[feature_columns].copy()
-                                    medians_kmeans = X_kmeans.median()
-                                    X_kmeans = X_kmeans.fillna(medians_kmeans).fillna(0)
-                                    pseudo_labels = kmeans.fit_predict(X_kmeans)
-                                
-                                    # Apply SelectKBest
-                                    if score_function == "f_classif":
-                                        selector = SelectKBest(score_func=f_classif, k=k_value)
-                                    else:
-                                        selector = SelectKBest(score_func=mutual_info_classif, k=k_value)
-                                
-                                    # Fill missing values with median
-                                    X = df_processed[feature_columns].copy()
-                                    medians = X.median()
-                                    X = X.fillna(medians).fillna(0)
-                                    selector.fit(X, pseudo_labels)
-                                    selected_features = selector.get_feature_names_out(feature_columns).tolist()
-                                
-                                    st.success(f"✅ Select K-Best berhasil! Memilih {len(selected_features)} fitur terbaik")
-                                
-                                    # Show feature scores
-                                    scores = selector.scores_
-                                    feature_scores = list(zip(feature_columns, scores.tolist() if hasattr(scores, 'tolist') else list(scores)))
-                                    feature_scores.sort(key=lambda x: x[1], reverse=True)
-                                
-                                    st.write("**📊 Skor Fitur Teratas:**")
-                                    score_df = pd.DataFrame(feature_scores[:k_value], columns=['Fitur', 'Skor'])
-                                    st.dataframe(score_df, width='stretch')
-                                
-                                    # Apply advanced filtering if selected
-                                    final_features = selected_features.copy()
-                                
-                                    if remove_correlated:
-                                        # Calculate correlation matrix
-                                        corr_matrix = df_processed[selected_features].corr().abs()  # type: ignore
-                                        upper_tri = corr_matrix.where(
-                                            np.triu(np.ones(corr_matrix.shape), k=1).astype(bool)
+                                if len(df_processed) > 5:
+                                    with st.spinner("Menghitung skor Select K-Best..."):
+                                        selected_features, feature_scores = apply_select_k_best(
+                                            df_processed, feature_columns, k=k_value, score_func_name=score_function
                                         )
-                                    
-                                        # Find features to remove
-                                        to_remove = [
-                                            column for column in upper_tri.columns 
-                                            if any(upper_tri[column] > 0.9)
-                                        ]
-                                    
-                                        final_features = [f for f in final_features if f not in to_remove]
-                                    
-                                        if len(to_remove) > 0:
-                                            st.warning(f"🗑️ Dihapus {len(to_remove)} fitur karena korelasi tinggi: {', '.join(to_remove)}")
                                 
-                                    if variance_threshold > 0:
-                                        # Calculate variance
-                                        variances = df_processed[final_features].var()
-                                        low_var_features = variances[variances < variance_threshold].index.tolist()
-                                    
-                                        final_features = [f for f in final_features if f not in low_var_features]
-                                    
-                                        if len(low_var_features) > 0:
-                                            st.warning(f"🗑️ Dihapus {len(low_var_features)} fitur karena variansi rendah: {', '.join(low_var_features)}")
+                                        st.success(f"✅ Select K-Best ({score_function}) berhasil! Memilih {len(selected_features)} fitur terbaik")
+                                        st.write("**📊 Skor Fitur Teratas:**")
+                                        st.dataframe(feature_scores.head(k_value), width='stretch')
                                 
-                                    selected_features = final_features
+                                        final_features = selected_features.copy()
                                 
-                                    if len(selected_features) == 0:
-                                        st.error("❌ Tidak ada fitur yang tersisa setelah filtering!")
-                                        return
+                                        # Apply advanced filtering if selected
+                                        if remove_correlated:
+                                            final_features, to_remove = filter_correlated_features(
+                                                df_processed, final_features, correlation_threshold=0.9, feature_scores_df=feature_scores
+                                            )
+                                            if len(to_remove) > 0:
+                                                st.warning(f"🗑️ Dihapus {len(to_remove)} fitur karena korelasi tinggi: {', '.join(to_remove)}")
                                 
-                                    st.session_state['selected_features_cache'] = selected_features
-                                    st.session_state['proceed_after_selection'] = True
+                                        if variance_threshold > 0:
+                                            final_features, low_var_features = filter_low_variance_features(
+                                                df_processed, final_features, variance_threshold=variance_threshold
+                                            )
+                                            if len(low_var_features) > 0:
+                                                st.warning(f"🗑️ Dihapus {len(low_var_features)} fitur karena variansi rendah: {', '.join(low_var_features)}")
                                 
+                                        if len(final_features) == 0:
+                                            st.error("❌ Tidak ada fitur yang tersisa setelah filtering!")
+                                            return
+                                
+                                        st.session_state['selected_features_cache'] = final_features
+                                        st.session_state['proceed_after_selection'] = True
                                 else:
-                                    st.error("❌ Data terlalu sedikit untuk Select K-Best (minimum 10 samples)")
+                                    st.error("❌ Data terlalu sedikit untuk Select K-Best (minimum 5 samples)")
                                     return
-                                
                             except Exception as e:
                                 st.error(f"❌ Error dalam Select K-Best: {str(e)}")
                                 return
@@ -891,6 +843,7 @@ def show_data_collection_page():
                                 st.session_state['proceed_after_selection'] = True
                             
                     elif selection_method == "PCA Dimensionality Reduction":
+                        st.info("ℹ️ **Catatan Model Explainer & Interpretability:** PCA memproyeksikan fitur ke dalam komponen ortogonal abstrak (`PCA_Component_1`, dsb.). Ini sangat efisien untuk reduksi dimensi, namun interpretasi fitur individual pada modul **SHAP Explainer** dan **Agentic Copilot** akan menampilkan komponen PCA.")
                         st.write("**Konfigurasi PCA:**")
                         pca_mode = st.radio("Mode PCA:", ["Persentase Variansi", "Jumlah Komponen Tetap"])
                     
@@ -974,7 +927,7 @@ def show_data_collection_page():
                                 remove_correlated = st.checkbox(
                                     "Hapus fitur yang berkorelasi tinggi",
                                     value=False,
-                                    help="Hapus fitur yang memiliki korelasi > 0.9 dengan fitur lain"
+                                    help="Hapus fitur yang memiliki korelasi > threshold dengan fitur lain"
                                 )
 
                                 correlation_threshold = 0.9
@@ -992,13 +945,13 @@ def show_data_collection_page():
                                 remove_low_variance = st.checkbox(
                                     "Hapus fitur dengan variansi rendah",
                                     value=False,
-                                    help="Hapus fitur yang memiliki variansi < 0.01"
+                                    help="Hapus fitur yang memiliki variansi normalisasi < threshold"
                                 )
 
                                 variance_threshold = 0.01
                                 if remove_low_variance:
                                     variance_threshold = st.slider(
-                                        "Threshold variansi:",
+                                        "Threshold variansi normalisasi:",
                                         min_value=0.001,
                                         max_value=0.1,
                                         value=0.01,
@@ -1012,30 +965,16 @@ def show_data_collection_page():
 
                                 # Apply advanced filtering if selected
                                 if remove_correlated:
-                                    # Calculate correlation matrix
-                                    corr_matrix = df_processed[selected_features].corr().abs()  # type: ignore
-                                    upper_tri = corr_matrix.where(
-                                        np.triu(np.ones(corr_matrix.shape), k=1).astype(bool)  # type: ignore[arg-type]
+                                    final_features, to_remove = filter_correlated_features(
+                                        df_processed, final_features, correlation_threshold=correlation_threshold
                                     )
-
-                                    # Find features to remove
-                                    to_remove = [
-                                        column for column in upper_tri.columns 
-                                        if any(upper_tri[column] > correlation_threshold)
-                                    ]
-
-                                    final_features = [f for f in final_features if f not in to_remove]
-
                                     if len(to_remove) > 0:
                                         st.warning(f"🗑️ Dihapus {len(to_remove)} fitur karena korelasi tinggi: {', '.join(to_remove)}")
 
                                 if remove_low_variance:
-                                    # Calculate variance for each feature
-                                    variances = df_processed[final_features].var()
-                                    low_var_features = variances[variances < variance_threshold].index.tolist()
-
-                                    final_features = [f for f in final_features if f not in low_var_features]
-
+                                    final_features, low_var_features = filter_low_variance_features(
+                                        df_processed, final_features, variance_threshold=variance_threshold
+                                    )
                                     if len(low_var_features) > 0:
                                         st.warning(f"🗑️ Dihapus {len(low_var_features)} fitur karena variansi rendah: {', '.join(low_var_features)}")
 
