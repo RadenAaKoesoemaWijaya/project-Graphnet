@@ -337,10 +337,22 @@ def show_data_collection_page():
                         processing_time = time.time() - start_time
 
                         from datetime import datetime
-                        preprocessing_metadata = dict(preprocessing_metadata_pipeline)
+                        preprocessing_metadata = dict(preprocessing_metadata_pipeline) if isinstance(preprocessing_metadata_pipeline, dict) else {}
                         preprocessing_metadata['processed_at'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-                        df_processed_path = save_processed_data(df_processed, prefix="preprocessed")
+                        # Ensure standard keys exist to prevent downstream KeyError
+                        if 'original_columns_count' not in preprocessing_metadata:
+                            preprocessing_metadata['original_columns_count'] = dataset_cols
+                        if 'final_features_count' not in preprocessing_metadata:
+                            preprocessing_metadata['final_features_count'] = len(feature_columns)
+                        if 'numerical_columns_count' not in preprocessing_metadata:
+                            preprocessing_metadata['numerical_columns_count'] = len([c for c in feature_columns if not c.endswith('_encoded')])
+
+                        # Save or reuse processed parquet file path
+                        if isinstance(df_processed, str):
+                            df_processed_path = df_processed
+                        else:
+                            df_processed_path = save_processed_data(df_processed, prefix="preprocessed")
 
                         reset_downstream_state()
                         set_processed_dataset_reference(
@@ -354,19 +366,23 @@ def show_data_collection_page():
                         st.success("✅ Data berhasil diproses dengan encoding canggih!")
 
                         try:
+                            orig_r = dataset_rows
+                            orig_c = dataset_cols
+                            proc_r = preprocessing_metadata.get('total_rows_processed', dataset_rows)
+                            proc_c = len(feature_columns)
                             log_preprocessing(
-                                original_rows=len(df),
-                                original_cols=len(df.columns),
-                                processed_rows=len(df_processed) if isinstance(df_processed, pd.DataFrame) else 0,
-                                processed_cols=len(df_processed.columns) if isinstance(df_processed, pd.DataFrame) else 0,
+                                original_rows=orig_r,
+                                original_cols=orig_c,
+                                processed_rows=proc_r,
+                                processed_cols=proc_c,
                                 processing_time=processing_time,
                                 success=True
                             )
                             record_operation('preprocessing', processing_time, {
-                                'original_rows': len(df),
-                                'original_cols': len(df.columns),
-                                'processed_rows': len(df_processed) if isinstance(df_processed, pd.DataFrame) else 0,
-                                'processed_cols': len(df_processed.columns) if isinstance(df_processed, pd.DataFrame) else 0
+                                'original_rows': orig_r,
+                                'original_cols': orig_c,
+                                'processed_rows': proc_r,
+                                'processed_cols': proc_c
                             })
                             increment_counter('total_preprocessing_runs')
                             set_gauge('last_preprocessing_time', processing_time)
@@ -376,13 +392,87 @@ def show_data_collection_page():
                         st.subheader("📊 Ringkasan Preprocessing")
                         col1, col2, col3, col4 = st.columns(4)
                         with col1:
-                            st.metric("Kolom Awal", str(preprocessing_metadata.get('original_columns_count', 0)))
+                            st.metric("Kolom Awal", str(preprocessing_metadata.get('original_columns_count', dataset_cols)))
                         with col2:
-                            st.metric("Fitur Akhir", str(preprocessing_metadata.get('final_features_count', 0)))
+                            st.metric("Fitur Akhir", str(preprocessing_metadata.get('final_features_count', len(feature_columns))))
                         with col3:
                             st.metric("Kolom Tanggal", str(preprocessing_metadata.get('date_columns_count', 0)))
                         with col4:
                             st.metric("Kolom Kategorikal", str(preprocessing_metadata.get('categorical_columns_count', 0)))
+
+                        # Display detailed preprocessing insights safely
+                        if preprocessing_metadata.get('outlier_metadata') or preprocessing_metadata.get('validation_metadata'):
+                            st.markdown("---")
+                            col_out1, col_out2 = st.columns(2)
+
+                            with col_out1:
+                                outlier_meta = preprocessing_metadata.get('outlier_metadata', {})
+                                if isinstance(outlier_meta, dict) and outlier_meta.get('total_outliers_handled', 0) > 0:
+                                    st.subheader("🎯 Deteksi Outlier")
+                                    st.metric("Outlier Ditangani", outlier_meta.get('total_outliers_handled', 0))
+                                    st.info(f"Metode: {outlier_meta.get('method_used', 'N/A')} | Aksi: {outlier_meta.get('action_taken', 'N/A')}")
+
+                            with col_out2:
+                                validation_meta = preprocessing_metadata.get('validation_metadata', {})
+                                if isinstance(validation_meta, dict) and validation_meta.get('total_validations_performed', 0) > 0:
+                                    st.subheader("✅ Validasi Data")
+                                    st.metric("Validasi Dilakukan", validation_meta.get('total_validations_performed', 0))
+                                    st.info("Range logis diperbaiki untuk umur, jumlah, dan persentase")
+
+                        if 'encoding_strategies_used' in preprocessing_metadata:
+                            st.subheader("🔧 Strategi Encoding yang Digunakan")
+                            strategies = preprocessing_metadata['encoding_strategies_used']
+                            strategy_descriptions = {
+                                'one_hot': '🔥 One-Hot Encoding (kardinalitas rendah ≤5)',
+                                'label_frequency': '🏷️ Encoding label + frekuensi (kardinalitas sedang ≤20)',
+                                'frequency_binned': '📊 Encoding frekuensi bertingkat (kardinalitas tinggi >20)',
+                                'skipped': '⏭️ Dilewati (terlalu banyak nilai unik)',
+                                'failed': '❌ Gagal diproses'
+                            }
+
+                            strategies_list = strategies if isinstance(strategies, (list, tuple, set)) else [strategies] if isinstance(strategies, str) else []
+                            for strategy in strategies_list:
+                                if strategy in strategy_descriptions:
+                                    st.write(f"• {strategy_descriptions[strategy]}")
+
+                        if preprocessing_metadata.get('enhanced_encoding_metadata') and isinstance(preprocessing_metadata['enhanced_encoding_metadata'], dict):
+                            with st.expander("🔍 Detail Encoding per Kolom"):
+                                encoding_df_data = []
+                                for col, metadata in preprocessing_metadata['enhanced_encoding_metadata'].items():
+                                    if isinstance(metadata, dict) and metadata.get('strategy') != 'skipped':
+                                        encoding_df_data.append({
+                                            'Kolom': col,
+                                            'Strategi': metadata.get('strategy', 'N/A'),
+                                            'Kardinalitas': metadata.get('cardinality', 'N/A'),
+                                            'Fitur Hasil': len(metadata.get('features', [])) if isinstance(metadata.get('features'), (list, tuple)) else 1
+                                        })
+
+                                if encoding_df_data:
+                                    encoding_df = pd.DataFrame(encoding_df_data)
+                                    st.dataframe(encoding_df, width='stretch')
+
+                        if preprocessing_metadata.get('missing_value_metadata') and isinstance(preprocessing_metadata['missing_value_metadata'], dict):
+                            with st.expander("🔍 Penanganan Missing Values"):
+                                missing_cols = [col for col, meta in preprocessing_metadata['missing_value_metadata'].items()
+                                              if isinstance(meta, dict) and meta.get('missing_count', 0) > 0]
+                                if missing_cols:
+                                    st.write(f"Kolom dengan missing values: {len(missing_cols)}")
+                                    for col in missing_cols[:10]:
+                                        meta = preprocessing_metadata['missing_value_metadata'][col]
+                                        if isinstance(meta, dict):
+                                            st.write(f"• **{col}**: {meta.get('action', 'unknown')} ({meta.get('missing_count', 0)} values)")
+
+                        if preprocessing_metadata.get('duplicate_removal') and isinstance(preprocessing_metadata['duplicate_removal'], dict):
+                            with st.expander("🔍 Penghapusan Duplikasi"):
+                                dup_meta = preprocessing_metadata['duplicate_removal']
+                                st.write(f"Baris original: {dup_meta.get('original_rows', 0):,}")
+                                st.write(f"Baris duplikat dihapus: {dup_meta.get('duplicates_removed', 0):,}")
+                                st.write(f"Baris final: {dup_meta.get('final_rows', 0):,}")
+                                st.write(f"Persentase duplikat: {dup_meta.get('duplicate_rate', 0.0):.2%}")
+                                if dup_meta.get('subset'):
+                                    st.write(f"Kolom yang dicek: {', '.join(dup_meta['subset'])}")
+                                else:
+                                    st.write("Kolom yang dicek: Semua kolom")
 
                     except Exception as e:
                         error_type = type(e).__name__
@@ -420,83 +510,6 @@ def show_data_collection_page():
                         st.session_state['is_processing'] = False
                         st.session_state['processing_message'] = ''
 
-                        if preprocessing_success:
-                            if preprocessing_metadata.get('outlier_metadata') or preprocessing_metadata.get('validation_metadata'):
-                                st.markdown("---")
-                                col_out1, col_out2 = st.columns(2)
-
-                                with col_out1:
-                                    outlier_meta = preprocessing_metadata.get('outlier_metadata', {})
-                                    if isinstance(outlier_meta, dict) and outlier_meta.get('total_outliers_handled', 0) > 0:
-                                        st.subheader("🎯 Deteksi Outlier")
-                                        st.metric("Outlier Ditangani", outlier_meta.get('total_outliers_handled', 0))
-                                        st.info(f"Metode: {outlier_meta.get('method_used', 'N/A')} | Aksi: {outlier_meta.get('action_taken', 'N/A')}")
-
-                                with col_out2:
-                                    validation_meta = preprocessing_metadata.get('validation_metadata', {})
-                                    if isinstance(validation_meta, dict) and validation_meta.get('total_validations_performed', 0) > 0:
-                                        st.subheader("✅ Validasi Data")
-                                        st.metric("Validasi Dilakukan", validation_meta.get('total_validations_performed', 0))
-                                        st.info("Range logis diperbaiki untuk umur, jumlah, dan persentase")
-
-                            if 'encoding_strategies_used' in preprocessing_metadata:
-                                st.subheader("🔧 Strategi Encoding yang Digunakan")
-                                strategies = preprocessing_metadata['encoding_strategies_used']
-                                strategy_descriptions = {
-                                    'one_hot': '🔥 One-Hot Encoding (kardinalitas rendah ≤5)',
-                                    'label_frequency': '🏷️ Encoding label + frekuensi (kardinalitas sedang ≤20)',
-                                    'frequency_binned': '📊 Encoding frekuensi bertingkat (kardinalitas tinggi >20)',
-                                    'skipped': '⏭️ Dilewati (terlalu banyak nilai unik)',
-                                    'failed': '❌ Gagal diproses'
-                                }
-
-                                strategies_list = strategies if isinstance(strategies, (list, tuple, set)) else [strategies] if isinstance(strategies, str) else []
-                                for strategy in strategies_list:
-                                    if strategy in strategy_descriptions:
-                                        st.write(f"• {strategy_descriptions[strategy]}")
-
-                            if 'enhanced_encoding_metadata' in preprocessing_metadata and preprocessing_metadata['enhanced_encoding_metadata']:
-                                with st.expander("🔍 Detail Encoding per Kolom"):
-                                    encoding_df_data = []
-                                    for col, metadata in preprocessing_metadata['enhanced_encoding_metadata'].items():  # type: ignore
-                                        if metadata['strategy'] != 'skipped':
-                                            encoding_df_data.append({
-                                                'Kolom': col,
-                                                'Strategi': metadata['strategy'],
-                                                'Kardinalitas': metadata.get('cardinality', 'N/A'),
-                                                'Fitur Hasil': len(metadata.get('features', []))
-                                            })
-
-                                    if encoding_df_data:
-                                        encoding_df = pd.DataFrame(encoding_df_data)
-                                        st.dataframe(encoding_df, width='stretch')
-
-                            if 'missing_value_metadata' in preprocessing_metadata and isinstance(preprocessing_metadata['missing_value_metadata'], dict):
-                                with st.expander("🔍 Penanganan Missing Values"):
-                                    missing_cols = [col for col, meta in preprocessing_metadata['missing_value_metadata'].items()
-                                                  if isinstance(meta, dict) and meta.get('missing_count', 0) > 0]
-                                    if missing_cols:
-                                        st.write(f"Kolom dengan missing values: {len(missing_cols)}")
-                                        for col in missing_cols[:10]:
-                                            meta = preprocessing_metadata['missing_value_metadata'][col]  # type: ignore
-                                            st.write(f"• **{col}**: {meta.get('action', 'unknown')} ({meta.get('missing_count', 0)} values)")  # type: ignore
-
-                            if 'duplicate_removal' in preprocessing_metadata and isinstance(preprocessing_metadata['duplicate_removal'], dict):
-                                with st.expander("🔍 Penghapusan Duplikasi"):
-                                    dup_meta = preprocessing_metadata['duplicate_removal']  # type: ignore
-                                    st.write(f"Baris original: {dup_meta['original_rows']:,}")
-                                    st.write(f"Baris duplikat dihapus: {dup_meta['duplicates_removed']:,}")
-                                    st.write(f"Baris final: {dup_meta['final_rows']:,}")
-                                    st.write(f"Persentase duplikat: {dup_meta['duplicate_rate']:.2%}")
-                                    if dup_meta['subset']:
-                                        st.write(f"Kolom yang dicek: {', '.join(dup_meta['subset'])}")
-                                    else:
-                                        st.write("Kolom yang dicek: Semua kolom")
-
-                            import gc
-                            del df
-                            gc.collect()
-
             if 'df_processed_path' in st.session_state:
                 preprocessing_metadata = st.session_state.get('preprocessing_metadata', {})
                 feature_columns = st.session_state.get('feature_columns', [])
@@ -514,13 +527,16 @@ def show_data_collection_page():
                     metadata_col1, metadata_col2, metadata_col3 = st.columns(3)
                 
                     with metadata_col1:
-                        st.metric("Kolom Original", preprocessing_metadata['original_columns_count'])
+                        orig_c_val = preprocessing_metadata.get('original_columns_count', len(feature_columns))
+                        st.metric("Kolom Original", orig_c_val)
                 
                     with metadata_col2:
-                        st.metric("Fitur Final", preprocessing_metadata['final_features_count'])
+                        final_f_val = preprocessing_metadata.get('final_features_count', len(feature_columns))
+                        st.metric("Fitur Final", final_f_val)
                 
                     with metadata_col3:
-                        engineering_features = len(feature_columns) - preprocessing_metadata['numerical_columns_count']
+                        num_c_val = preprocessing_metadata.get('numerical_columns_count', 0)
+                        engineering_features = max(0, len(feature_columns) - num_c_val)
                         st.metric("Fitur Engineering", engineering_features)
                 
                     # Kategorisasi fitur berdasarkan preprocessing metadata
@@ -1068,52 +1084,60 @@ def show_data_collection_page():
                         help="Nonaktifkan jika ingin langsung melanjutkan alur tanpa membebani tampilan.",
                     )
 
-                    if show_preprocessing_insight:
-                    # Tampilkan informasi preprocessing
+                    if show_preprocessing_insight and isinstance(df_processed, pd.DataFrame):
+                        # Tampilkan informasi preprocessing
                         st.subheader("Hasil Preprocessing")
                         st.write(f"Jumlah fitur untuk modeling: {len(feature_columns)}")
                         st.write("Fitur yang digunakan:")
                         st.write(feature_columns)
                     
-                    # Tampilkan statistik dasar
-                        st.subheader("Statistik Data yang Diproses")
-                        st.dataframe(df_processed[feature_columns].describe())  # type: ignore
+                        # Tampilkan statistik dasar
+                        valid_feature_cols = [c for c in feature_columns if c in df_processed.columns]
+                        if valid_feature_cols:
+                            st.subheader("Statistik Data yang Diproses")
+                            st.dataframe(df_processed[valid_feature_cols].describe())
                     
-                    # Visualisasi distribusi beberapa fitur penting
+                        # Visualisasi distribusi beberapa fitur penting
                         st.subheader("Visualisasi Data")
                     
-                    # Plot 1: Distribusi jumlah klaim
-                        if 'billed_amount' in df_processed.columns:  # type: ignore
+                        # Plot 1: Distribusi jumlah klaim
+                        if 'billed_amount' in df_processed.columns:
                             fig = create_histogram_chart(df_processed, 'billed_amount',
                                            nbins=50, title='Distribusi Jumlah Klaim')
                             st.plotly_chart(fig, width='stretch')
 
-                    # Plot 2: Distribusi usia pasien
-                        if 'patient_age' in df_processed.columns:  # type: ignore
+                        # Plot 2: Distribusi usia pasien
+                        if 'patient_age' in df_processed.columns:
                             fig = create_histogram_chart(df_processed, 'patient_age',
                                            nbins=20, title='Distribusi Usia Pasien')
                             st.plotly_chart(fig, width='stretch')
 
-                    # Plot 3: Provider specialty distribution
-                        if isinstance(df_processed, pd.DataFrame) and 'provider_specialty' in df_processed.columns:
+                        # Plot 3: Provider specialty distribution
+                        if 'provider_specialty' in df_processed.columns:
                             provider_counts = df_processed['provider_specialty'].value_counts().head(10)
                             fig = create_bar_chart(provider_counts.index, provider_counts.values,
                                        title='10 Spesialis Provider Teratas',
                                        labels={'x': 'Spesialisasi', 'y': 'Jumlah Klaim'})
                             st.plotly_chart(fig, width='stretch')
 
-                    # Plot 4: Claim status distribution
-                        if isinstance(df_processed, pd.DataFrame) and 'claim_status' in df_processed.columns:
+                        # Plot 4: Claim status distribution
+                        if 'claim_status' in df_processed.columns:
                             status_counts = df_processed['claim_status'].value_counts()
                             fig = create_pie_chart(status_counts.values, status_counts.index,
                                       title='Distribusi Status Klaim')
                             st.plotly_chart(fig, width='stretch')
                 
-                # Tombol untuk lanjut ke training yang lebih jelas
+                    # Tombol untuk lanjut ke training yang lebih jelas
                     st.markdown("---")
                     st.subheader("🚀 Langkah Selanjutnya")
                     if st.button("Lanjut ke Pelatihan Model", key="proceed_to_training_final", type="primary"):
                         navigate_to_page('train')
         except Exception as e:
-            st.error(f"Gagal memproses file: {str(e)}")
+            logger.error(f"Gagal memproses file: {e}", exc_info=True)
+            st.error(f"❌ Gagal memproses file: {type(e).__name__}: {str(e)}")
+            with st.expander("Detail Kesalahan"):
+                import traceback
+                st.code(traceback.format_exc())
+            if st.button("🔁 Coba Muat Ulang", key="btn_reload_data_collection"):
+                st.rerun()
 

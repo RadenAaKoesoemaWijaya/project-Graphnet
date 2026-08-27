@@ -69,12 +69,21 @@ def main():
             show_status_page()
     except Exception as e:
         # Log error and show recovery options
+        import traceback
         logger.error(f"Error displaying page '{current_page}': {e}", exc_info=True)
-        st.error(f"❌ Terjadi kesalahan pada halaman: {str(e)}")
+        st.error(f"❌ Terjadi kesalahan pada halaman ({current_page}): {str(e)}")
+        
+        with st.expander("🔍 Detail Teknis Kesalahan (Traceback)"):
+            st.code(traceback.format_exc(), language='python')
         
         st.markdown("---")
-        if st.button("🏠 Kembali ke Beranda"):
-            navigate_to_page('home')
+        col_err1, col_err2 = st.columns(2)
+        with col_err1:
+            if st.button("🔁 Muat Ulang Halaman Ini", key="retry_current_page"):
+                st.rerun()
+        with col_err2:
+            if st.button("🏠 Kembali ke Beranda", key="back_to_home_from_error"):
+                navigate_to_page('home')
     finally:
         # Render application footer with copyright
         render_footer()

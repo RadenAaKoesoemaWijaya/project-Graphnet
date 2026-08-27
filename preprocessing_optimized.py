@@ -45,14 +45,23 @@ def check_memory_threshold(threshold_mb=8000, warning_threshold_mb=6000, stop_on
 
     if is_critical:
         if stop_on_critical:
-            st.error(f"❌ Memory usage critical: {memory_mb:.0f}MB. Processing stopped. Consider reducing chunk size or dataset size.")
+            try:
+                st.error(f"❌ Memory usage critical: {memory_mb:.0f}MB. Processing stopped. Consider reducing chunk size or dataset size.")
+            except Exception:
+                pass
             gc.collect()
             should_continue = False
         else:
-            st.warning(f"⚠️ Memory usage critical: {memory_mb:.0f}MB. Garbage collection triggered.")
+            try:
+                st.warning(f"⚠️ Memory usage critical: {memory_mb:.0f}MB. Garbage collection triggered.")
+            except Exception:
+                pass
             gc.collect()
     elif is_warning:
-        st.info(f"ℹ️ Memory usage high: {memory_mb:.0f}MB. Processing will continue.")
+        try:
+            st.info(f"ℹ️ Memory usage high: {memory_mb:.0f}MB. Processing will continue.")
+        except Exception:
+            pass
 
     return memory_mb, is_critical, should_continue
 
@@ -655,7 +664,10 @@ def preprocess_insurance_claims_optimized(df, enable_large_file_handling=True, e
     # --- PRE-SELECTION STEP ---
     # Identify top informative features before complex engineering to avoid explosion
     important_numerical = pre_select_important_features(df_processed, original_numerical, top_k=15)
-    st.info(f"🎯 Seleksi fitur: Menggunakan {len(important_numerical)} fitur utama untuk rekayasa fitur kompleks.")
+    try:
+        st.info(f"🎯 Seleksi fitur: Menggunakan {len(important_numerical)} fitur utama untuk rekayasa fitur kompleks.")
+    except Exception:
+        pass
     
     # Apply smart data type optimization
     df_processed = smart_data_type_optimization(df_processed)
