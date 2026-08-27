@@ -416,6 +416,135 @@ def apply_custom_css():
         font-weight: 600;
         color: #F1F5F9;
     }
+
+    /* Home Action Cards */
+    .astina-action-card {
+        background: #FFFFFF;
+        border: 1px solid #E2E8F0;
+        border-radius: 16px;
+        padding: 20px 18px 16px 18px;
+        min-height: 205px;
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-start;
+        box-shadow: 0 4px 16px -2px rgba(15, 23, 42, 0.05);
+        transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+        position: relative;
+        overflow: hidden;
+        margin-bottom: 10px;
+    }
+
+    .astina-action-card:hover {
+        border-color: #93C5FD;
+        transform: translateY(-4px);
+        box-shadow: 0 12px 24px -4px rgba(30, 64, 175, 0.12);
+    }
+
+    .astina-action-card::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 4px;
+        background: linear-gradient(90deg, #3B82F6, #60A5FA);
+        opacity: 0.9;
+    }
+
+    .card-accent-purple::before {
+        background: linear-gradient(90deg, #8B5CF6, #A78BFA);
+    }
+
+    .card-accent-emerald::before {
+        background: linear-gradient(90deg, #10B981, #34D399);
+    }
+
+    .card-accent-slate::before {
+        background: linear-gradient(90deg, #64748B, #94A3B8);
+    }
+
+    .action-card-top {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 12px;
+    }
+
+    .action-card-icon-box {
+        width: 42px;
+        height: 42px;
+        border-radius: 11px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.35rem;
+        background: #EFF6FF;
+        border: 1px solid #DBEAFE;
+    }
+
+    .icon-box-purple {
+        background: #F5F3FF;
+        border-color: #EDE9FE;
+    }
+
+    .icon-box-emerald {
+        background: #ECFDF5;
+        border-color: #D1FAE5;
+    }
+
+    .icon-box-slate {
+        background: #F8FAFC;
+        border-color: #E2E8F0;
+    }
+
+    .action-card-badge {
+        font-size: 0.67rem;
+        font-weight: 700;
+        letter-spacing: 0.6px;
+        padding: 3px 8px;
+        border-radius: 9999px;
+        text-transform: uppercase;
+        background: #EFF6FF;
+        color: #1D4ED8;
+        border: 1px solid #BFDBFE;
+    }
+
+    .badge-purple {
+        background: #F5F3FF;
+        color: #6D28D9;
+        border-color: #DDD6FE;
+    }
+
+    .badge-emerald {
+        background: #ECFDF5;
+        color: #047857;
+        border-color: #A7F3D0;
+    }
+
+    .badge-slate {
+        background: #F1F5F9;
+        color: #475569;
+        border-color: #CBD5E1;
+    }
+
+    .action-card-title {
+        font-size: 1.08rem;
+        font-weight: 700;
+        color: #0F172A;
+        margin-bottom: 6px;
+        line-height: 1.3;
+    }
+
+    .action-card-desc {
+        font-size: 0.83rem;
+        color: #64748B;
+        line-height: 1.45;
+        margin: 0;
+        display: -webkit-box;
+        -webkit-line-clamp: 3;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+    }
 </style>
 """, unsafe_allow_html=True)
 

@@ -54,52 +54,72 @@ def show_home_page():
     - Inflated bill / cloning
     - Prolonged stay / readmission
     - Medication dan device fraud
-
-    ### Apa yang ingin Anda lakukan?
     """)
 
-    # Tampilkan opsi navigasi dengan kartu yang menarik
+    st.markdown("""
+    <div style="margin-top: 2.2rem; margin-bottom: 1.2rem;">
+        <div style="display: inline-flex; align-items: center; gap: 8px; background: rgba(59, 130, 246, 0.08); border: 1px solid rgba(59, 130, 246, 0.25); padding: 4px 12px; border-radius: 9999px; font-size: 0.76rem; font-weight: 700; color: #1D4ED8; text-transform: uppercase; letter-spacing: 0.5px;">
+            🧭 Alur Kerja Terintegrasi
+        </div>
+        <h3 style="margin-top: 10px; margin-bottom: 4px; font-size: 1.45rem; color: #0F172A; font-weight: 700;">Apa yang ingin Anda lakukan?</h3>
+        <p style="color: #64748B; font-size: 0.92rem; margin-top: 0;">Pilih salah satu tahapan navigasi di bawah untuk memulai pemrosesan, pelatihan, atau investigasi klaim.</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Tampilkan opsi navigasi dengan kartu modern terstruktur
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
         st.markdown("""
-        <div style="padding: 20px; border-radius: 14px; background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%); border: 1px solid #dfe7f3; text-align: center; height: 200px; box-shadow: 0 4px 10px rgba(15,23,42,0.05);">
-            <h3 style="color: #0F172A; margin-bottom: 10px;">Unggah Data Klaim</h3>
-            <p style="color: #475569;">Upload dataset asuransi dan lakukan validasi serta preprocessing otomatis.</p>
-            <br/>
+        <div class="astina-action-card">
+            <div class="action-card-top">
+                <div class="action-card-icon-box">📂</div>
+                <span class="action-card-badge">Tahap 01</span>
+            </div>
+            <div class="action-card-title">Unggah Data</div>
+            <p class="action-card-desc">Upload dataset asuransi (CSV, Parquet, Excel), validasi skema 14 kolom, dan praproses otomatis.</p>
         </div>
         """, unsafe_allow_html=True)
-        collect_button = st.button("Unggah Data Transaksi", key="collect")
+        collect_button = st.button("🚀 Mulai Unggah", key="collect", use_container_width=True, type="primary")
 
     with col2:
         st.markdown("""
-        <div style="padding: 20px; border-radius: 14px; background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%); border: 1px solid #dfe7f3; text-align: center; height: 200px; box-shadow: 0 4px 10px rgba(15,23,42,0.05);">
-            <h3 style="color: #0F172A; margin-bottom: 10px;">Pelatihan Model</h3>
-            <p style="color: #475569;">Latih model anomaly dan konfigurasi ensemble sesuai pola data yang Anda miliki.</p>
-            <br/>
+        <div class="astina-action-card card-accent-purple">
+            <div class="action-card-top">
+                <div class="action-card-icon-box icon-box-purple">🧠</div>
+                <span class="action-card-badge badge-purple">Tahap 02</span>
+            </div>
+            <div class="action-card-title">Pelatihan Model</div>
+            <p class="action-card-desc">Latih model ML Ensemble & Graph Neural Network (GNN) dengan profil komputasi adaptif.</p>
         </div>
         """, unsafe_allow_html=True)
-        train_button = st.button("Pelatihan Model", key="train")
+        train_button = st.button("⚡ Latih Model", key="train", use_container_width=True)
 
     with col3:
         st.markdown("""
-        <div style="padding: 20px; border-radius: 14px; background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%); border: 1px solid #dfe7f3; text-align: center; height: 200px; box-shadow: 0 4px 10px rgba(15,23,42,0.05);">
-            <h3 style="color: #0F172A; margin-bottom: 10px;">Deteksi & Review</h3>
-            <p style="color: #475569;">Jalankan scoring risiko, lihat dashboard, dan review klaim berisiko tinggi.</p>
-            <br/>
+        <div class="astina-action-card card-accent-emerald">
+            <div class="action-card-top">
+                <div class="action-card-icon-box icon-box-emerald">🔍</div>
+                <span class="action-card-badge badge-emerald">Tahap 03</span>
+            </div>
+            <div class="action-card-title">Deteksi & Review</div>
+            <p class="action-card-desc">Jalankan scoring risiko hybrid, audit 9 aturan bisnis, dan investigasi via AI Copilot.</p>
         </div>
         """, unsafe_allow_html=True)
-        detect_button = st.button("Deteksi Anomali", key="detect")
+        detect_button = st.button("🎯 Deteksi Anomali", key="detect", use_container_width=True)
 
     with col4:
         st.markdown("""
-        <div style="padding: 20px; border-radius: 14px; background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%); border: 1px solid #dfe7f3; text-align: center; height: 200px; box-shadow: 0 4px 10px rgba(15,23,42,0.05);">
-            <h3 style="color: #0F172A; margin-bottom: 10px;">Status Sistem</h3>
-            <p style="color: #475569;">Pantau kesehatan aplikasi, performa, dan status operasional platform.</p>
-            <br/>
+        <div class="astina-action-card card-accent-slate">
+            <div class="action-card-top">
+                <div class="action-card-icon-box icon-box-slate">📊</div>
+                <span class="action-card-badge badge-slate">Sistem</span>
+            </div>
+            <div class="action-card-title">Status Sistem</div>
+            <p class="action-card-desc">Pantau kesehatan server, telemetri CPU/GPU, manajemen cache, dan audit trail SHA-256.</p>
         </div>
         """, unsafe_allow_html=True)
-        status_button = st.button("Status Sistem", key="status")
+        status_button = st.button("📈 Cek Status", key="status", use_container_width=True)
     
     if collect_button:
         navigate_to_page('collect')
