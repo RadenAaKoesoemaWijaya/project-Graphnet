@@ -77,8 +77,13 @@ class ClaimContextBuilder:
         }
 
         for flag_col, label in rule_map.items():
-            if int(masked_dict.get(flag_col, 0) or 0) == 1:
-                active_rules.append(label)
+            raw_val = clean_dict.get(flag_col, raw_dict.get(flag_col, 0))
+            try:
+                if int(float(raw_val or 0)) == 1:
+                    active_rules.append(label)
+            except (ValueError, TypeError):
+                if str(raw_val).strip().lower() in ('1', 'true', 'yes', 't'):
+                    active_rules.append(label)
 
         # Extract top SHAP contributors
         top_shap = []
@@ -86,17 +91,23 @@ class ClaimContextBuilder:
             sorted_shap = sorted(shap_contributions.items(), key=lambda x: abs(x[1]), reverse=True)
             top_shap = [f"{feat}: {val:+.3f}" for feat, val in sorted_shap[:5]]
 
+        def _safe_float(val, default: float = 0.0) -> float:
+            try:
+                return float(val) if val is not None else default
+            except (ValueError, TypeError):
+                return default
+
         return {
-            "claim_id": masked_dict.get("claim_id", "CLM-UNKNOWN"),
-            "patient_id": masked_dict.get("patient_id", "PAT-ANON"),
-            "provider_id": masked_dict.get("provider_id", "PROV-ANON"),
-            "service_code": masked_dict.get("service_code", "N/A"),
-            "diagnosis_code": masked_dict.get("diagnosis_code", "N/A"),
-            "billed_amount": masked_dict.get("billed_amount", masked_dict.get("amount", 0)),
-            "paid_amount": masked_dict.get("paid_amount", 0),
-            "anomaly_score": masked_dict.get("anomaly_probability", 0.0),
-            "final_risk_score": masked_dict.get("final_risk_score", 0.0),
-            "severity": masked_dict.get("severity", "Medium"),
+            "claim_id": masked_dict.get("claim_id", clean_dict.get("claim_id", "CLM-UNKNOWN")),
+            "patient_id": masked_dict.get("patient_id", clean_dict.get("patient_id", "PAT-ANON")),
+            "provider_id": masked_dict.get("provider_id", clean_dict.get("provider_id", "PROV-ANON")),
+            "service_code": str(clean_dict.get("service_code", "N/A")),
+            "diagnosis_code": str(clean_dict.get("diagnosis_code", "N/A")),
+            "billed_amount": _safe_float(clean_dict.get("billed_amount", clean_dict.get("amount", 0.0))),
+            "paid_amount": _safe_float(clean_dict.get("paid_amount", 0.0)),
+            "anomaly_score": _safe_float(clean_dict.get("anomaly_probability", 0.0)),
+            "final_risk_score": _safe_float(clean_dict.get("final_risk_score", 0.0)),
+            "severity": str(clean_dict.get("severity", "Medium")),
             "active_rules": active_rules,
             "top_shap_features": top_shap,
             "gnn_collusion_cluster": gnn_neighbors or [],

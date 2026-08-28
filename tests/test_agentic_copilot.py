@@ -39,6 +39,8 @@ class TestAgenticCopilotAndRAG(unittest.TestCase):
             "severity": "High",
             "repeat_billing_flag": 1,
             "phantom_service_flag": 0,
+            "medication_device_fraud_flag": 1,
+            "prolonged_stay_readmission_flag": 1,
         })
 
         shap_dict = {"billed_amount": 0.42, "payment_ratio": -0.15}
@@ -51,8 +53,11 @@ class TestAgenticCopilotAndRAG(unittest.TestCase):
         self.assertEqual(ctx["claim_id"], "***888")
         self.assertEqual(ctx["severity"], "High")
         self.assertIn("Repeat Billing (Tagihan Berulang)", ctx["active_rules"])
+        self.assertIn("Medication & Device Fraud (Kuantitas Obat/Alkes Berlebih)", ctx["active_rules"])
+        self.assertIn("Prolonged Stay & Readmission (Lama Rawat Anomali)", ctx["active_rules"])
         self.assertTrue(len(ctx["top_shap_features"]) > 0)
         self.assertIn("billed_amount: +0.420", ctx["top_shap_features"][0])
+        self.assertEqual(ctx["billed_amount"], 7500000.0)
 
     def test_dossier_generation_heuristic(self):
         sample_context = {

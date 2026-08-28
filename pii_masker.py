@@ -178,6 +178,38 @@ class PIIMasker:
                 return "***"
     
     @staticmethod
+    def is_sensitive_field(field_name: str) -> bool:
+        """
+        Check if a field name represents sensitive PII.
+        Excludes statistical metrics, model features, and boolean flags.
+        """
+        if not field_name or not isinstance(field_name, str):
+            return False
+            
+        field_lower = field_name.lower().strip()
+        
+        # Rule flags, scores, probabilities, and ML/statistical indicators are NEVER PII
+        non_pii_suffixes = (
+            '_flag', '_score', '_probability', '_prob', '_ratio', 
+            '_diff', '_count', '_idx', '_index', '_cluster', '_cluster_id', 
+            '_status', '_type', '_rate', '_std', '_mean', '_sum', 
+            '_min', '_max', '_median', '_norm', '_normed', '_scaled', 
+            '_encoded', '_weight'
+        )
+        if any(field_lower.endswith(suffix) for suffix in non_pii_suffixes):
+            return False
+            
+        non_pii_prefixes = ('is_', 'has_', 'anomaly_', 'risk_', 'rule_', 'stat_', 'metric_', 'flag_')
+        if any(field_lower.startswith(prefix) for prefix in non_pii_prefixes):
+            return False
+
+        # Check against sensitive fields
+        return any(
+            sensitive.lower() in field_lower
+            for sensitive in SENSITIVE_FIELDS
+        )
+
+    @staticmethod
     def mask_dict(data: Dict[str, Any], strategy: str = 'mask') -> Dict[str, Any]:
         """
         Mask all sensitive fields in a dictionary.
@@ -196,12 +228,7 @@ class PIIMasker:
         
         for field, value in data.items():
             # Check if field is sensitive
-            is_sensitive = any(
-                sensitive.lower() in field.lower()
-                for sensitive in SENSITIVE_FIELDS
-            )
-            
-            if not is_sensitive:
+            if not PIIMasker.is_sensitive_field(field):
                 masked[field] = value
                 continue
             
@@ -230,12 +257,7 @@ class PIIMasker:
             
             for col in df.columns:
                 # Check if column name indicates sensitive data
-                is_sensitive = any(
-                    sensitive.lower() in col.lower()
-                    for sensitive in SENSITIVE_FIELDS
-                )
-                
-                if is_sensitive:
+                if PIIMasker.is_sensitive_field(col):
                     if strategy == 'remove':
                         df = df.drop(columns=[col])
                     elif strategy == 'hash':
