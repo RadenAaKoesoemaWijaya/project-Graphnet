@@ -80,7 +80,7 @@ flowchart TD
 | **UI Components & Styles** | `ui_components.py` | Glassmorphic CSS, breadcrumb tracker, live telemetry pills |
 | **UI Sidebar & Nav** | `ui/sidebar.py` | Navigasi menu, status kesiapan pipeline (0–100%), telemetri hardware |
 | **UI Utilities & Charts** | `ui/utils.py` | Smart feature alignment, visual helper, chart Plotly, export data |
-| **File Handler** | `file_handler.py` | Streaming CSV-to-Parquet, optimasi memory dtype, buffer IO |
+| **File Handler** | `file_handler.py` | Streaming IO multi-format (CSV, Excel `.xlsx`/`.xls`, Parquet), normalisasi format otomatis, optimasi memory dtype, buffer IO chunking 8MB |
 | **Large File Processor** | `large_file_processor.py` | Chunking dataset, memory-bounded preprocessing per batch |
 | **Data Validator & Sanitizer** | `data_validator.py` | Integritas kolom, sanitasi tipe data, evaluasi skema 14 kolom inti |
 | **Data Preprocessing & Selection**| `preprocessing_optimized.py` | Imputasi, outlier capping, domain features, SelectKBest, Corr filter, PCA |
@@ -191,9 +191,9 @@ python run.py
 ### 4.5 Detection, Rule Auditing & AI Copilot Workspace (`ui/pages/detection.py`)
 Halaman deteksi menyediakan alur kerja investigasi terpadu berbasis **5 Tab Spesifik**:
 - **Smart Data Ingestion & Feature Alignment**:
-  - Mendukung input dataset multi-sumber: unggah file baru (CSV, Excel xlsx/xls, Parquet), reuse dataset session aktif, atau sampel demo bawaan.
+  - Mendukung input dataset multi-sumber: unggah file baru (CSV, Excel `.xlsx`/`.xls`, Parquet) dengan normalisasi format otomatis, reuse dataset session aktif, atau sampel demo bawaan.
   - *Smart Feature Alignment*: Menyelaraskan nama dan tipe kolom klaim uji dengan skema fitur model terlatih (`training_features`), serta melakukan imputasi statistik nilai hilang berbasis median training (`feature_medians`).
-  - *Hardware-Aware Multi-Model Inference*: Inferensi ensemble (Isolation Forest, Autoencoder, XGBoost, GNN) dengan alokasi otomatis komputasi CUDA GPU / CPU yang aman.
+  - *Hardware-Aware Multi-Model Inference & Type-Safe Aggregation*: Inferensi ensemble (Isolation Forest, Autoencoder, XGBoost, GNN) dengan alokasi otomatis komputasi CUDA GPU / CPU yang aman, serta konstruksi DataFrame hasil deteksi berbasis Series yang selaras indeks (*type-safe*).
 - **Tab 1: 📊 Ringkasan & Visualisasi**:
   - *Grafik Distribusi Prediksi Anomali*: Visualisasi seimbang jumlah klaim `Normal` vs `Anomali` yang stabil pada berbagai proporsi dataset.
   - *Histogram Skor Probabilitas Anomali*: Distribusi probabilitas ensemble multi-model dilengkapi garis ambang batas (*threshold marker*).

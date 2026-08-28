@@ -266,8 +266,8 @@ def show_detection_page():
         if uploaded_file is not None:
             try:
                 file_ext = uploaded_file.name.rsplit(".", 1)[-1].lower()
-                fmt_map = {"csv": "csv", "xlsx": "excel", "xls": "excel", "parquet": "parquet"}
-                file_format = fmt_map.get(file_ext, "csv")
+                fmt_map = {"csv": "csv", "xlsx": "xlsx", "xls": "xls", "parquet": "parquet"}
+                file_format = fmt_map.get(file_ext, file_ext)
                 raw_df = read_file_with_optimization(uploaded_file, file_format)
                 source_description = f"File: {uploaded_file.name} ({len(raw_df):,} baris)"
             except Exception as e:
@@ -423,21 +423,21 @@ def show_detection_page():
 
                 # 5. Build results DataFrame
                 df_result = raw_df.copy()
-                df_result['anomaly_probability'] = np.asarray(probabilities, dtype=float)
-                df_result['anomaly_prediction'] = np.asarray(predictions, dtype=int)
-                df_result['isolation_forest_score'] = np.asarray(individual_probs.get('isolation_forest', np.zeros(len(df_result))), dtype=float)
-                df_result['autoencoder_score'] = np.asarray(individual_probs.get('autoencoder', np.zeros(len(df_result))), dtype=float)
+                df_result['anomaly_probability'] = pd.Series(probabilities, index=df_result.index, dtype=float)
+                df_result['anomaly_prediction'] = pd.Series(predictions, index=df_result.index, dtype=int)
+                df_result['isolation_forest_score'] = pd.Series(individual_probs.get('isolation_forest', np.zeros(len(df_result))), index=df_result.index, dtype=float)
+                df_result['autoencoder_score'] = pd.Series(individual_probs.get('autoencoder', np.zeros(len(df_result))), index=df_result.index, dtype=float)
                 if 'dbscan' in individual_probs:
-                    df_result['dbscan_score'] = np.asarray(individual_probs['dbscan'], dtype=float)
-                df_result['xgboost_score'] = np.asarray(individual_probs.get('xgboost', np.zeros(len(df_result))), dtype=float)
+                    df_result['dbscan_score'] = pd.Series(individual_probs['dbscan'], index=df_result.index, dtype=float)
+                df_result['xgboost_score'] = pd.Series(individual_probs.get('xgboost', np.zeros(len(df_result))), index=df_result.index, dtype=float)
 
                 # 6. Integrated Claim Risk Pipeline (9 Business Rules + Composite Scoring)
                 from fraud_risk_pipeline import run_integrated_claim_risk_pipeline
                 df_risk, risk_summary = run_integrated_claim_risk_pipeline(df_result)
                 df_result = df_risk
-                df_result['business_risk_score'] = df_result.get('business_risk_score', 0.0)
+                df_result['business_risk_score'] = df_result.get('business_risk_score', pd.Series(0.0, index=df_result.index))
                 df_result['final_risk_score'] = df_result.get('final_risk_score', df_result['anomaly_probability'])
-                df_result['final_risk_flag'] = df_result.get('final_risk_flag', (df_result['final_risk_score'] >= threshold).astype(int))
+                df_result['final_risk_flag'] = df_result.get('final_risk_flag', pd.Series((df_result['final_risk_score'] >= threshold).astype(int), index=df_result.index))
 
                 # Store persistently in session_state
                 st.session_state['detection_results'] = df_result

@@ -123,6 +123,11 @@ def read_file_with_optimization(uploaded_file, file_type='csv'):
     """
     Read uploaded file with streaming buffer and memory optimization for large files
     """
+    # Normalize file_type
+    file_type = (file_type or 'csv').lower().lstrip('.')
+    if file_type == 'excel':
+        file_type = 'xlsx'
+
     # Check file size
     file_size = uploaded_file.size
     check_file_size(file_size)
