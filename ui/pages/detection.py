@@ -670,52 +670,86 @@ def show_detection_page():
                 if selected_claim != "-- Pilih Klaim untuk Diinvestigasi --" and selected_claim != "-- Data klaim tidak memiliki claim_id --":
                     selected_row = display_df[display_df['claim_id'].astype(str) == str(selected_claim)].iloc[0]
 
-                    # Metrics for selected claim
-                    sc_1, sc_2, sc_3, sc_4 = st.columns(4)
-                    with sc_1:
-                        st.metric("Final Risk Score", f"{float(selected_row.get('final_risk_score', 0.0)):.2f}")
-                    with sc_2:
-                        st.metric("Anomaly Probability", f"{float(selected_row.get('anomaly_probability', 0.0)):.2f}")
-                    with sc_3:
-                        st.metric("Severity", str(selected_row.get('severity', 'Low')))
-                    with sc_4:
-                        st.metric("Kategori", str(selected_row.get('risk_category', 'Normal')))
+                    # ── CLAIM IDENTITY PANEL ──
+                    severity_val = str(selected_row.get('severity', 'Low'))
+                    risk_score_val = float(selected_row.get('final_risk_score', 0.0))
+                    anomaly_prob_val = float(selected_row.get('anomaly_probability', 0.0))
 
-                    # Reasoning details
+                    sev_color = {"High": "#ef4444", "Medium": "#f59e0b", "Low": "#10b981"}.get(severity_val, "#64748b")
+                    sev_bg = {"High": "#fee2e2", "Medium": "#fff7ed", "Low": "#d1fae5"}.get(severity_val, "#f1f5f9")
+
+                    st.markdown(f"""
+                    <div style="background:#fff;border:1px solid #e2e8f0;border-left:5px solid {sev_color};border-radius:10px;padding:14px 18px;margin-bottom:14px;display:flex;flex-wrap:wrap;align-items:center;gap:10px;">
+                        <div style="flex:1;min-width:220px;">
+                            <div style="font-size:0.78rem;color:#64748b;font-weight:600;letter-spacing:0.4px;text-transform:uppercase;">Klaim Terpilih</div>
+                            <div style="font-size:1.18rem;font-weight:800;color:#0f172a;font-family:monospace;">{selected_claim}</div>
+                            <div style="font-size:0.8rem;color:#475569;margin-top:2px;">Provider: <b>{selected_row.get('provider_id','N/A')}</b> &nbsp;|&nbsp; Layanan: <code>{selected_row.get('service_code','N/A')}</code> &nbsp;|&nbsp; Diagnosis: <code>{selected_row.get('diagnosis_code','N/A')}</code></div>
+                        </div>
+                        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+                            <div style="text-align:center;background:#eff6ff;border:1px solid #dbeafe;border-radius:8px;padding:8px 16px;">
+                                <div style="font-size:0.7rem;color:#3b82f6;font-weight:700;text-transform:uppercase;">Risk Score</div>
+                                <div style="font-size:1.5rem;font-weight:800;color:#1e40af;">{risk_score_val:.2f}</div>
+                            </div>
+                            <div style="text-align:center;background:#f5f3ff;border:1px solid #ede9fe;border-radius:8px;padding:8px 16px;">
+                                <div style="font-size:0.7rem;color:#7c3aed;font-weight:700;text-transform:uppercase;">Anomaly Prob</div>
+                                <div style="font-size:1.5rem;font-weight:800;color:#6d28d9;">{anomaly_prob_val:.2f}</div>
+                            </div>
+                            <div style="text-align:center;background:{sev_bg};border:1px solid {sev_color}33;border-radius:8px;padding:8px 16px;">
+                                <div style="font-size:0.7rem;color:{sev_color};font-weight:700;text-transform:uppercase;">Severity</div>
+                                <div style="font-size:1.2rem;font-weight:800;color:{sev_color};">{severity_val.upper()}</div>
+                            </div>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                    # ── VIOLATION INDICATORS ──
                     detail_reasons = []
-                    for flag_col, label in [
-                        ('repeat_billing_flag', 'Repeat Billing (Klaim berulang dalam jangka waktu dekat)'),
-                        ('phantom_service_flag', 'Phantom Service (Tindakan/obat fiktif tanpa dasar medis)'),
-                        ('duplicate_payment_flag', 'Duplicate Payment (Ganda pembayaran klaim)'),
-                        ('upcoding_unbundling_flag', 'Upcoding / Unbundling (Pemecahan tagihan atau kenaikan kode diagnosis)'),
-                        ('inflated_bill_cloning_flag', 'Inflated Bill / Cloning (Kloning klaim atau penggelembungan biaya)'),
-                        ('prolonged_stay_readmission_flag', 'Prolonged Stay / Readmission (Masa rawat tidak wajar atau rawat ulang)'),
-                        ('medication_device_fraud_flag', 'Medication / Device Fraud (Pemberian obat/alkes tidak lazim)'),
-                    ]:
+                    flag_icon_map = {
+                        'repeat_billing_flag':             ('🔁', 'Repeat Billing', 'Klaim berulang dalam jangka waktu dekat'),
+                        'phantom_service_flag':            ('👻', 'Phantom Service', 'Tindakan/obat fiktif tanpa dasar medis'),
+                        'duplicate_payment_flag':          ('💳', 'Duplicate Payment', 'Pembayaran ganda atas klaim yang sama'),
+                        'upcoding_unbundling_flag':        ('📈', 'Upcoding / Unbundling', 'Penggelembungan kode atau pemecahan tagihan'),
+                        'inflated_bill_cloning_flag':      ('🧬', 'Inflated Bill / Cloning', 'Kloning klaim atau biaya digelembungkan'),
+                        'prolonged_stay_readmission_flag': ('🏥', 'Prolonged Stay / Readmission', 'Masa rawat tidak wajar atau rawat ulang anomali'),
+                        'medication_device_fraud_flag':    ('💊', 'Medication / Device Fraud', 'Obat/alkes diberikan dengan kuantitas tidak lazim'),
+                    }
+                    for flag_col, (icon, short_label, desc) in flag_icon_map.items():
                         if flag_col in selected_row and pd.notna(selected_row.get(flag_col)) and int(selected_row.get(flag_col, 0)) == 1:
-                            detail_reasons.append(label)
-                    if not detail_reasons:
-                        detail_reasons.append('Tidak ada aturan eksplisit terpicu; anomali statistik terdeteksi oleh ensemble ML.')
+                            detail_reasons.append((icon, short_label, desc))
 
-                    st.markdown("**Indikator Pelanggaran & Bukti:**")
-                    st.write("• " + "\n• ".join(detail_reasons))
-
-                    # Copilot Settings
-                    st.markdown("---")
-                    st.markdown("#### 🛠️ Konfigurasi Copilot")
-                    c_cfg1, c_cfg2, c_cfg3 = st.columns([1.5, 2, 1.5])
-                    with c_cfg1:
-                        provider_choice = st.selectbox(
-                            "LLM Engine:",
-                            ["Heuristic Engine (Offline)", "Google Gemini", "OpenAI / Azure", "Local Ollama"],
-                            key=f"c_prov_{selected_claim}"
+                    if detail_reasons:
+                        badges_html = "".join([
+                            f'<span style="display:inline-flex;align-items:center;gap:5px;background:#fee2e2;border:1px solid #fca5a5;color:#991b1b;'
+                            f'border-radius:20px;padding:4px 12px;font-size:0.76rem;font-weight:700;margin:3px 4px 3px 0;">'
+                            f'{icon} {lbl}</span>'
+                            for icon, lbl, _ in detail_reasons
+                        ])
+                        st.markdown(
+                            f'<div style="background:#fff5f5;border:1px solid #fee2e2;border-radius:8px;padding:10px 14px;margin-bottom:12px;">'
+                            f'<div style="font-size:0.76rem;font-weight:700;color:#991b1b;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">⚠️ Indikator Pelanggaran Terdeteksi</div>'
+                            f'{badges_html}</div>',
+                            unsafe_allow_html=True
                         )
-                    with c_cfg2:
-                        api_key_input = ""
-                        if provider_choice in ["Google Gemini", "OpenAI / Azure"]:
-                            api_key_input = st.text_input("API Key:", type="password", key=f"c_key_{selected_claim}")
-                    with c_cfg3:
-                        auditor_name = st.text_input("Nama Verifikator/Auditor:", value="Investigator Senior ASTINA", key=f"c_auditor_{selected_claim}")
+                    else:
+                        st.info("ℹ️ Tidak ada aturan eksplisit terpicu. Anomali terdeteksi murni oleh ensemble model ML (deviasi statistik multivariat).")
+
+                    # ── COPILOT CONFIGURATION ──
+                    with st.expander("🛠️ Konfigurasi Copilot & LLM Engine", expanded=True):
+                        c_cfg1, c_cfg2, c_cfg3 = st.columns([1.5, 2, 1.5])
+                        with c_cfg1:
+                            provider_choice = st.selectbox(
+                                "LLM Engine:",
+                                ["Heuristic Engine (Offline)", "Google Gemini", "OpenAI / Azure", "Local Ollama"],
+                                key=f"c_prov_{selected_claim}"
+                            )
+                        with c_cfg2:
+                            api_key_input = ""
+                            if provider_choice in ["Google Gemini", "OpenAI / Azure"]:
+                                api_key_input = st.text_input("API Key:", type="password", key=f"c_key_{selected_claim}")
+                            else:
+                                st.markdown(f"<div style='padding-top:28px;font-size:0.8rem;color:#64748b;'>🔌 Mode: <b>{'Heuristic (Offline)' if 'Heuristic' in provider_choice else 'Local Endpoint'}</b> — tidak memerlukan API key.</div>", unsafe_allow_html=True)
+                        with c_cfg3:
+                            auditor_name = st.text_input("Nama Verifikator/Auditor:", value="Investigator Senior ASTINA", key=f"c_auditor_{selected_claim}")
 
                     provider_map = {
                         "Heuristic Engine (Offline)": "heuristic",
@@ -734,6 +768,7 @@ def show_detection_page():
                         mask_sensitive=True
                     )
 
+                    # ── ACTION BUTTONS ──
                     btn_bap_col, btn_rag_col = st.columns(2)
                     with btn_bap_col:
                         btn_gen_bap = st.button("📑 Generate Berkas BAP & Resume Medis", key=f"btn_bap_{selected_claim}", type="primary", use_container_width=True)
@@ -741,6 +776,7 @@ def show_detection_page():
                         btn_view_rag = st.button("⚖️ Cek Dasar Regulasi Terkait (RAG)", key=f"btn_rag_{selected_claim}", use_container_width=True)
 
                     dossier_key = f"generated_bap_{selected_claim}"
+                    rag_key = f"rag_results_{selected_claim}"
 
                     if btn_gen_bap:
                         with st.spinner("🤖 Menyusun Berita Acara Pemeriksaan (BAP)..."):
@@ -757,14 +793,55 @@ def show_detection_page():
                                 query=" ".join(claim_ctx.get("active_rules", [])) + f" {claim_ctx.get('service_code')} {claim_ctx.get('diagnosis_code')}",
                                 top_k=3
                             )
-                            st.markdown("##### 📚 Regulasi Medis Terkait:")
-                            for doc in matched_docs:
-                                st.info(f"**{doc['title']}** ({doc['category']})\n\n{doc['content']}")
+                            st.session_state[rag_key] = matched_docs
 
+                    # ── RAG RESULTS PANEL ──
+                    if rag_key in st.session_state:
+                        matched_docs = st.session_state[rag_key]
+                        st.markdown("---")
+                        st.markdown("#### 📚 Referensi Regulasi Terkait (RAG Knowledge Base)")
+                        if matched_docs:
+                            for i, doc in enumerate(matched_docs, 1):
+                                with st.expander(f"📋 [{i}] {doc.get('title', 'Regulasi')} — {doc.get('category', '')}"):
+                                    st.markdown(f"""
+                                    <div style="background:#f8fafc;border-left:4px solid #3b82f6;border-radius:0 8px 8px 0;padding:10px 14px;font-size:0.87rem;color:#334155;line-height:1.6;">
+                                    {doc.get('content', 'Konten tidak tersedia.')}
+                                    </div>
+                                    """, unsafe_allow_html=True)
+                        else:
+                            st.info("Tidak ditemukan regulasi yang relevan untuk aturan dan kode tindakan klaim ini.")
+
+                    # ── DOSSIER / BAP REPORT PANEL ──
                     if dossier_key in st.session_state:
                         dossier_data = st.session_state[dossier_key]
                         st.markdown("---")
+
+                        # Metadata strip above the report
+                        meta_provider = dossier_data.get("provider_used", "heuristic").upper()
+                        meta_hash = dossier_data.get("audit_hash", "N/A")
+                        meta_generated = dossier_data.get("generated_at", pd.Timestamp.now().strftime('%d %B %Y %H:%M:%S WIB'))
+                        meta_investigator = dossier_data.get("investigator_name", auditor_name)
+                        meta_rules_count = len(dossier_data.get("active_rules", []))
+
+                        st.markdown(f"""
+                        <div style="background:linear-gradient(135deg,#0f172a,#1e293b);border-radius:10px 10px 0 0;padding:10px 18px;display:flex;flex-wrap:wrap;gap:14px;align-items:center;">
+                            <div style="color:#f8fafc;font-size:0.78rem;font-weight:700;letter-spacing:0.5px;flex:1;min-width:200px;">
+                                🗂️ <span style="opacity:0.7;">Berkas BAP</span> &nbsp;|&nbsp; Nomor: <code style="background:rgba(255,255,255,0.1);padding:2px 7px;border-radius:4px;font-size:0.75rem;">{dossier_data.get('dossier_number', f"BAP/{selected_claim}/...")}</code>
+                            </div>
+                            <div style="display:flex;flex-wrap:wrap;gap:8px;">
+                                <span style="background:rgba(59,130,246,0.2);color:#93c5fd;border:1px solid rgba(59,130,246,0.3);border-radius:12px;padding:2px 10px;font-size:0.72rem;font-weight:600;">🧠 Engine: {meta_provider}</span>
+                                <span style="background:rgba(16,185,129,0.15);color:#34d399;border:1px solid rgba(16,185,129,0.3);border-radius:12px;padding:2px 10px;font-size:0.72rem;font-weight:600;">⚠️ {meta_rules_count} Aturan Terpicu</span>
+                                <span style="background:rgba(245,158,11,0.15);color:#fbbf24;border:1px solid rgba(245,158,11,0.3);border-radius:12px;padding:2px 10px;font-size:0.72rem;font-weight:600;">🔐 Hash: {meta_hash}</span>
+                                <span style="background:rgba(148,163,184,0.1);color:#94a3b8;border:1px solid rgba(148,163,184,0.2);border-radius:12px;padding:2px 10px;font-size:0.72rem;">🕐 {meta_generated}</span>
+                            </div>
+                        </div>
+                        <div style="background:#ffffff;border:1px solid #e2e8f0;border-top:none;border-radius:0 0 10px 10px;padding:20px 24px;">
+                        """, unsafe_allow_html=True)
+
                         st.markdown(dossier_data.get("dossier_text", ""))
+
+                        st.markdown("</div>", unsafe_allow_html=True)
+
                         st.download_button(
                             label="📥 Unduh Dokumen BAP (.md)",
                             data=dossier_data.get("dossier_text", ""),
@@ -773,7 +850,7 @@ def show_detection_page():
                             key=f"dl_bap_md_{selected_claim}"
                         )
 
-                    # Interactive Q&A
+                    # ── INTERACTIVE Q&A ──
                     st.markdown("---")
                     st.markdown("##### 💬 Tanya Copilot tentang Klaim Ini:")
                     q_col1, q_col2 = st.columns([4, 1])
@@ -785,7 +862,12 @@ def show_detection_page():
                     if ask_clicked and user_question:
                         with st.spinner("🤖 Menganalisis respon audit..."):
                             ans = copilot_engine.answer_investigator_query(context=claim_ctx, user_question=user_question)
-                            st.success(ans)
+                            st.markdown(
+                                f'<div style="background:#f0f9ff;border:1px solid #bae6fd;border-left:4px solid #0284c7;border-radius:0 8px 8px 0;padding:14px 18px;margin-top:8px;">'
+                                f'{ans}'
+                                f'</div>',
+                                unsafe_allow_html=True
+                            )
 
         # ── TAB 5: Concept Drift ──
         with tab_drift:

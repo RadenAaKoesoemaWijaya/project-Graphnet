@@ -164,11 +164,23 @@ class AgenticInvestigatorCopilot:
         else:
             response_text = self._generate_heuristic_dossier(context, rag_context, investigator_name)
 
+        # Build clean cryptographic audit hash mockup for integrity
+        import hashlib
+        claim_id_str = str(context.get("claim_id", "CLM-UNKNOWN"))
+        audit_hash = hashlib.sha256(f"{claim_id_str}-{context.get('final_risk_score', 0)}-{investigator_name}".encode('utf-8')).hexdigest()[:16].upper()
+
         return {
             "claim_id": context.get("claim_id"),
             "provider_used": self.provider,
             "dossier_text": response_text,
             "regulatory_citations": rag_context,
+            "dossier_number": f"BAP/{claim_id_str}/{pd.Timestamp.now().strftime('%Y%m%d')}",
+            "audit_hash": f"ASTINA-SEC-{audit_hash}",
+            "generated_at": pd.Timestamp.now().strftime('%d %B %Y %H:%M:%S WIB'),
+            "investigator_name": investigator_name,
+            "final_risk_score": context.get("final_risk_score", 0.0),
+            "severity": context.get("severity", "Medium"),
+            "active_rules": context.get("active_rules", []),
             "status": "success"
         }
 
@@ -186,17 +198,18 @@ class AgenticInvestigatorCopilot:
         )
 
         prompt = (
-            f"Anda adalah AI Assistant Spesialis Verifikasi Fraud Klaim Asuransi Kesehatan (ASTINA).\n"
-            f"Konteks Klaim Terpilih:\n"
-            f"- Claim ID: {context.get('claim_id')}\n"
-            f"- Provider: {context.get('provider_id')}\n"
-            f"- Layanan/Diagnosis: {context.get('service_code')} / {context.get('diagnosis_code')}\n"
-            f"- Nominal: Rp {context.get('billed_amount', 0):,}\n"
-            f"- Aturan Terlanggar: {', '.join(context.get('active_rules', ['Tidak ada']))}\n"
-            f"- Skor Risiko: {context.get('final_risk_score', 0.0):.2f} (Severity: {context.get('severity')})\n\n"
-            f"Dasar Regulasi Terkait (RAG):\n{rag_context}\n\n"
-            f"Pertanyaan Investigator: {user_question}\n\n"
-            f"Berikan jawaban profesional, lugas, dan terstruktur berbasis regulasi dan data teknis di atas:"
+            f"Anda adalah AI Investigator Copilot ASTINA (Sistem Deteksi Fraud Asuransi Kesehatan).\n"
+            f"Jawab pertanyaan auditor berikut dengan ringkas, padat, profesional, dan to-the-point.\n\n"
+            f"Data Klaim: Claim ID={context.get('claim_id')}, Faskes={context.get('provider_id')}, "
+            f"Diagnosa={context.get('diagnosis_code')}, Tindakan={context.get('service_code')}, "
+            f"Tagihan=Rp {context.get('billed_amount', 0):,}, Skor Risiko={context.get('final_risk_score', 0.0):.2f} ({context.get('severity')}), "
+            f"Pelanggaran Aturan={', '.join(context.get('active_rules', ['N/A']))}.\n\n"
+            f"Regulasi Terkait:\n{rag_context}\n\n"
+            f"Pertanyaan: {user_question}\n\n"
+            f"Format jawaban:\n"
+            f"1. **Kesimpulan Utama** (1 kalimat langsung menjawab)\n"
+            f"2. **Poin Bukti & Regulasi** (2-3 poin ringkas)\n"
+            f"3. **Tindakan Auditor yang Disarankan** (1-2 langkah konkret)"
         )
 
         if self.provider == "gemini" and self.api_key:
@@ -215,14 +228,14 @@ class AgenticInvestigatorCopilot:
     def _build_dossier_prompt(self, context: Dict[str, Any], rag_context: str, investigator_name: str) -> str:
         return f"""
 Anda adalah Senior Medical Auditor & Fraud Investigator di platform Hybrid AI ASTINA.
-Tugas Anda adalah menyusun Berita Acara Pemeriksaan (BAP) dan Resume Investigasi Formal atas klaim asuransi kesehatan yang terindikasi anomali berisiko tinggi.
+Tugas Anda adalah menyusun Berita Acara Pemeriksaan (BAP) dan Resume Investigasi yang rapi, ringkas, profesional, dan informatif.
 
 [DATA TEKNIS KLAIM]
 - Nomor Klaim: {context.get('claim_id')}
 - ID Pasien (Masked): {context.get('patient_id')}
 - Kode Provider/Faskes: {context.get('provider_id')}
-- Kode Tindakan / Prosedur: {context.get('service_code')}
-- Kode Diagnosis ICD: {context.get('diagnosis_code')}
+- Tindakan/Prosedur: {context.get('service_code')}
+- Diagnosis ICD-10: {context.get('diagnosis_code')}
 - Total Tagihan: Rp {context.get('billed_amount', 0):,}
 - Total Dibayar: Rp {context.get('paid_amount', 0):,}
 - Skor Anomali ML & GNN: {context.get('anomaly_score', 0.0):.2f}
@@ -234,19 +247,37 @@ Tugas Anda adalah menyusun Berita Acara Pemeriksaan (BAP) dan Resume Investigasi
 [DASAR HUKUM & REGULASI RELEVAN (RAG)]
 {rag_context}
 
-[FORMAT DOKUMEN BAP YANG WAJIB DISUSUN]
-Sajikan dokumen dalam format Markdown resmi dengan struktur berikut:
+[PANDUAN FORMAT DOKUMEN BAP]
+Sajikan dokumen dalam Markdown resmi yang rapi, ringkas, dan to-the-point menggunakan struktur berikut:
 # 📑 BERITA ACARA PEMERIKSAAN KLAIM ANOMALI (BAP-FRAUD)
-## I. IDENTITAS KASUS & RINGKASAN EKSEKUTIF
-## II. TEMUAN INDIKASI FRAUD & ANALISIS HYBRID AI
-(Jelaskan kontribusi ML/SHAP, pelanggaran aturan bisnis, dan relasi graf kolusi)
-## III. KAJIAN KEPATUHAN REGULASI & KONTRAK
-(Sebutkan pasal dan pedoman regulasi yang dilanggar berdasarkan referensi di atas)
-## IV. REKOMENDASI TINDAK LANJUT AUDIT
-(Berikan 3-4 langkah investigasi nyata, misal: uji petik rekam medis, audit kapasitas dokter, atau penundaan pembayaran/klaim balik)
-## V. PENGESAHAN AUDITOR
-Auditor: {investigator_name}
-Tanggal: {pd.Timestamp.now().strftime('%d %B %Y')}
+> **Ref**: `BAP/{context.get('claim_id')}/{pd.Timestamp.now().strftime('%Y%m%d')}` | **Klasifikasi**: `{context.get('severity', 'HIGH').upper()} RISK` (Skor: {context.get('final_risk_score', 0.0):.2f}) | **Status**: `INVESTIGASI AUDIT LANJUTAN`
+
+### I. IDENTITAS KASUS & RINGKASAN EKSEKUTIF
+| Parameter | Keterangan | Parameter | Keterangan |
+| :--- | :--- | :--- | :--- |
+| **No. Klaim** | `{context.get('claim_id')}` | **Faskes / Provider** | `{context.get('provider_id')}` |
+| **Pasien (Masked)** | `{context.get('patient_id')}` | **Diagnosis (ICD-10)** | `{context.get('diagnosis_code')}` |
+| **Kode Layanan** | `{context.get('service_code')}` | **Nilai Pengajuan** | `Rp {context.get('billed_amount', 0):,}` |
+
+*Ringkasan*: (Jelaskan dalam 2-3 kalimat lugas inti anomali dan potensi overbilling).
+
+### II. TEMUAN INDIKASI FRAUD & ANALISIS HYBRID AI
+- **Pelanggaran Aturan Bisnis**: (Sebutkan aturan yang dilanggar secara spesifik)
+- **Faktor Pemicu ML & SHAP**: (Uraikan kontribusi fitur anomali)
+- **Topologi Jaringan GNN**: (Keterkaitan pola tagihan berulang/kolusi pada faskes)
+
+### III. KAJIAN KEPATUHAN REGULASI (RAG KNOWLEDGE BASE)
+(Uraikan pasal dan ketentuan Permenkes / INA-CBGs / FORNAS yang relevan secara ringkas dan lugas)
+
+### IV. REKOMENDASI TINDAK LANJUT AUDIT
+1. **[Prioritas 1 - Urgent]**: (Tindakan pembekuan pembayaran / verifikasi billing)
+2. **[Prioritas 2 - Klinis]**: (Uji petik rekam medis & konfirmasi tindakan)
+3. **[Prioritas 3 - Faskes]**: (Audit kepatuhan provider & historis penagihan)
+
+### V. PENGESAHAN AUDITOR
+- **Penyusun Analisis**: {investigator_name}
+- **Sistem**: ASTINA Hybrid AI Engine
+- **Tanggal**: {pd.Timestamp.now().strftime('%d %B %Y %H:%M:%S WIB')}
 """
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -327,62 +358,84 @@ Tanggal: {pd.Timestamp.now().strftime('%d %B %Y')}
         without requiring active LLM API keys or internet connection.
         """
         claim_id = context.get("claim_id", "CLM-UNKNOWN")
+        patient_id = context.get("patient_id", "PAT-ANON")
         provider_id = context.get("provider_id", "PROV-UNKNOWN")
+        service_code = context.get("service_code", "N/A")
+        diagnosis_code = context.get("diagnosis_code", "N/A")
         rules = context.get("active_rules", [])
-        rules_text = "\n".join([f"- **{r}**" for r in rules]) if rules else "- *Anomali statistik murni (Outlier Deviasi Multivariat)*"
+        rules_text = "\n".join([f"- **{r}**: Terdeteksi ketidakwajaran pola penagihan melebihi ambang batas kepatuhan." for r in rules]) if rules else "- *Anomali statistik murni (Outlier Deviasi Multivariat)*"
         amount = context.get("billed_amount", 0)
+        paid_amount = context.get("paid_amount", 0)
         risk_score = context.get("final_risk_score", 0.0)
+        anomaly_score = context.get("anomaly_score", risk_score)
         severity = context.get("severity", "High")
+        shap_feats = context.get("top_shap_features", [])
+        shap_text = ", ".join(shap_feats) if shap_feats else "Deviasi tarif di atas median grup diagnosa, rasio klaim berulang temporal"
 
         return f"""# 📑 BERITA ACARA PEMERIKSAAN KLAIM ANOMALI (BAP-FRAUD)
-**Nomor Berkas**: `BAP/{claim_id}/{pd.Timestamp.now().strftime('%Y%m%d')}`  
-**Tingkat Risiko**: `{severity.upper()} RISK (Skor: {risk_score:.2f})`
+> **No. Berkas**: `BAP/{claim_id}/{pd.Timestamp.now().strftime('%Y%m%d')}` &nbsp;|&nbsp; **Klasifikasi Risiko**: `{severity.upper()} RISK` (Skor: **{risk_score:.2f}**) &nbsp;|&nbsp; **Status**: `PERLU TINDAK LANJUT AUDIT`
 
 ---
 
 ### I. IDENTITAS KASUS & RINGKASAN EKSEKUTIF
-Pada hari ini, sistem analitik **Hybrid AI ASTINA** menandai klaim dengan nomor **`{claim_id}`** dari Faskes/Provider **`{provider_id}`** dengan total tagihan sebesar **Rp {amount:,.0f}**. Klaim ini memiliki probabilitas anomali statistik tinggi dan melanggar parameter audit kepatuhan.
+
+| Atribut Klaim | Data Nilai | Atribut Klaim | Data Nilai |
+| :--- | :--- | :--- | :--- |
+| **Nomor Klaim** | `{claim_id}` | **Faskes / Provider** | `{provider_id}` |
+| **ID Pasien (Masked)** | `{patient_id}` | **Diagnosis (ICD-10)** | `{diagnosis_code}` |
+| **Kode Prosedur** | `{service_code}` | **Total Diajukan** | **Rp {amount:,.0f}** |
+| **Total Dibayar** | Rp {paid_amount:,.0f} | **Skor Anomali ML** | **{anomaly_score:.2f}** |
+
+**Ringkasan Singkat:**
+Sistem analitik **Hybrid AI ASTINA** mendeteksi klaim nomor **`{claim_id}`** dari faskes **`{provider_id}`** memiliki indikasi deviasi biaya dan pola kepatuhan klinis dengan skor risiko gabungan **{risk_score:.2f}** ({severity} Risk). Direkomendasikan verifikasi dokumen fisik sebelum proses pencairan.
 
 ---
 
 ### II. TEMUAN INDIKASI FRAUD & ANALISIS HYBRID AI
-Berdasarkan evaluasi ensemble Machine Learning (Isolation Forest, Autoencoder, XGBoost) dan 9 Modul Aturan Bisnis, ditemukan anomali berikut:
 {rules_text}
 
-- **Analisis Fitur SHAP**: Anomali didorong oleh deviasi ekstrem pada variabel nominal tagihan, rasio pembayaran terhadap tarif disetujui, dan pola frekuensi penagihan temporal.
-- **Topologi Jaringan GNN**: Pola relasi klaim menunjukkan keterkaitan cluster pada faskes dan kode diagnosis `{context.get('diagnosis_code', '-')}` yang berulang dalam periode audit.
+- **Analisis Driver Fitur (SHAP)**: Anomali didorong signifikan oleh `{shap_text}`.
+- **Topologi Jaringan GNN**: Teridentifikasi keterkaitan klaster penagihan pada provider `{provider_id}` untuk diagnosis `{diagnosis_code}` dalam jendela waktu audit.
 
 ---
 
-### III. KAJIAN KEPATUHAN REGULASI & KONTRAK (RAG KNOWLEDGE BASE)
-Merujuk pada basis regulasi dan standar pelayanan asuransi kesehatan:
+### III. KAJIAN KEPATUHAN REGULASI (RAG KNOWLEDGE BASE)
+Berdasarkan penelusuran semantik regulasi pada basis pengetahuan ASTINA:
+
 {rag_context}
 
 ---
 
 ### IV. REKOMENDASI TINDAK LANJUT INVESTIGASI
-1. **Uji Petik Dokumen Klinis**: Meminta resume medis lengkap, catatan keperawatan (*nursing notes*), dan bukti fisik billing tindakan `{context.get('service_code', '-')}` dari Faskes `{provider_id}`.
-2. **Klarifikasi Langsung**: Melakukan konfirmasi langsung kepada pasien/keluarga terkait kebenaran waktu layanan dan tindakan yang diterima.
-3. **Pemberhentian Pembayaran Sementara**: Menangguhkan pencairan pembayaran (*pending disbursement*) untuk klaim `{claim_id}` hingga audit verifikasi selesai.
-4. **Audit Historis Faskes**: Membuka audit mendalam (*deep review*) atas seluruh riwayat penagihan faskes `{provider_id}` dalam kurun 12 bulan terakhir.
+1. **[Prioritas 1 - Urgent] Penundaan Pembayaran**: Menangguhkan sementara pencairan (*pending disbursement*) klaim `{claim_id}` hingga klarifikasi tuntas.
+2. **[Prioritas 2 - Klinis] Uji Petik Berkas Medis**: Meminta rekam medis lengkap, lembar persetujuan (*informed consent*), dan rincian billing tindakan `{service_code}` dari Faskes `{provider_id}`.
+3. **[Prioritas 3 - Pasien] Verifikasi Layanan**: Konfirmasi sampel ke pasien/keluarga terkait kesesuaian waktu pelayanan dan penerimaan obat/tindakan.
+4. **[Prioritas 4 - Faskes] Audit Historis Provider**: Membuka audit historis penagihan faskes `{provider_id}` untuk pola diagnosis `{diagnosis_code}`.
 
 ---
 
 ### V. PENGESAHAN AUDITOR
-**Penyusun Analisis**: {investigator_name}  
-**Sistem**: ASTINA Hybrid AI Investigation Engine  
-**Tanggal Terbit**: {pd.Timestamp.now().strftime('%d %B %Y %H:%M:%S WIB')}
+- **Penyusun Berkas**: {investigator_name}
+- **Mesin Inferensi**: ASTINA Agentic Copilot & Hybrid AI Engine
+- **Waktu Terbit**: {pd.Timestamp.now().strftime('%d %B %Y %H:%M:%S WIB')}
 """
 
     def _generate_heuristic_query_answer(self, context: Dict[str, Any], user_question: str, rag_context: str) -> str:
         rules = context.get("active_rules", [])
+        claim_id = context.get("claim_id", "CLM-UNKNOWN")
+        severity = context.get("severity", "Medium")
+        score = context.get("final_risk_score", 0.0)
+        amount = context.get("billed_amount", 0)
+
         return (
-            f"**Analisis Asistif ASTINA untuk Klaim {context.get('claim_id')}:**\n\n"
-            f"Berdasarkan pertanyaan Anda (*\"{user_question}\"*), klaim ini tercatat memiliki tingkat risiko **{context.get('severity')}** "
-            f"dengan skor komposit **{context.get('final_risk_score', 0.0):.2f}**.\n\n"
-            f"**Faktor Kunci yang Terdeteksi:**\n"
-            f"- Aturan bisnis terpicu: {', '.join(rules) if rules else 'Anomali probabilitas model ML'}\n"
-            f"- Nominal diajukan: Rp {context.get('billed_amount', 0):,}\n\n"
-            f"**Konteks Regulasi:**\n{rag_context}\n\n"
-            f"**Saran Investigator**: Lakukan pencocokan antara tanggal tagihan dengan lembar persetujuan tindakan medis (*informed consent*) di rekam medis fisik."
+            f"**💡 Analisis AI Copilot untuk Klaim `{claim_id}`:**\n\n"
+            f"**1. Kesimpulan Utama:**\n"
+            f"Klaim ini diklasifikasikan sebagai **{severity.upper()} RISK** (Skor: **{score:.2f}**) dengan total tagihan **Rp {amount:,.0f}**.\n\n"
+            f"**2. Poin Bukti & Aturan Terpicu:**\n"
+            f"- Pelanggaran aturan: {', '.join(rules) if rules else 'Anomali deviasi statistik ML'}\n"
+            f"- Terindikasi ketidaksesuaian tarif atau frekuensi klaim terhadap pola normal kelompok diagnosis serupa.\n\n"
+            f"**3. Rujukan Regulasi Relevan:**\n"
+            f"{rag_context[:350]}...\n\n"
+            f"**4. Arahan Investigator:**\n"
+            f"Lakukan uji petik berkas rekam medis dan cocokkan tanggal tindakan `{context.get('service_code', '-')}` dengan log billing faskes."
         )
