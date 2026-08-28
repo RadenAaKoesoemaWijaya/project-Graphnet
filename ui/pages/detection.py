@@ -797,13 +797,33 @@ def show_detection_page():
                     try:
                         from model_explainer import ConceptDriftDetector, AdaptiveLearningManager
                         
-                        # Reference data
-                        if 'train_df' in st.session_state:
-                            ref_data = st.session_state['train_df']
-                            ref_feats = [c for c in training_features if c in ref_data.columns]
-                            reference_data = ref_data[ref_feats] if ref_feats else df_result[training_features].head(1000)
+                        training_stats = (getattr(detector, 'training_metadata', {}) or {}).get('feature_medians', {})
+
+                        # 1. Siapkan Current Data (inferensi saat ini) yang sudah dialignkan fiturnya
+                        source_new_df = st.session_state.get('detection_processed_df', df_result)
+                        aligned_current_df, _ = build_aligned_inference_features(
+                            source_new_df, training_features, training_stats=training_stats
+                        )
+                        current_features_df = aligned_current_df[training_features].apply(pd.to_numeric, errors='coerce').fillna(0)
+
+                        # 2. Siapkan Baseline Reference Data
+                        if 'train_df' in st.session_state and st.session_state['train_df'] is not None:
+                            aligned_ref_df, _ = build_aligned_inference_features(
+                                st.session_state['train_df'], training_features, training_stats=training_stats
+                            )
+                            reference_data = aligned_ref_df[training_features].apply(pd.to_numeric, errors='coerce').fillna(0)
+                            eval_data = current_features_df
                         else:
-                            reference_data = df_result[training_features].head(1000)
+                            # Fallback jika model dimuat tanpa train_df di memori:
+                            if len(current_features_df) >= 200:
+                                split_idx = max(int(len(current_features_df) * 0.3), 100)
+                                reference_data = current_features_df.iloc[:split_idx]
+                                eval_data = current_features_df.iloc[split_idx:]
+                                st.info(f"ℹ️ Menggunakan {len(reference_data):,} sampel awal sebagai baseline referensi perbandingan.")
+                            else:
+                                reference_data = current_features_df
+                                eval_data = current_features_df
+                                st.info("ℹ️ Baseline menggunakan batch sampel inferensi yang tersedia.")
 
                         drift_detector = ConceptDriftDetector(
                             reference_data=reference_data,
@@ -811,9 +831,8 @@ def show_detection_page():
                             threshold=0.05
                         )
                         
-                        aligned_drift_df, _ = build_aligned_inference_features(df_result, training_features)
                         drift_detected, drift_report = drift_detector.detect_drift(
-                            aligned_drift_df[training_features],
+                            eval_data,
                             method='ks_test'
                         )
 
@@ -827,3 +846,4 @@ def show_detection_page():
 
                     except Exception as drift_err:
                         st.error(f"Gagal mendeteksi concept drift: {str(drift_err)}")
+                        logger.error(f"Concept drift error: {drift_err}", exc_info=True)
