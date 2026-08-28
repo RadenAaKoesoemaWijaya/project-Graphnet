@@ -103,19 +103,19 @@ def _build_safety_summary(df_result: pd.DataFrame, risk_summary: dict) -> list:
     """Assemble the executive summary cards for the UI."""
     total_claims = len(df_result)
     anomaly_claims = int(df_result.get('anomaly_prediction', pd.Series(0, index=df_result.index)).sum())
-    high_risk_claims = int(risk_summary.get('high_risk_claims', risk_summary.get('final_high_risk_claims', 0)))
+    high_risk_claims = int(risk_summary.get('high_risk_claims') or risk_summary.get('final_high_risk_claims') or 0)
     risk_cards = [
         ("Total Klaim", total_claims),
         ("Anomali", anomaly_claims),
         ("High Risk", high_risk_claims),
-        ("Repeat Billing", int(risk_summary.get('repeat_billing_cases', 0))),
-        ("Phantom", int(risk_summary.get('phantom_service_cases', 0))),
-        ("Provider Capacity", int(risk_summary.get('provider_capacity_issues', 0))),
-        ("Duplicate Payment", int(risk_summary.get('duplicate_payment_claims', 0))),
-        ("Upcoding", int(risk_summary.get('upcoding_unbundling_cases', 0))),
-        ("Cloning", int(risk_summary.get('inflated_bill_cloning_cases', 0))),
-        ("Stay Risk", int(risk_summary.get('prolonged_stay_readmission_cases', 0))),
-        ("Med/Device", int(risk_summary.get('medication_device_fraud_cases', 0))),
+        ("Repeat Billing", int(risk_summary.get('repeat_billing_cases') or 0)),
+        ("Phantom", int(risk_summary.get('phantom_service_cases') or 0)),
+        ("Provider Capacity", int(risk_summary.get('provider_capacity_issues') or 0)),
+        ("Duplicate Payment", int(risk_summary.get('duplicate_payment_claims') or 0)),
+        ("Upcoding", int(risk_summary.get('upcoding_unbundling_cases') or 0)),
+        ("Cloning", int(risk_summary.get('inflated_bill_cloning_cases') or 0)),
+        ("Stay Risk", int(risk_summary.get('prolonged_stay_readmission_cases') or 0)),
+        ("Med/Device", int(risk_summary.get('medication_device_fraud_cases') or 0)),
     ]
     return risk_cards
 
@@ -194,7 +194,7 @@ def show_detection_page():
             navigate_to_page('train')
         return
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') if (torch is not None and getattr(torch, 'cuda', None) is not None) else 'cpu'
     training_features = (
         st.session_state.get('training_features')
         or getattr(detector, 'training_metadata', {}).get('training_features')
@@ -361,7 +361,7 @@ def show_detection_page():
             st.rerun()
 
     # ── 5. Execution Pipeline ──────────────────────────────────────────────────
-    if run_detection_clicked:
+    if run_detection_clicked and isinstance(raw_df, pd.DataFrame):
         with st.spinner("⏳ Memproses data, merekonstruksi fitur inferensi, dan menjalankan multi-model ensemble..."):
             try:
                 # 1. Preprocessing with cache
@@ -377,6 +377,9 @@ def show_detection_page():
                     )
                     st.session_state['detection_processed_df'] = df_processed
                     st.session_state['detection_feature_columns'] = feature_columns_proc
+
+                if not isinstance(df_processed, pd.DataFrame):
+                    df_processed = pd.DataFrame(df_processed)
 
                 # 2. Strict feature alignment with training metadata
                 training_stats: dict = (
@@ -420,13 +423,13 @@ def show_detection_page():
 
                 # 5. Build results DataFrame
                 df_result = raw_df.copy()
-                df_result['anomaly_probability'] = probabilities
-                df_result['anomaly_prediction'] = predictions
-                df_result['isolation_forest_score'] = individual_probs.get('isolation_forest', np.zeros(len(df_result)))
-                df_result['autoencoder_score'] = individual_probs.get('autoencoder', np.zeros(len(df_result)))
+                df_result['anomaly_probability'] = np.asarray(probabilities, dtype=float)
+                df_result['anomaly_prediction'] = np.asarray(predictions, dtype=int)
+                df_result['isolation_forest_score'] = np.asarray(individual_probs.get('isolation_forest', np.zeros(len(df_result))), dtype=float)
+                df_result['autoencoder_score'] = np.asarray(individual_probs.get('autoencoder', np.zeros(len(df_result))), dtype=float)
                 if 'dbscan' in individual_probs:
-                    df_result['dbscan_score'] = individual_probs['dbscan']
-                df_result['xgboost_score'] = individual_probs.get('xgboost', np.zeros(len(df_result)))
+                    df_result['dbscan_score'] = np.asarray(individual_probs['dbscan'], dtype=float)
+                df_result['xgboost_score'] = np.asarray(individual_probs.get('xgboost', np.zeros(len(df_result))), dtype=float)
 
                 # 6. Integrated Claim Risk Pipeline (9 Business Rules + Composite Scoring)
                 from fraud_risk_pipeline import run_integrated_claim_risk_pipeline
@@ -488,8 +491,10 @@ def show_detection_page():
         with tab_summary:
             v_col1, v_col2 = st.columns(2)
             with v_col1:
-                pred_counts = df_result['anomaly_prediction'].value_counts()
-                fig_pred = create_bar_chart(['Normal', 'Anomali'], pred_counts.values,
+                pred_series = pd.to_numeric(df_result['anomaly_prediction'], errors='coerce').fillna(0).astype(int)
+                normal_count = int((pred_series == 0).sum())
+                anomaly_count = int((pred_series == 1).sum())
+                fig_pred = create_bar_chart(['Normal', 'Anomali'], [normal_count, anomaly_count],
                                            title='Distribusi Prediksi Anomali',
                                            labels={'x': 'Kategori', 'y': 'Jumlah'})
                 fig_pred.update_layout(showlegend=False)
@@ -720,8 +725,7 @@ def show_detection_page():
                     }
                     copilot_engine = AgenticInvestigatorCopilot(
                         provider=provider_map.get(provider_choice, "heuristic"),
-                        api_key=api_key_input,
-                        investigator_name=auditor_name
+                        api_key=api_key_input
                     )
 
                     claim_ctx = ClaimContextBuilder.build_sanitized_context(

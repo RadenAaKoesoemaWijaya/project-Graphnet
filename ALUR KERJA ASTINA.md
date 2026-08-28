@@ -188,14 +188,31 @@ python run.py
   - *Local Instance Explanation*: LIME Waterfall Plot dan Force Plot untuk membedah alasan individual suatu klaim ditandai anomali.
 - **GNN Relational Contribution**: Analisis kontribusi koneksi graf terhadap probabilitas anomali klaim.
 
-### 4.5 Detection & AI Copilot (`ui/pages/detection.py`)
-- **Batch Detection Engine**: Input dataset klaim baru (CSV/XLSX/Parquet) untuk diinspeksi secara serentak.
-- **Smart Feature Alignment**: Otomatis menyelaraskan kolom klaim baru dengan skema fitur model latih, mengimputasi fitur yang hilang menggunakan median data latih (`training_stats`).
-- **9 Business Rules Execution**: Menjalankan 9 modul audit aturan medis secara global untuk mendeteksi pelanggaran deterministik.
-- **Tabel Review Fraud Interaktif**: Menampilkan daftar klaim dengan pengurutan tingkat keparahan (*High Risk*, *Medium Risk*, *Low Risk*), ringkasan bukti pelanggaran, dan opsi ekspor CSV/Excel/JSON.
-- **Agentic AI Copilot & Knowledge RAG**:
-  - Panel obrolan cerdas berbasis LLM yang terintegrasi dengan vector store FAISS.
-  - Menjawab pertanyaan investigator terkait regulasi medis, standar kode ICD-10 / CPT, dan rekomendasi investigasi klinis.
+### 4.5 Detection, Rule Auditing & AI Copilot Workspace (`ui/pages/detection.py`)
+Halaman deteksi menyediakan alur kerja investigasi terpadu berbasis **5 Tab Spesifik**:
+- **Smart Data Ingestion & Feature Alignment**:
+  - Mendukung input dataset multi-sumber: unggah file baru (CSV, Excel xlsx/xls, Parquet), reuse dataset session aktif, atau sampel demo bawaan.
+  - *Smart Feature Alignment*: Menyelaraskan nama dan tipe kolom klaim uji dengan skema fitur model terlatih (`training_features`), serta melakukan imputasi statistik nilai hilang berbasis median training (`feature_medians`).
+  - *Hardware-Aware Multi-Model Inference*: Inferensi ensemble (Isolation Forest, Autoencoder, XGBoost, GNN) dengan alokasi otomatis komputasi CUDA GPU / CPU yang aman.
+- **Tab 1: 📊 Ringkasan & Visualisasi**:
+  - *Grafik Distribusi Prediksi Anomali*: Visualisasi seimbang jumlah klaim `Normal` vs `Anomali` yang stabil pada berbagai proporsi dataset.
+  - *Histogram Skor Probabilitas Anomali*: Distribusi probabilitas ensemble multi-model dilengkapi garis ambang batas (*threshold marker*).
+  - *Executive Risk Summary Panel*: 11 kartu ringkasan eksekutif (*Total Klaim, Anomali, High Risk, Repeat Billing, Phantom Service, Provider Capacity, Duplicate Payment, Upcoding & Unbundling, Inflated Bill Cloning, Length of Stay Risk, Medication/Device Fraud*).
+  - *Proporsi Risiko per Kategori*: Diagram batang dan *donut chart* proporsi kategori risiko klaim.
+- **Tab 2: 🚨 Business Risk & Rules**:
+  - Deteksi dan rincian pelanggaran klaim berulang (*Repeat Billing*) dan layanan fiktif (*Phantom Service*).
+  - Ringkasan komprehensif 9 modul aturan bisnis dengan statistik kasus dan rasio risiko.
+- **Tab 3: 📋 Fraud Review Table & Export**:
+  - Tabel audit interaktif klaim terfilter dengan badge keparahan (*🔴 High Risk*, *🟡 Medium Risk*, *🟢 Low Risk*).
+  - Filter pencarian instan, filter kategori risiko, dan pengurutan berbasis *Final Risk Score*.
+  - Ekspor hasil analisis lengkap ke berkas CSV atau Excel untuk pelaporan tim investigasi lapangan.
+- **Tab 4: 🤖 AI Investigator Copilot & BAP**:
+  - Pembuatan otomatis **Berita Acara Pemeriksaan (BAP)** dan resume medis formal.
+  - Didukung multi-provider LLM (Google Gemini, OpenAI / Azure, Local Ollama, dan Heuristic Engine Offline).
+  - Dilengkapi fitur pencarian dasar regulasi medis terkait (*Semantic RAG*) dan tombol unduh dokumen BAP dalam format Markdown (.md).
+- **Tab 5: 📈 Concept Drift & Retraining**:
+  - Uji pergeseran distribusi data (*Covariate & Concept Drift*) menggunakan uji statistik Kolmogorov-Smirnov.
+  - Pemicu otomatis re-evaluasi model *Champion vs Challenger* ketika terdeteksi degradasi performa atau pergeseran pola data transaksi klaim.
 
 ### 4.6 System Status & Audit (`ui/pages/status.py`)
 - Memonitor utilisasi CPU, RAM, Disk, dan GPU *real-time*.
@@ -325,18 +342,25 @@ $$\text{Final Risk Score} = 0.50(\text{Business Risk Score}) + 0.30(\text{ML Ano
 
 ## 9. Agentic AI Copilot & Knowledge RAG
 
-Modul `agentic_copilot.py` dan `rag_engine.py` bertindak sebagai asisten cerdas bagi investigator:
+Modul `agentic_copilot.py` dan `rag_engine.py` bertindak sebagai asisten investigasi otonom bagi investigator asuransi:
 
-1. **Knowledge Indexing (FAISS)**:
-   - Menyimpan vektor *embedding* dari standar ICD-10, kode CPT, regulasi BPJS/asuransi komersial, dan pedoman fraud medis.
-   - Menggunakan pencarian semantik hibrida (vektor FAISS + BM25 keyword match).
-2. **Multi-Provider LLM Integration**:
-   - Dukungan utama untuk **Google Gemini API** (`GEMINI_API_KEY`).
-   - Fallback otomatis ke **OpenAI API** (`OPENAI_API_KEY`).
-   - Fallback deterministik berbasis *Rule & Heuristic Medical Expert Engine* jika tidak ada koneksi internet / API key.
-3. **Structured Investigative Reasoning**:
-   - Menjelaskan temuan anomali data secara klinis dan finansial.
-   - Memberikan rekomendasi langkah audit forensik (misal: verifikasi berkas rekam medis fisik, konfirmasi langsung ke pasien, audit log faskes).
+1. **PII Sanitizer & Context Builder (`ClaimContextBuilder`)**:
+   - Mengekstrak atribut klaim terpilih, nilai SHAP kontribusi fitur teratas, dan klaster kolusi graf GNN.
+   - Melakukan anonimisasi/masking data sensitif pasien (NIK, Nama, Rekam Medis) secara otomatis sebelum dikirim ke model bahasa (LLM) sesuai kepatuhan UU PDP & HIPAA.
+
+2. **Knowledge Indexing & Regulatory Retrieval (`RAGEngine` & FAISS)**:
+   - Menyimpan vektor *embedding* dari standar ICD-10, pedoman kode CPT, regulasi asuransi kesehatan nasional/komersial, dan katalog indikator fraud medis.
+   - Menggunakan pencarian semantik hibrida (vektor FAISS + BM25 keyword match) untuk mencocokkan pasal aturan medis yang relevan dengan jenis pelanggaran yang terdeteksi.
+
+3. **Multi-Provider LLM Integration (`AgenticInvestigatorCopilot`)**:
+   - **Google Gemini**: Integrasi API berbasis `gemini-1.5-flash` / `gemini-1.5-pro`.
+   - **OpenAI / Azure**: Integrasi API model `gpt-4o` / `gpt-4-turbo`.
+   - **Local Ollama**: Eksekusi lokal model open-weight (`llama3`, `mistral`, `qwen`) tanpa dependensi cloud.
+   - **Deterministic Heuristic Engine**: Fallback otomatis berbasis aturan pakar medis terstruktur jika tidak tersedia koneksi internet atau kunci API.
+
+4. **Automated BAP & Medical Summary Generation**:
+   - Menghasilkan dokumen **Berita Acara Pemeriksaan (BAP)** terstruktur lengkap dengan identitas kasus, ringkasan profil risiko, temuan pelanggaran aturan bisnis, analisis klinis fitur anomali, dasar hukum/regulasi terkait, dan rekomendasi audit forensik.
+   - Dokumen BAP dapat langsung diunduh dalam format Markdown (`.md`) atau disalin untuk keperluan berkas perkara investigasi resmi.
 
 ---
 
