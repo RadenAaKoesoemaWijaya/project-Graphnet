@@ -10,6 +10,8 @@ from ui.utils import (
     generate_sample_claims_template,
     render_schema_readiness_card,
     TEMPLATE_CORE_COLUMNS,
+    COLUMN_DESCRIPTIONS,
+    COLUMN_RULE_DEPENDENCIES,
 )
 from agentic_copilot import AgenticInvestigatorCopilot, ClaimContextBuilder
 from rag_engine import get_rag_knowledge_base
@@ -251,6 +253,7 @@ def show_detection_page():
             data=template_csv,
             file_name="astina_claim_template.csv",
             mime="text/csv",
+            key="btn_download_astina_claim_template",
             help="Unduh template CSV dengan format kolom standar. Isi dengan data klaim Anda sebelum mengunggah.",
         )
     with col_tmpl2:
