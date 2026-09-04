@@ -57,8 +57,8 @@ project-Graphnet/
 ├── model.py                         # Arsitektur ML Ensemble (Autoencoder, XGBoost, GNN, Optuna)
 ├── model_registry.py                # Manajemen versi model & metadata training
 ├── model_explainer.py               # Modul interpretasi model (SHAP & LIME)
-├── agentic_copilot.py               # AI Copilot investigasi berbasis LLM & Agentic reasoning
-├── rag_engine.py                    # Knowledge base RAG berbasis FAISS & semantic search
+├── agentic_copilot.py               # AI Copilot investigasi berbasis LLM & Agentic reasoning (Zero-Wipeout Fallback)
+├── rag_engine.py                    # Knowledge base RAG berbasis FAISS, regulasi JKN & kaidah outlier ML
 ├── audit_trail.py                   # Engine pencatatan audit log berantai SHA-256
 ├── verify_audit_trail.py            # Skrip verifikasi integritas rantai log audit
 ├── pii_masker.py                    # Modul anonimisasi & masking data sensitif (PII)
@@ -84,9 +84,9 @@ project-Graphnet/
 │       ├── detection.py             # Deteksi fraud batch, rule audit, review table & AI Copilot
 │       └── status.py                # Telemetri performa sistem & audit logging
 │
-├── tests/                           # Unit test & integrasi otomatis (Pytest) - 53 Test Cases
+├── tests/                           # Unit test & integrasi otomatis (Pytest) - 63 Test Cases
 │   ├── conftest.py                  # Pytest fixtures & setup lingkungan uji
-│   ├── test_agentic_copilot.py      # Uji fungsionalitas Copilot & FAISS RAG engine
+│   ├── test_agentic_copilot.py      # Uji Copilot, FAISS RAG, zero-wipeout fallback, & XAI/GNN context
 │   ├── test_app_startup.py          # Uji startup & integritas import modul utama
 │   ├── test_detection_modules.py    # Test suite komprehensif 9 modul aturan & ML
 │   ├── test_feature_selection.py    # Uji metode seleksi fitur, multikolinearitas & varians
@@ -398,7 +398,7 @@ $$\text{Final Risk Score} = 0.50(\text{Business Risk Score}) + 0.30(\text{ML Ano
 * **Tab 1: 📊 Ringkasan & Visualisasi**: Distribusi klaim Normal vs Anomali yang seimbang, histogram probabilitas multi-model dengan garis ambang batas dinamis, panel ringkasan 11 kartu risiko eksekutif (*Total Klaim, Anomali, High Risk, Repeat Billing, Phantom, Provider Capacity, Duplicate, Upcoding, Cloning, Stay Risk, Med/Device*), dan visualisasi proporsi risiko kategori bar & donut chart.
 * **Tab 2: 🚨 Business Risk & Rules**: Analisis mendalam pelanggaran aturan bisnis (Repeat Billing & Phantom Service Insights).
 * **Tab 3: 📋 Fraud Review Table & Export**: Tabel audit interaktif terfilter dengan badge *severity* (🔴 High, 🟡 Medium, 🟢 Low), filter pencarian klaim, dan ekspor CSV/Excel/JSON.
-* **Tab 4: 🤖 AI Investigator Copilot & BAP**: Pembuatan Berita Acara Pemeriksaan (BAP) formal dan resume medis secara otomatis dalam format Markdown (.md) yang dapat langsung diunduh, didukung sitasi regulasi medis RAG FAISS dan integrasi multi-provider LLM (Gemini, OpenAI, Ollama, Heuristic).
+* **Tab 4: 🤖 AI Investigator Copilot & BAP**: Pembuatan Berita Acara Pemeriksaan (BAP) formal dan resume medis secara otomatis dalam format Markdown (.md) yang dapat langsung diunduh, didukung sitasi regulasi medis RAG FAISS (REG-001 s.d. REG-008 termasuk anomali outlier statistik ML), integrasi multi-provider LLM (Gemini, OpenAI, Ollama, Heuristic) dengan *zero-wipeout graceful fallback*, persistensi konfigurasi sesi, injeksi deviasi fitur XAI & klaster kolusi GNN, serta riwayat obrolan interaktif (*multi-turn Q&A*).
 * **Tab 5: 📈 Concept Drift & Retraining**: Uji statistik Kolmogorov-Smirnov untuk mendeteksi pergeseran pola klaim dan memicu retrain model Champion-Challenger.
 
 ### 8. Explainable AI & Transparansi Model
@@ -429,7 +429,7 @@ Konfigurasi opsional dapat disetel melalui file `.env` di direktori utama:
 
 ## 🧪 Pengujian & Validasi Kualitas
 
-Aplikasi dilengkapi suite pengujian otomatis komprehensif (**58 Test Cases**) untuk memverifikasi keandalan seluruh komponen sistem secara end-to-end:
+Aplikasi dilengkapi suite pengujian otomatis komprehensif (**63 Test Cases**) untuk memverifikasi keandalan seluruh komponen sistem secara end-to-end:
 
 ```powershell
 # Jalankan seluruh test suite dengan Pytest
@@ -443,10 +443,10 @@ python system_status.py
 ```
 
 Hasil verifikasi memastikan:
-- ✅ **58/58 Automated Tests Passed (100% Green)** mencakup seluruh modul aplikasi.
+- ✅ **63 Test Cases (62 Passed, 1 Skipped, 100% Green)** mencakup seluruh modul aplikasi.
 - ✅ Seluruh 9 modul deteksi fraud berfungsi normal pada berbagai tipe data dan edge cases.
 - ✅ Seleksi fitur (SelectKBest, Tree Importance, Filter Multikolinearitas, Low-Variance Filter, PCA) terverifikasi matematis.
-- ✅ Agentic Copilot dan FAISS Knowledge RAG merespons analisis investigasi secara akurat.
+- ✅ Agentic Copilot, Zero-Wipeout Fallback, dan FAISS Knowledge RAG merespons analisis investigasi secara akurat.
 - ✅ Penanganan data kosong, missing values, dan format numerik tak standar berjalan aman tanpa crash.
 - ✅ Polars out-of-core streaming memory bounded (<100MB RAM peak) pada dataset besar.
 - ✅ Proteksi UI Guard aktif mencegah error kalkulasi SHAP/LIME pada model non-kompatibel.

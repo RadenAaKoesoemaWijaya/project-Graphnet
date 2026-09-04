@@ -102,6 +102,32 @@ DEFAULT_KNOWLEDGE_DOCUMENTS = [
             "lalu dimasukkan kembali dalam < 48 jam (Premature Discharge & Rapid Readmission) wajib menjalani audit rekam medis mendalam."
         ),
         "tags": ["prolonged_stay", "readmission", "alos", "length_of_stay"]
+    },
+    {
+        "id": "REG-007",
+        "title": "Pedoman Audit Klaim Deviasi Biaya & Rasio Ekstrem (Outlier Statistik ML)",
+        "category": "Kaidah Audit Deviasi Biaya & Kewajaran Tarif",
+        "content": (
+            "1. Klaim dengan nilai pengajuan melebihi 2 standar deviasi (+2 SD) atau persentil 95 dari tarif median "
+            "kelompok diagnosis/tindakan serupa tanpa komorbiditas tercatat wajib menjalani verifikasi rincian tagihan "
+            "(itemized bill audit). "
+            "2. Ketidaksesuaian rasio antara biaya pengajuan (billed amount) dan tarif rujukan/klaim historis faskes "
+            "mengindikasikan risiko penggelembungan biaya (inflated claim) atau distorsi billing faskes. "
+            "Auditor wajib memverifikasi log tindakan sebelum menyetujui klaim."
+        ),
+        "tags": ["outlier", "deviasi_biaya", "statistical_anomaly", "rasio_tarif", "inflated_bill", "multivariat"]
+    },
+    {
+        "id": "REG-008",
+        "title": "Kaidah Kesesuaian Klinis Diagnosis (ICD-10) & Tindakan Medis",
+        "category": "Standar Kesesuaian Koding Klinis",
+        "content": (
+            "Kesesuaian antara kode prosedur tindakan medis dan diagnosis utama ICD-10 merupakan syarat mutlak eligibilitas klaim. "
+            "Tindakan atau prosedur kompleks yang ditagihkan untuk diagnosis ringan atau tidak berkorelasi langsung tanpa "
+            "justifikasi klinis dalam resume medis diklasifikasikan sebagai Inappropriate Clinical Utilization. "
+            "Auditor berwenang menunda pembayaran dan meminta lembar bukti tindakan dari DPJP."
+        ),
+        "tags": ["icd_10", "cpt", "service_code", "diagnosis_code", "kesesuaian_klinis", "dpjp"]
     }
 ]
 
@@ -188,7 +214,12 @@ class LocalRAGKnowledgeBase:
         """
         Synthesize formatted regulatory text to inject into the LLM Investigator Copilot prompt.
         """
-        search_terms = " ".join(active_flags) + " " + query_extra
+        if active_flags:
+            search_terms = " ".join(active_flags) + " " + query_extra
+        else:
+            # When no deterministic rule triggered, target statistical deviance / outlier & coding guidelines
+            search_terms = f"deviasi biaya anomali statistik outlier multivariat kewajaran tarif {query_extra}"
+        
         matched_docs = self.retrieve(search_terms, top_k=2)
 
         if not matched_docs:
@@ -196,8 +227,9 @@ class LocalRAGKnowledgeBase:
 
         context_lines = []
         for i, doc in enumerate(matched_docs, 1):
+            score_str = f" (Relevansi: {doc.get('similarity_score', 0.0):.2f})" if "similarity_score" in doc else ""
             context_lines.append(
-                f"[{i}] {doc['title']} ({doc['category']}):\n{doc['content']}"
+                f"[{i}] {doc['title']} ({doc['category']}){score_str}:\n{doc['content']}"
             )
         return "\n\n".join(context_lines)
 

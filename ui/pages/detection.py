@@ -774,38 +774,141 @@ def show_detection_page():
                     else:
                         st.info("ℹ️ Tidak ada aturan eksplisit terpicu. Anomali terdeteksi murni oleh ensemble model ML (deviasi statistik multivariat).")
 
-                    # ── COPILOT CONFIGURATION ──
+                    # ── COPILOT CONFIGURATION (SESSION PERSISTENT) ──
                     with st.expander("🛠️ Konfigurasi Copilot & LLM Engine", expanded=True):
+                        # Ensure session-level defaults
+                        if 'copilot_provider_sel' not in st.session_state:
+                            st.session_state['copilot_provider_sel'] = "Heuristic Engine (Offline)"
+                        if 'copilot_api_key_val' not in st.session_state:
+                            st.session_state['copilot_api_key_val'] = ""
+                        if 'copilot_auditor_val' not in st.session_state:
+                            st.session_state['copilot_auditor_val'] = "Investigator Senior ASTINA"
+                        if 'copilot_model_val' not in st.session_state:
+                            st.session_state['copilot_model_val'] = ""
+                        if 'copilot_endpoint_val' not in st.session_state:
+                            st.session_state['copilot_endpoint_val'] = "http://localhost:11434/api/generate"
+
                         c_cfg1, c_cfg2, c_cfg3 = st.columns([1.5, 2, 1.5])
                         with c_cfg1:
                             provider_choice = st.selectbox(
                                 "LLM Engine:",
-                                ["Heuristic Engine (Offline)", "Google Gemini", "OpenAI / Azure", "Local Ollama"],
-                                key=f"c_prov_{selected_claim}"
+                                ["Heuristic Engine (Offline)", "Google Gemini", "OpenAI / Compatible", "Local Ollama"],
+                                index=["Heuristic Engine (Offline)", "Google Gemini", "OpenAI / Compatible", "Local Ollama"].index(
+                                    st.session_state['copilot_provider_sel'] if st.session_state['copilot_provider_sel'] in ["Heuristic Engine (Offline)", "Google Gemini", "OpenAI / Compatible", "Local Ollama"] else "Heuristic Engine (Offline)"
+                                ),
+                                key="copilot_cfg_provider"
                             )
+                            st.session_state['copilot_provider_sel'] = provider_choice
+
                         with c_cfg2:
-                            api_key_input = ""
-                            if provider_choice in ["Google Gemini", "OpenAI / Azure"]:
-                                api_key_input = st.text_input("API Key:", type="password", key=f"c_key_{selected_claim}")
+                            if provider_choice in ["Google Gemini", "OpenAI / Compatible"]:
+                                api_key_input = st.text_input(
+                                    "API Key:",
+                                    value=st.session_state['copilot_api_key_val'],
+                                    type="password",
+                                    key="copilot_cfg_apikey"
+                                )
+                                st.session_state['copilot_api_key_val'] = api_key_input
                             else:
-                                st.markdown(f"<div style='padding-top:28px;font-size:0.8rem;color:#64748b;'>🔌 Mode: <b>{'Heuristic (Offline)' if 'Heuristic' in provider_choice else 'Local Endpoint'}</b> — tidak memerlukan API key.</div>", unsafe_allow_html=True)
+                                api_key_input = ""
+                                st.markdown(f"<div style='padding-top:28px;font-size:0.8rem;color:#64748b;'>🔌 Mode: <b>{'Heuristic (Offline)' if 'Heuristic' in provider_choice else 'Local Endpoint'}</b> — tidak memerlukan API key eksternal.</div>", unsafe_allow_html=True)
+
                         with c_cfg3:
-                            auditor_name = st.text_input("Nama Verifikator/Auditor:", value="Investigator Senior ASTINA", key=f"c_auditor_{selected_claim}")
+                            auditor_name = st.text_input(
+                                "Nama Verifikator/Auditor:",
+                                value=st.session_state['copilot_auditor_val'],
+                                key="copilot_cfg_auditor"
+                            )
+                            st.session_state['copilot_auditor_val'] = auditor_name
+
+                        # Advanced Model & Endpoint tuning row
+                        c_adv1, c_adv2 = st.columns(2)
+                        model_name_choice = ""
+                        endpoint_choice = ""
+                        with c_adv1:
+                            if provider_choice == "Google Gemini":
+                                model_name_choice = st.selectbox(
+                                    "Model Gemini:",
+                                    ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash"],
+                                    index=0,
+                                    key="copilot_cfg_model_gemini"
+                                )
+                            elif provider_choice == "OpenAI / Compatible":
+                                model_name_choice = st.text_input(
+                                    "Model Name:",
+                                    value="gpt-4o-mini",
+                                    key="copilot_cfg_model_openai"
+                                )
+                            elif provider_choice == "Local Ollama":
+                                model_name_choice = st.text_input(
+                                    "Ollama Model Name:",
+                                    value="llama3",
+                                    key="copilot_cfg_model_ollama"
+                                )
+                        with c_adv2:
+                            if provider_choice == "Local Ollama":
+                                endpoint_choice = st.text_input(
+                                    "Ollama Endpoint URL:",
+                                    value=st.session_state['copilot_endpoint_val'],
+                                    key="copilot_cfg_endpoint_ollama"
+                                )
+                                st.session_state['copilot_endpoint_val'] = endpoint_choice
+                            elif provider_choice == "OpenAI / Compatible":
+                                endpoint_choice = st.text_input(
+                                    "Base URL / Custom Endpoint (Opsional):",
+                                    value="",
+                                    placeholder="https://api.openai.com/v1/chat/completions",
+                                    key="copilot_cfg_endpoint_openai"
+                                )
 
                     provider_map = {
                         "Heuristic Engine (Offline)": "heuristic",
                         "Google Gemini": "gemini",
-                        "OpenAI / Azure": "openai",
+                        "OpenAI / Compatible": "openai",
                         "Local Ollama": "ollama"
                     }
                     copilot_engine = AgenticInvestigatorCopilot(
                         provider=provider_map.get(provider_choice, "heuristic"),
-                        api_key=api_key_input
+                        api_key=api_key_input,
+                        model_name=model_name_choice,
+                        endpoint_url=endpoint_choice if endpoint_choice else None
                     )
+
+                    # ── DYNAMIC XAI & GNN CONTEXT EXTRACTION ──
+                    # 1. Feature deviation calculation
+                    feature_contributions = dict(st.session_state.get('shap_contributions', {}))
+                    candidate_num_cols = ['billed_amount', 'paid_amount', 'amount', 'length_of_stay', 'procedure_count', 'medication_count', 'daily_claims_by_provider']
+                    for num_col in candidate_num_cols:
+                        if num_col in selected_row and pd.notna(selected_row[num_col]):
+                            try:
+                                c_val = float(selected_row[num_col])
+                                if num_col in display_df.columns:
+                                    s = pd.to_numeric(display_df[num_col], errors='coerce').dropna()
+                                    if len(s) > 1 and s.std() > 0:
+                                        z = (c_val - s.mean()) / (s.std() + 1e-6)
+                                        if abs(z) >= 0.8:
+                                            feature_contributions[num_col] = round(float(z), 3)
+                            except Exception:
+                                pass
+
+                    # 2. GNN topology cluster extraction
+                    gnn_clusters = []
+                    prov_id = selected_row.get('provider_id')
+                    if prov_id and str(prov_id) not in ('N/A', 'None', ''):
+                        p_matches = display_df[display_df['provider_id'] == prov_id]
+                        if len(p_matches) > 1:
+                            susp_c = int((pd.to_numeric(p_matches.get('anomaly_prediction', 0), errors='coerce') == 1).sum())
+                            gnn_clusters.append(f"Faskes {prov_id}: {len(p_matches)} klaim terhubung ({susp_c} anomali) dalam klaster audit")
+                    diag_code = selected_row.get('diagnosis_code')
+                    if diag_code and str(diag_code) not in ('N/A', 'None', ''):
+                        d_matches = display_df[display_df['diagnosis_code'] == diag_code]
+                        if len(d_matches) > 5:
+                            gnn_clusters.append(f"Diagnosa {diag_code}: {len(d_matches)} episode klaim terdaftar pada periode berjalan")
 
                     claim_ctx = ClaimContextBuilder.build_sanitized_context(
                         claim_row=selected_row,
-                        shap_contributions=st.session_state.get('shap_contributions', {}),
+                        shap_contributions=feature_contributions,
+                        gnn_neighbors=gnn_clusters,
                         mask_sensitive=True
                     )
 
@@ -843,8 +946,11 @@ def show_detection_page():
                         st.markdown("#### 📚 Referensi Regulasi Terkait (RAG Knowledge Base)")
                         if matched_docs:
                             for i, doc in enumerate(matched_docs, 1):
+                                score_val = doc.get('similarity_score', 0.0)
+                                score_badge = f"<span style='background:#dbeafe;color:#1e40af;font-size:0.75rem;padding:2px 8px;border-radius:10px;font-weight:700;'>Skor Relevansi: {score_val:.2f}</span>"
                                 with st.expander(f"📋 [{i}] {doc.get('title', 'Regulasi')} — {doc.get('category', '')}"):
                                     st.markdown(f"""
+                                    <div style="margin-bottom:8px;">{score_badge} &nbsp; <span style="font-size:0.75rem;color:#64748b;">Tags: {', '.join(doc.get('tags', []))}</span></div>
                                     <div style="background:#f8fafc;border-left:4px solid #3b82f6;border-radius:0 8px 8px 0;padding:10px 14px;font-size:0.87rem;color:#334155;line-height:1.6;">
                                     {doc.get('content', 'Konten tidak tersedia.')}
                                     </div>
@@ -858,10 +964,9 @@ def show_detection_page():
                         st.markdown("---")
 
                         # Metadata strip above the report
-                        meta_provider = dossier_data.get("provider_used", "heuristic").upper()
+                        meta_provider = str(dossier_data.get("provider_used", "heuristic")).upper()
                         meta_hash = dossier_data.get("audit_hash", "N/A")
                         meta_generated = dossier_data.get("generated_at", pd.Timestamp.now().strftime('%d %B %Y %H:%M:%S WIB'))
-                        meta_investigator = dossier_data.get("investigator_name", auditor_name)
                         meta_rules_count = len(dossier_data.get("active_rules", []))
 
                         st.markdown(f"""
@@ -891,24 +996,40 @@ def show_detection_page():
                             key=f"dl_bap_md_{selected_claim}"
                         )
 
-                    # ── INTERACTIVE Q&A ──
+                    # ── INTERACTIVE MULTI-TURN Q&A ──
                     st.markdown("---")
                     st.markdown("##### 💬 Tanya Copilot tentang Klaim Ini:")
+                    
+                    qa_history_key = f"copilot_qa_history_{selected_claim}"
+                    if qa_history_key not in st.session_state:
+                        st.session_state[qa_history_key] = []
+
+                    # Render previous questions and answers
+                    if st.session_state[qa_history_key]:
+                        for q_item in st.session_state[qa_history_key]:
+                            st.markdown(
+                                f"<div style='background:#f1f5f9;border-radius:8px;padding:8px 12px;margin-bottom:6px;font-size:0.85rem;'><b>👤 Auditor:</b> {q_item['question']}</div>",
+                                unsafe_allow_html=True
+                            )
+                            st.markdown(
+                                f"<div style='background:#f0f9ff;border:1px solid #bae6fd;border-left:4px solid #0284c7;border-radius:0 8px 8px 0;padding:12px 16px;margin-bottom:12px;font-size:0.87rem;'>{q_item['answer']}</div>",
+                                unsafe_allow_html=True
+                            )
+
                     q_col1, q_col2 = st.columns([4, 1])
                     with q_col1:
                         user_question = st.text_input("Pertanyaan audit:", placeholder="Contoh: Apakah biaya klaim ini wajar untuk diagnosis tersebut?", key=f"q_input_{selected_claim}", label_visibility="collapsed")
                     with q_col2:
                         ask_clicked = st.button("Tanyakan", key=f"q_btn_{selected_claim}", use_container_width=True)
 
-                    if ask_clicked and user_question:
+                    if ask_clicked and user_question and user_question.strip():
                         with st.spinner("🤖 Menganalisis respon audit..."):
-                            ans = copilot_engine.answer_investigator_query(context=claim_ctx, user_question=user_question)
-                            st.markdown(
-                                f'<div style="background:#f0f9ff;border:1px solid #bae6fd;border-left:4px solid #0284c7;border-radius:0 8px 8px 0;padding:14px 18px;margin-top:8px;">'
-                                f'{ans}'
-                                f'</div>',
-                                unsafe_allow_html=True
-                            )
+                            ans = copilot_engine.answer_investigator_query(context=claim_ctx, user_question=user_question.strip())
+                            st.session_state[qa_history_key].append({
+                                "question": user_question.strip(),
+                                "answer": ans
+                            })
+                            st.rerun()
 
         # ── TAB 5: Concept Drift ──
         with tab_drift:

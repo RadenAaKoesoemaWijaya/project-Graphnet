@@ -154,14 +154,21 @@ class AgenticInvestigatorCopilot:
         )
 
         prompt = self._build_dossier_prompt(context, rag_context, investigator_name)
+        response_text = None
+        actual_provider_used = self.provider
 
         if self.provider == "gemini" and self.api_key:
-            response_text = self._call_gemini_api(prompt)
-        elif self.provider == "openai" and self.api_key:
-            response_text = self._call_openai_api(prompt)
+            response_text = self._call_gemini_raw(prompt)
+        elif self.provider in ("openai", "azure") and self.api_key:
+            response_text = self._call_openai_raw(prompt)
         elif self.provider == "ollama":
-            response_text = self._call_ollama_api(prompt)
-        else:
+            response_text = self._call_ollama_raw(prompt)
+
+        # If LLM API returned empty or failed, gracefully fall back to heuristic with full context
+        if not response_text:
+            if self.provider != "heuristic":
+                logger.info(f"LLM provider '{self.provider}' unavailable or failed; using deterministic heuristic fallback.")
+                actual_provider_used = f"{self.provider} (Fallback: Heuristic)"
             response_text = self._generate_heuristic_dossier(context, rag_context, investigator_name)
 
         # Build clean cryptographic audit hash mockup for integrity
@@ -171,7 +178,7 @@ class AgenticInvestigatorCopilot:
 
         return {
             "claim_id": context.get("claim_id"),
-            "provider_used": self.provider,
+            "provider_used": actual_provider_used,
             "dossier_text": response_text,
             "regulatory_citations": rag_context,
             "dossier_number": f"BAP/{claim_id_str}/{pd.Timestamp.now().strftime('%Y%m%d')}",
@@ -212,14 +219,18 @@ class AgenticInvestigatorCopilot:
             f"3. **Tindakan Auditor yang Disarankan** (1-2 langkah konkret)"
         )
 
+        raw_answer = None
         if self.provider == "gemini" and self.api_key:
-            return self._call_gemini_api(prompt)
-        elif self.provider == "openai" and self.api_key:
-            return self._call_openai_api(prompt)
+            raw_answer = self._call_gemini_raw(prompt)
+        elif self.provider in ("openai", "azure") and self.api_key:
+            raw_answer = self._call_openai_raw(prompt)
         elif self.provider == "ollama":
-            return self._call_ollama_api(prompt)
-        else:
-            return self._generate_heuristic_query_answer(context, user_question, rag_context)
+            raw_answer = self._call_ollama_raw(prompt)
+
+        if raw_answer:
+            return raw_answer
+
+        return self._generate_heuristic_query_answer(context, user_question, rag_context)
 
     # ─────────────────────────────────────────────────────────────────────────
     # PROMPT BUILDERS
@@ -281,13 +292,14 @@ Sajikan dokumen dalam Markdown resmi yang rapi, ringkas, dan to-the-point menggu
 """
 
     # ─────────────────────────────────────────────────────────────────────────
-    # LLM API CALLERS
+    # LLM API CALLERS (RAW & FALLBACK-SAFE)
     # ─────────────────────────────────────────────────────────────────────────
 
-    def _call_gemini_api(self, prompt: str) -> str:
-        """Call Google Gemini REST API using urllib."""
+    def _call_gemini_raw(self, prompt: str) -> Optional[str]:
+        """Execute Gemini REST API call; returns None on any failure."""
         try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model_name}:generateContent?key={self.api_key}"
+            model = self.model_name if "gemini" in (self.model_name or "") else "gemini-1.5-flash"
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={self.api_key}"
             payload = {
                 "contents": [{"parts": [{"text": prompt}]}],
                 "generationConfig": {"temperature": 0.2, "maxOutputTokens": 2048}
@@ -301,15 +313,16 @@ Sajikan dokumen dalam Markdown resmi yang rapi, ringkas, dan to-the-point menggu
                 data = json.loads(resp.read().decode("utf-8"))
                 return data["candidates"][0]["content"]["parts"][0]["text"]
         except Exception as e:
-            logger.warning(f"Gemini API call failed: {e}. Falling back to heuristic generator.")
-            return self._generate_heuristic_dossier(context={}, rag_context="", investigator_name="Auditor ASTINA (Fallback)")
+            logger.warning(f"Gemini API call failed: {e}")
+            return None
 
-    def _call_openai_api(self, prompt: str) -> str:
-        """Call OpenAI-compatible REST API using urllib."""
+    def _call_openai_raw(self, prompt: str) -> Optional[str]:
+        """Execute OpenAI / Azure-compatible REST API call; returns None on any failure."""
         try:
-            url = "https://api.openai.com/v1/chat/completions"
+            url = self.endpoint_url if (self.endpoint_url and "api.openai.com" not in self.endpoint_url and "11434" not in self.endpoint_url) else "https://api.openai.com/v1/chat/completions"
+            model = self.model_name if (self.model_name and "gemini" not in self.model_name and "llama" not in self.model_name) else "gpt-4o-mini"
             payload = {
-                "model": self.model_name or "gpt-4o-mini",
+                "model": model,
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.2
             }
@@ -325,28 +338,49 @@ Sajikan dokumen dalam Markdown resmi yang rapi, ringkas, dan to-the-point menggu
                 data = json.loads(resp.read().decode("utf-8"))
                 return data["choices"][0]["message"]["content"]
         except Exception as e:
-            logger.warning(f"OpenAI API call failed: {e}. Falling back to heuristic generator.")
-            return self._generate_heuristic_dossier(context={}, rag_context="", investigator_name="Auditor ASTINA (Fallback)")
+            logger.warning(f"OpenAI/Azure API call failed: {e}")
+            return None
 
-    def _call_ollama_api(self, prompt: str) -> str:
-        """Call local Ollama endpoint."""
+    def _call_ollama_raw(self, prompt: str) -> Optional[str]:
+        """Execute Local Ollama call; returns None on any failure."""
         try:
+            endpoint = self.endpoint_url or "http://localhost:11434/api/generate"
+            model = self.model_name if (self.model_name and "gemini" not in self.model_name and "gpt" not in self.model_name) else "llama3"
             payload = {
-                "model": self.model_name or "llama3",
+                "model": model,
                 "prompt": prompt,
                 "stream": False
             }
             req = urllib.request.Request(
-                self.endpoint_url,
+                endpoint,
                 data=json.dumps(payload).encode("utf-8"),
                 headers={"Content-Type": "application/json"}
             )
             with urllib.request.urlopen(req, timeout=45) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
-                return data.get("response", "No response from Ollama")
+                return data.get("response", None)
         except Exception as e:
-            logger.warning(f"Ollama call failed: {e}. Falling back to heuristic generator.")
-            return self._generate_heuristic_dossier(context={}, rag_context="", investigator_name="Auditor ASTINA (Fallback)")
+            logger.warning(f"Ollama call failed: {e}")
+            return None
+
+    # Backward compatibility wrappers
+    def _call_gemini_api(self, prompt: str, context: Optional[Dict[str, Any]] = None, rag_context: str = "", investigator_name: str = "Auditor ASTINA") -> str:
+        resp = self._call_gemini_raw(prompt)
+        if resp:
+            return resp
+        return self._generate_heuristic_dossier(context=context or {}, rag_context=rag_context, investigator_name=investigator_name)
+
+    def _call_openai_api(self, prompt: str, context: Optional[Dict[str, Any]] = None, rag_context: str = "", investigator_name: str = "Auditor ASTINA") -> str:
+        resp = self._call_openai_raw(prompt)
+        if resp:
+            return resp
+        return self._generate_heuristic_dossier(context=context or {}, rag_context=rag_context, investigator_name=investigator_name)
+
+    def _call_ollama_api(self, prompt: str, context: Optional[Dict[str, Any]] = None, rag_context: str = "", investigator_name: str = "Auditor ASTINA") -> str:
+        resp = self._call_ollama_raw(prompt)
+        if resp:
+            return resp
+        return self._generate_heuristic_dossier(context=context or {}, rag_context=rag_context, investigator_name=investigator_name)
 
     # ─────────────────────────────────────────────────────────────────────────
     # DETERMINISTIC HEURISTIC GENERATORS (OFFLINE / FALLBACK)

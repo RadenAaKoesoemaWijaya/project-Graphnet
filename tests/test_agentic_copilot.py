@@ -102,12 +102,104 @@ class TestAgenticCopilotAndRAG(unittest.TestCase):
             "active_rules": ["Upcoding & Unbundling (Penggelembungan Kode)"]
         }
 
-        answer = self.copilot.answer_investigator_query(
-            context=sample_context,
-            user_question="Apakah tarif ini wajar untuk diagnosis ISPA?"
+    def test_rag_statistical_outlier_retrieval(self):
+        # Query when no rules are active (pure statistical ML outlier)
+        context_str = self.rag.get_regulation_context(
+            active_flags=[],
+            query_extra="99214 E11.9"
         )
+        self.assertIsInstance(context_str, str)
+        self.assertTrue("Deviasi Biaya" in context_str or "Kesesuaian Klinis" in context_str or "Permenkes" in context_str)
+
+    def test_dossier_generation_api_failure_fallback_preserves_context(self):
+        # Test that cloud LLM failure falls back to heuristic WITH full context preserved (no CLM-UNKNOWN)
+        copilot_cloud = AgenticInvestigatorCopilot(
+            provider="gemini",
+            api_key="INVALID_TEST_KEY"
+        )
+        sample_context = {
+            "claim_id": "CLM-REAL-999",
+            "patient_id": "PAT-MASKED-777",
+            "provider_id": "PROV-HOSP-ABC",
+            "service_code": "43239",
+            "diagnosis_code": "K21.0",
+            "billed_amount": 15000000,
+            "paid_amount": 12000000,
+            "anomaly_score": 0.91,
+            "final_risk_score": 0.94,
+            "severity": "High",
+            "active_rules": ["Repeat Billing (Tagihan Berulang)"],
+            "top_shap_features": ["billed_amount: +1.240"],
+            "gnn_collusion_cluster": ["Faskes PROV-HOSP-ABC: 5 klaim terhubung"]
+        }
+
+        result = copilot_cloud.generate_investigation_dossier(
+            context=sample_context,
+            investigator_name="Auditor Fallback Test"
+        )
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["claim_id"], "CLM-REAL-999")
+        self.assertIn("Fallback: Heuristic", result["provider_used"])
+        dossier_text = result["dossier_text"]
+        self.assertIn("CLM-REAL-999", dossier_text)
+        self.assertNotIn("CLM-UNKNOWN", dossier_text)
+        self.assertIn("Rp 15,000,000", dossier_text)
+        self.assertIn("Auditor Fallback Test", dossier_text)
+
+    def test_query_answering_api_failure_fallback_returns_answer_not_dossier(self):
+        # When cloud API fails, query answer must return concise Q&A answer, NOT a full BAP document
+        copilot_cloud = AgenticInvestigatorCopilot(
+            provider="openai",
+            api_key="INVALID_TEST_KEY"
+        )
+        sample_context = {
+            "claim_id": "CLM-QUERY-555",
+            "patient_id": "PAT-MASKED-555",
+            "provider_id": "PROV-XYZ",
+            "service_code": "99213",
+            "diagnosis_code": "J06.9",
+            "billed_amount": 3500000,
+            "final_risk_score": 0.82,
+            "severity": "Medium",
+            "active_rules": ["Upcoding & Unbundling (Penggelembungan Kode)"]
+        }
+
+        answer = copilot_cloud.answer_investigator_query(
+            context=sample_context,
+            user_question="Apakah ada indikasi tagihan berlebih?"
+        )
+
         self.assertIsInstance(answer, str)
-        self.assertIn("CLM-TEST-002", answer)
+        self.assertIn("CLM-QUERY-555", answer)
+        self.assertIn("Kesimpulan Utama", answer)
+        # Verify it did not accidentally return full BAP header
+        self.assertNotIn("# 📑 BERITA ACARA PEMERIKSAAN KLAIM ANOMALI", answer)
+
+    def test_claim_context_with_gnn_and_feature_deviations(self):
+        sample_row = pd.Series({
+            "claim_id": "CLM-GNN-111",
+            "patient_id": "PAT-111",
+            "provider_id": "PROV-111",
+            "service_code": "99213",
+            "diagnosis_code": "I10",
+            "billed_amount": 5000000,
+            "final_risk_score": 0.88,
+            "severity": "High"
+        })
+        deviations = {"billed_amount": +1.52, "length_of_stay": +0.85}
+        clusters = ["Faskes PROV-111 memiliki 8 klaim anomali terhubung"]
+
+        ctx = ClaimContextBuilder.build_sanitized_context(
+            claim_row=sample_row,
+            shap_contributions=deviations,
+            gnn_neighbors=clusters,
+            mask_sensitive=True
+        )
+
+        self.assertEqual(len(ctx["top_shap_features"]), 2)
+        self.assertIn("billed_amount: +1.520", ctx["top_shap_features"][0])
+        self.assertEqual(ctx["gnn_collusion_cluster"], clusters)
 
 
 if __name__ == '__main__':

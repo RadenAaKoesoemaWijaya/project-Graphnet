@@ -407,23 +407,32 @@ $$\text{Final Risk Score} = 0.50(\text{Business Risk Score}) + 0.30(\text{ML Ano
 
 Modul `agentic_copilot.py` dan `rag_engine.py` bertindak sebagai asisten investigasi otonom bagi investigator asuransi:
 
-1. **PII Sanitizer & Context Builder (`ClaimContextBuilder`)**:
-   - Mengekstrak atribut klaim terpilih, nilai SHAP kontribusi fitur teratas, dan klaster kolusi graf GNN.
+1. **PII Sanitizer & Dynamic Context Builder (`ClaimContextBuilder`)**:
+   - Mengekstrak atribut klaim terpilih, nilai deviasi fitur numerik (z-score / kontribusi fitur XAI), dan klaster kolusi topologi graf GNN secara dinamis.
    - Melakukan anonimisasi/masking data sensitif pasien (NIK, Nama, Rekam Medis) secara otomatis sebelum dikirim ke model bahasa (LLM) sesuai kepatuhan UU PDP & HIPAA.
 
-2. **Knowledge Indexing & Regulatory Retrieval (`RAGEngine` & FAISS)**:
-   - Menyimpan vektor *embedding* dari standar ICD-10, pedoman kode CPT, regulasi asuransi kesehatan nasional/komersial, dan katalog indikator fraud medis.
-   - Menggunakan pencarian semantik hibrida (vektor FAISS + BM25 keyword match) untuk mencocokkan pasal aturan medis yang relevan dengan jenis pelanggaran yang terdeteksi.
+2. **Knowledge Indexing & Regulatory Retrieval (`LocalRAGKnowledgeBase` & FAISS)**:
+   - Mengindeks korpus regulasi resmi JKN, pedoman verifikasi klinis, dan batasan operasional medis:
+     - `REG-001`: Permenkes No. 16 Tahun 2019 (Pencegahan & Penanganan Kecurangan JKN).
+     - `REG-002`: Pedoman Repeat Billing & Readmisi 30 Hari.
+     - `REG-003`: Verifikasi Phantom Service & Batas Kapasitas Dokter/Faskes.
+     - `REG-004`: Kaidah Koding INA-CBGs & Upcoding Severity Level.
+     - `REG-005`: Batasan FORNAS & Pemakaian Obat/Alkes Sekali Pakai.
+     - `REG-006`: Evaluasi Lama Rawat Inap (ALOS) & Premature Discharge.
+     - `REG-007`: Pedoman Audit Klaim Deviasi Biaya & Rasio Ekstrem (Outlier Statistik ML).
+     - `REG-008`: Kaidah Kesesuaian Klinis Diagnosis (ICD-10) & Tindakan Medis.
+   - Menyajikan skor kesamaan semantik (*similarity score*) dan otomatis memetakan klaim anomali non-rule ke standar kewajaran tarif.
 
-3. **Multi-Provider LLM Integration (`AgenticInvestigatorCopilot`)**:
-   - **Google Gemini**: Integrasi API berbasis `gemini-1.5-flash` / `gemini-1.5-pro`.
-   - **OpenAI / Azure**: Integrasi API model `gpt-4o` / `gpt-4-turbo`.
-   - **Local Ollama**: Eksekusi lokal model open-weight (`llama3`, `mistral`, `qwen`) tanpa dependensi cloud.
-   - **Deterministic Heuristic Engine**: Fallback otomatis berbasis aturan pakar medis terstruktur jika tidak tersedia koneksi internet atau kunci API.
+3. **Multi-Provider LLM Integration & Graceful Resilience (`AgenticInvestigatorCopilot`)**:
+   - **Google Gemini**: Integrasi REST API model `gemini-1.5-flash`, `gemini-1.5-pro`, dan `gemini-2.0-flash`.
+   - **OpenAI / Compatible / Azure**: Integrasi endpoint standar maupun custom proxy (mendukung model `gpt-4o-mini`, `gpt-4o`, atau deployment khusus).
+   - **Local Ollama**: Eksekusi lokal model open-weight (`llama3`, `mistral`, `qwen`) dengan konfigurasi endpoint URL fleksibel.
+   - **Deterministic Heuristic Engine & Zero-Wipeout Fallback**: Jika koneksi cloud API gagal, habis kuota, atau timeout, sistem secara otomatis mengeksekusi *graceful fallback* dengan **tetap mempertahankan 100% data klaim asli** (nomor klaim, faskes, diagnosa, nilai tagihan, skor risiko).
 
-4. **Automated BAP & Medical Summary Generation**:
-   - Menghasilkan dokumen **Berita Acara Pemeriksaan (BAP)** terstruktur lengkap dengan identitas kasus, ringkasan profil risiko, temuan pelanggaran aturan bisnis, analisis klinis fitur anomali, dasar hukum/regulasi terkait, dan rekomendasi audit forensik.
-   - Dokumen BAP dapat langsung diunduh dalam format Markdown (`.md`) atau disalin untuk keperluan berkas perkara investigasi resmi.
+4. **Automated BAP & Interactive Multi-turn Q&A**:
+   - Menghasilkan dokumen **Berita Acara Pemeriksaan (BAP)** formal berstempel hash kriptografis SHA-256 anti-manipulasi yang siap diunduh dalam format Markdown (`.md`).
+   - Menyediakan fitur tanya-jawab interaktif (*Interactive Q&A*) dengan penyimpanan riwayat percakapan (*chat history*) berbasis session state sehingga tidak hilang saat berpindah atau mengunduh dokumen.
+   - Konfigurasi engine (pilihan provider, model, API key, dan nama auditor) tersimpan secara persisten di level sesi pengguna (*no-reset on claim switch*).
 
 ---
 
@@ -476,7 +485,7 @@ Seluruh komponen ASTINA diuji secara otomatis menggunakan suite Pytest yang menc
 
 | Modul Test | Jumlah Uji | Cakupan Verifikasi |
 | :--- | :---: | :--- |
-| `test_agentic_copilot.py` | 5 | Uji pencarian semantik FAISS RAG, inferensi reasoning Copilot, fallback provider |
+| `test_agentic_copilot.py` | 9 | Uji pencarian semantik FAISS RAG, retrieval outlier ML, inferensi Copilot, fallback zero-wipeout, dan Q&A |
 | `test_app_startup.py` | 1 | Uji startup aplikasi dan validitas seluruh dependensi import utama |
 | `test_detection_modules.py` | 14 | Uji menyeluruh 9 modul business rules, edge cases, dan integrasi pipeline |
 | `test_feature_selection.py` | 6 | Uji SelectKBest (F-score & MI), Tree Importance, Filter Multikolinearitas, Low-Variance, PCA |
@@ -487,7 +496,7 @@ Seluruh komponen ASTINA diuji secara otomatis menggunakan suite Pytest yang menc
 | `test_optuna_ensemble_and_drift.py`| 5 | Uji optimasi hyperparameter Optuna dan deteksi Kolmogorov-Smirnov drift |
 | `test_pipeline_edge_cases.py` | 12 | Uji toleransi data null, data bertipe campuran, sanitasi string, dan extreme amounts |
 | `test_streaming_preprocessing_memory.py` | 2 | Uji batasan pemakaian RAM (<100MB peak) pada pemrosesan streaming skala besar |
-| **Total Test Suite** | **59 (58 Passed, 1 Skipped)** | **100% Passed (Green)** |
+| **Total Test Suite** | **63 (62 Passed, 1 Skipped)** | **100% Passed (Green)** |
 
 ---
 
