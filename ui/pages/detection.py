@@ -206,7 +206,9 @@ def show_detection_page():
     )
 
     if not training_features:
-        st.error("❌ Metadata fitur training tidak ditemukan di model tersimpan.")
+        st.error("❌ **Metadata Fitur Pelatihan Tidak Ditemukan**: Model yang tersimpan tidak memiliki metadata nama kolom fitur yang valid. Silakan latih ulang model pada halaman Pelatihan agar skema fitur tersimpan lengkap.")
+        if st.button("🚀 Ke Halaman Pelatihan Model", type="primary", key="goto_train_features_missing"):
+            navigate_to_page('train')
         return
 
     # Model status bar
@@ -267,7 +269,7 @@ def show_detection_page():
             try:
                 file_ext = uploaded_file.name.rsplit(".", 1)[-1].lower()
                 fmt_map = {"csv": "csv", "xlsx": "xlsx", "xls": "xls", "parquet": "parquet"}
-                file_format = fmt_map.get(file_ext, file_ext)
+                file_format: str = fmt_map.get(file_ext, file_ext) or "csv"
                 raw_df = read_file_with_optimization(uploaded_file, file_format)
                 source_description = f"File: {uploaded_file.name} ({len(raw_df):,} baris)"
             except Exception as e:
@@ -382,12 +384,26 @@ def show_detection_page():
                     df_processed = pd.DataFrame(df_processed)
 
                 # 2. Strict feature alignment with training metadata
+                # Priority order for median imputation:
+                #   1. session_state['feature_medians']  (loaded from persisted _params.json)
+                #   2. detector.training_metadata['feature_medians']  (in-session training)
+                #   3. Empty dict → falls back to column-level median or 0.0
                 training_stats: dict = (
-                    getattr(detector, 'training_metadata', {}) or {}
-                ).get('feature_medians', {})
+                    st.session_state.get('feature_medians')
+                    or (getattr(detector, 'training_metadata', {}) or {}).get('feature_medians')
+                    or {}
+                )
                 aligned_feature_df, alignment_summary = build_aligned_inference_features(
                     df_processed, training_features, training_stats=training_stats
                 )
+
+                # Store alignment summary for audit / expander display
+                st.session_state['detection_alignment_summary'] = alignment_summary
+
+                n_existing  = len(alignment_summary.get('existing_features', []))
+                n_derived   = len(alignment_summary.get('derived_features', []))
+                n_filled    = len(alignment_summary.get('filled_features', []))
+                n_expected  = alignment_summary.get('expected_features', len(training_features))
 
                 X = aligned_feature_df[training_features].values
                 edge_index = None
@@ -417,19 +433,19 @@ def show_detection_page():
 
                 # 4. Multi-model ensemble inference
                 probabilities, individual_probs = detector.predict_anomaly_probability(
-                    X, edge_index=edge_index, edge_type=edge_type, device=device
+                    X, edge_index=edge_index, edge_type=edge_type, device=str(device)
                 )
                 predictions = (probabilities > threshold).astype(int)
 
                 # 5. Build results DataFrame
                 df_result = raw_df.copy()
-                df_result['anomaly_probability'] = pd.Series(probabilities, index=df_result.index, dtype=float)
-                df_result['anomaly_prediction'] = pd.Series(predictions, index=df_result.index, dtype=int)
-                df_result['isolation_forest_score'] = pd.Series(individual_probs.get('isolation_forest', np.zeros(len(df_result))), index=df_result.index, dtype=float)
-                df_result['autoencoder_score'] = pd.Series(individual_probs.get('autoencoder', np.zeros(len(df_result))), index=df_result.index, dtype=float)
+                df_result['anomaly_probability'] = pd.Series(np.asarray(probabilities, dtype=np.float64), index=df_result.index)
+                df_result['anomaly_prediction'] = pd.Series(np.asarray(predictions, dtype=np.int64), index=df_result.index)
+                df_result['isolation_forest_score'] = pd.Series(np.asarray(individual_probs.get('isolation_forest', np.zeros(len(df_result))), dtype=np.float64), index=df_result.index)
+                df_result['autoencoder_score'] = pd.Series(np.asarray(individual_probs.get('autoencoder', np.zeros(len(df_result))), dtype=np.float64), index=df_result.index)
                 if 'dbscan' in individual_probs:
-                    df_result['dbscan_score'] = pd.Series(individual_probs['dbscan'], index=df_result.index, dtype=float)
-                df_result['xgboost_score'] = pd.Series(individual_probs.get('xgboost', np.zeros(len(df_result))), index=df_result.index, dtype=float)
+                    df_result['dbscan_score'] = pd.Series(np.asarray(individual_probs['dbscan'], dtype=np.float64), index=df_result.index)
+                df_result['xgboost_score'] = pd.Series(np.asarray(individual_probs.get('xgboost', np.zeros(len(df_result))), dtype=np.float64), index=df_result.index)
 
                 # 6. Integrated Claim Risk Pipeline (9 Business Rules + Composite Scoring)
                 from fraud_risk_pipeline import run_integrated_claim_risk_pipeline
@@ -444,7 +460,32 @@ def show_detection_page():
                 st.session_state['detection_threshold'] = threshold
                 st.session_state['risk_summary'] = risk_summary
                 st.session_state['detection_executed'] = True
-                st.success("✅ **Deteksi anomali berhasil dieksekusi!** Hasil disajikan pada dashboard di bawah.")
+
+                # Feature alignment diagnostics banner & audit expander
+                if n_filled > 0:
+                    st.warning(
+                        f"⚠️ **Feature Alignment**: {n_existing}/{n_expected} fitur ditemukan langsung, "
+                        f"{n_derived} diturunkan otomatis, **{n_filled} diimputasi dengan median training**. "
+                        f"Pertimbangkan menambahkan kolom yang hilang ke dataset untuk akurasi lebih tinggi."
+                    )
+                else:
+                    st.success(
+                        f"✅ **Deteksi anomali berhasil dieksekusi!** "
+                        f"Semua {n_existing} fitur ditemukan langsung + {n_derived} fitur turunan. "
+                        f"Hasil disajikan pada dashboard di bawah."
+                    )
+
+                with st.expander("🔍 Detail Penyelarasan Fitur Inferensi (Feature Alignment Audit)", expanded=False):
+                    diag_c1, diag_c2, diag_c3 = st.columns(3)
+                    with diag_c1:
+                        st.markdown(f"**Fitur Eksisting ({n_existing}):**")
+                        st.caption(", ".join(alignment_summary.get('existing_features', [])) or "-")
+                    with diag_c2:
+                        st.markdown(f"**Fitur Diturunkan ({n_derived}):**")
+                        st.caption(", ".join(alignment_summary.get('derived_features', [])) or "-")
+                    with diag_c3:
+                        st.markdown(f"**Fitur Imputasi Median ({n_filled}):**")
+                        st.caption(", ".join(alignment_summary.get('filled_features', [])) or "-")
 
             except Exception as err:
                 st.error(f"❌ Terjadi kesalahan saat eksekusi deteksi: {str(err)}")

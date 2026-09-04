@@ -256,13 +256,76 @@ Sistem otomatis mengevaluasi kesesuaian kolom saat dataset diunggah:
 - 🟡 **70%–99% Memadai**: Sebagian modul non-kritis disesuaikan; sistem memberikan peringatan modul terdampak.
 - 🔴 **< 70% Tidak Memadai**: Kolom esensial kurang; inferensi ditolak atau terdegradasi dan pengguna diarahkan memakai template.
 
-### 🔧 Penyesuaian Fitur Otomatis (*Smart Feature Alignment*)
+### 🔧 Penyesuaian Fitur Otomatis (*Smart Feature Alignment*) & Imputasi Median Training
 
-1. **Fitur Eksisting**: Dipetakan langsung dari kolom dataset.
-2. **Fitur Diturunkan (*Engineered*)**: Dihitung dinamis (rasio `payment_ratio`, boolean `high_amount_quick_submit`, ekstraksi temporal `day_of_week`/`month`).
-3. **Fitur Hilang (*Imputed*)**: Diisi nilai **median data latih** (`training_stats` pada `metadata.json`), menjaga distribusi normal model tanpa bias artifisial.
+Saat data baru diuji menggunakan model yang telah dilatih sebelumnya, skema kolom pada data baru sering kali tidak 100% identik dengan dataset saat pelatihan (misalnya ketiadaan fitur turunan tertentu). ASTINA menerapkan mekanisme **Smart Feature Alignment** (`build_aligned_inference_features()`):
+
+1. **Fitur Eksisting (*Direct Match*)**: Kolom yang ada langsung pada dataset baru dipetakan ke skema fitur training.
+2. **Fitur Diturunkan (*Auto-Engineered*)**: Fitur turunan seperti flag missing (`*_missing`), rasio moneter domain asuransi (`payment_ratio`, `allowance_ratio`), dan fitur temporal (`day_of_week`, `month`) direkonstruksi secara otomatis jika kolom induk tersedia.
+3. **Fitur Hilang Terimputasi Median (*Training Median Imputation*)**: Fitur yang sama sekali tidak dapat diturunkan dari data baru diisi dengan **nilai median per-fitur dari data training** (`feature_medians` yang tersimpan di `_params.json`). Ini menjamin distribusi input model tidak terdistorsi oleh angka sembarangan atau nilai `0.0`.
 
 ---
+
+## 🔍 Deteksi Anomali dari Data Baru Berdasarkan Model Terlatih
+
+ASTINA mendukung deteksi fraud secara langsung terhadap **data transaksi klaim baru** (*unseen inference dataset*) tanpa harus melatih ulang model.
+
+### 🏛️ Arsitektur Model Persistence & Loading
+
+Setiap kali model selesai dilatih pada modul **Pelatihan**, artefak model disimpan secara permanen di direktori `./models/`:
+- `fraud_detector_isolation_forest.pkl`: Estimator Isolation Forest scikit-learn.
+- `fraud_detector_xgboost.pkl`: Estimator Gradient Boosted Trees XGBoost.
+- `fraud_detector_imputer.pkl` & `fraud_detector_scaler.pkl`: Pipeline praproses imputasi & normalisasi.
+- `fraud_detector_autoencoder.pt`: Bobot neural network PyTorch Deep Autoencoder.
+- `fraud_detector_gnn.pt`: Bobot PyTorch Geometric GATConv (Graph Attention Network).
+- `fraud_detector_params.json`: Hyperparameter model, bobot ensemble, skema kolom `feature_columns`, tipe data `feature_dtypes`, dan kamus nilai median training `feature_medians`.
+
+Saat pengguna membuka halaman **Deteksi** (`ui/pages/detection.py`), fungsi `load_persisted_detector()` secara otomatis memuat seluruh artefak ini ke dalam memori sesi kerja.
+
+### 📊 Alur Eksekusi Inferensi Data Baru
+
+```mermaid
+flowchart LR
+    A[File Data Baru CSV / XLSX / Parquet] --> B[Normalisasi & Validasi Skema]
+    B --> C[Smart Feature Alignment build_aligned_inference_features]
+    M[(Model Terlatih models/)] -. Muat Metadata & Medians .-> C
+    C --> D[Multi-Model Ensemble Inference IF + AE + XGB + GNN]
+    B --> E[9 Modul Business Rules Engine]
+    D --> F[Hybrid Risk Score Aggregator]
+    E --> F
+    F --> G[Workspace Deteksi 5 Tab + AI Copilot BAP]
+```
+
+### 📋 Tri-Tier Feature Alignment Table
+
+| Kategori Fitur | Sumber / Penanganan | Dampak terhadap Model |
+| :--- | :--- | :--- |
+| **Existing** | Kolom ada langsung pada file data baru | Presisi 100% mengikuti distribusi data baru |
+| **Derived** | Ditransformasikan otomatis dari kolom induk | Menjaga konsistensi representasi fitur rekayasa |
+| **Filled** | Diimputasi menggunakan `feature_medians` dari model training | Netral secara statistik, mencegah false alarm akibat `0.0` |
+
+### 🛠️ Panduan Operasional: Langkah Deteksi Data Baru
+
+1. **Pastikan Model Tersedia**: Latih model minimal satu kali di halaman **Pelatihan**, atau pastikan artefak model telah tersedia di folder `models/`.
+2. **Navigasi ke Halaman Deteksi**: Klik menu **Deteksi** pada sidebar. Indikator di atas halaman akan menampilkan status model champion yang aktif (jumlah fitur, mode komputasi GPU/CPU, bobot ensemble).
+3. **Pilih Sumber Data**:
+   - Pilih opsi **📤 Unggah File Baru (CSV / XLSX / XLS / Parquet)**.
+   - Unggah berkas klaim baru yang ingin diperiksa (gunakan format standar sesuai template).
+4. **Atur Parameter Deteksi**:
+   - Tentukan **Ambang Batas Anomali ML** (default: `0.50`).
+   - Tentukan **Metode Agregasi Risiko** (*Weighted Hybrid*, *Conservative Max*, atau *Ensemble ML Only*).
+5. **Eksekusi Analisis**: Klik tombol **⚡ Eksekusi Deteksi Anomali**.
+6. **Evaluasi Diagnostik Penyelarasan**:
+   - Sistem menampilkan banner status alignment:
+     - 🟢 *Hijau*: Semua fitur ditemukan langsung atau berhasil diturunkan otomatis.
+     - 🟡 *Kuning*: Terdapat fitur yang diimputasi dengan median training (disertai expander rincian kolom).
+   - Buka expander **Detail Penyelarasan Fitur Inferensi** untuk mengaudit kolom mana saja yang tergolong *Existing*, *Derived*, atau *Filled*.
+7. **Analisis Hasil pada 5 Tab Spesifik**:
+   - **Tab 1**: Pantau proporsi klaim normal vs anomali dan panel 11 kartu ringkasan risiko.
+   - **Tab 2**: Periksa rincian temuan 9 aturan bisnis (Repeat Billing, Phantom Service, dll).
+   - **Tab 3**: Filter klaim berisiko tinggi (*High Risk*) dan ekspor laporan ke format Excel/CSV.
+   - **Tab 4**: Gunakan AI Copilot untuk menyusun Berita Acara Pemeriksaan (BAP) formal secara otomatis.
+   - **Tab 5**: Pantau *Concept Drift* data baru terhadap data pelatihan menggunakan uji Kolmogorov-Smirnov.
 
 ## 🧠 Alur Kerja Hybrid AI ASTINA (End-to-End Architecture)
 
@@ -366,10 +429,10 @@ Konfigurasi opsional dapat disetel melalui file `.env` di direktori utama:
 
 ## 🧪 Pengujian & Validasi Kualitas
 
-Aplikasi dilengkapi suite pengujian otomatis komprehensif (**53 Test Cases**) untuk memverifikasi keandalan seluruh komponen sistem secara end-to-end:
+Aplikasi dilengkapi suite pengujian otomatis komprehensif (**58 Test Cases**) untuk memverifikasi keandalan seluruh komponen sistem secara end-to-end:
 
 ```powershell
-# Jalankan seluruh 53 test suite dengan Pytest
+# Jalankan seluruh test suite dengan Pytest
 python -m pytest tests/ -v
 
 # Verifikasi integritas rantai Cryptographic Audit Trail
@@ -380,7 +443,7 @@ python system_status.py
 ```
 
 Hasil verifikasi memastikan:
-- ✅ **53/53 Automated Tests Passed (100% Green)** mencakup seluruh modul aplikasi.
+- ✅ **58/58 Automated Tests Passed (100% Green)** mencakup seluruh modul aplikasi.
 - ✅ Seluruh 9 modul deteksi fraud berfungsi normal pada berbagai tipe data dan edge cases.
 - ✅ Seleksi fitur (SelectKBest, Tree Importance, Filter Multikolinearitas, Low-Variance Filter, PCA) terverifikasi matematis.
 - ✅ Agentic Copilot dan FAISS Knowledge RAG merespons analisis investigasi secara akurat.

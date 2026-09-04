@@ -52,10 +52,11 @@ flowchart TD
         R --> S[Model Checkpoints & Model Registry]
     end
 
-    subgraph INFERENCE["4. Hybrid Detection & Risk Aggregation"]
-        T[Data Klaim Uji / Inferensi Baru] --> U[Smart Feature Alignment & Imputasi Median Training]
-        U --> V[ML Anomaly Score Estimation]
-        U --> W[GNN Relational Graph Inference]
+    subgraph INFERENCE["4. Hybrid Detection & Risk Aggregation (Data Baru)"]
+        T[Data Klaim Uji / File Baru] --> U[Smart Feature Alignment & Imputasi Median Training]
+        S -. Load Model Artifacts & Training Medians .-> U
+        U --> V[ML Anomaly Score Estimation IF, AE, XGB]
+        U --> W[GNN Relational Graph Inference GATConv]
         T --> X[9 Modul Business Rules Audit Engine]
         V --> Y[Hybrid Risk Score Aggregator]
         W --> Y
@@ -189,11 +190,73 @@ python run.py
 - **GNN Relational Contribution**: Analisis kontribusi koneksi graf terhadap probabilitas anomali klaim.
 
 ### 4.5 Detection, Rule Auditing & AI Copilot Workspace (`ui/pages/detection.py`)
-Halaman deteksi menyediakan alur kerja investigasi terpadu berbasis **5 Tab Spesifik**:
-- **Smart Data Ingestion & Feature Alignment**:
-  - Mendukung input dataset multi-sumber: unggah file baru (CSV, Excel `.xlsx`/`.xls`, Parquet) dengan normalisasi format otomatis, reuse dataset session aktif, atau sampel demo bawaan.
-  - *Smart Feature Alignment*: Menyelaraskan nama dan tipe kolom klaim uji dengan skema fitur model terlatih (`training_features`), serta melakukan imputasi statistik nilai hilang berbasis median training (`feature_medians`).
-  - *Hardware-Aware Multi-Model Inference & Type-Safe Aggregation*: Inferensi ensemble (Isolation Forest, Autoencoder, XGBoost, GNN) dengan alokasi otomatis komputasi CUDA GPU / CPU yang aman, serta konstruksi DataFrame hasil deteksi berbasis Series yang selaras indeks (*type-safe*).
+
+Halaman deteksi dirancang sebagai stasiun kerja investigasi fraud komprehensif yang mampu mengevaluasi **data klaim baru secara langsung** berdasarkan model yang telah dilatih sebelumnya, tanpa memerlukan proses pelatihan ulang (*retraining*).
+
+#### 4.5.1 Alur Inferensi Data Baru Berdasarkan Model Terlatih (Trained Model Inference)
+
+Alur eksekusi inferensi data baru terdiri dari tahapan terstruktur berikut:
+
+```text
+1. Pemuatan Model Terlatih (load_persisted_detector)
+   │  ├── Membaca model pkl/pt dari direktori models/
+   │  └── Mengekstrak metadata skema (training_features) & kamus median (feature_medians)
+   │
+2. Ingestion & Sanitasi Data Baru
+   │  ├── Parsing file CSV / Excel (xlsx/xls) / Parquet
+   │  ├── Normalisasi nama kolom standar & injeksi _astina_row_id
+   │  └── Evaluasi Schema Readiness (14 Kolom Inti)
+   │
+3. Smart Feature Alignment & Imputasi Median Training (build_aligned_inference_features)
+   │  ├── Tier 1: Fitur Eksisting (Direct Match dari data baru)
+   │  ├── Tier 2: Fitur Diturunkan (Auto-Derived missing flags, temporal, rasio domain)
+   │  └── Tier 3: Fitur Imputasi Median (Menggunakan feature_medians dari training data)
+   │
+4. Eksekusi Inferensi Multi-Model Ensemble
+   │  ├── Isolation Forest: Scoring kedalaman isolasi pohon partisi
+   │  ├── PyTorch Deep Autoencoder: Rekonstruksi non-linear & kalkulasi loss
+   │  ├── XGBoost / LightGBM: Prediksi probabilitas boosted trees
+   │  └── Graph Neural Network (GNN GATConv): Scoring pola relasi sindikat kolusi
+   │
+5. Eksekusi Paralel 9 Modul Business Rules Engine
+   │  └── Repeat Billing, Phantom Service, Provider Capacity, Duplicate, dsb.
+   │
+6. Agregasi Risiko Hybrid & Klasifikasi Tingkat Keparahan
+   │  ├── Final Risk Score: 50% Aturan Bisnis + 30% ML Anomaly + 20% Duplicate Flag
+   │  └── Severity Badge: High Risk (≥0.65), Medium Risk (0.40–0.64), Low Risk (<0.40)
+   │
+7. Penyajian Hasil pada 5 Tab Spesifik & Pembuatan Dokumen BAP AI Copilot
+```
+
+#### 4.5.2 Tri-Tier Feature Alignment & Imputasi Median Training
+
+Dataset transaksi klaim baru yang masuk ke meja investigasi sering kali tidak memiliki kolom yang sama persis dengan dataset pelatihan (misalnya ketiadaan kolom fitur rekayasa atau kolom opsional). Untuk mencegah kegagalan inferensi atau bias distorsi yang timbul akibat pengisian angka nol (`0.0`), ASTINA mengimplementasikan fungsi `build_aligned_inference_features()` dengan pendekatan tiga tingkat (*tri-tier*):
+
+1. **Fitur Eksisting (*Direct Feature Mapping*)**:
+   Jika kolom fitur pelatihan telah tersedia langsung di dalam DataFrame klaim baru, nilai kolom tersebut digunakan secara langsung.
+2. **Fitur Diturunkan (*Dynamic Feature Derivation*)**:
+   - Kolom indikator ketiadaan (`*_missing`): Otomatis dibentuk dari deteksi nilai `NaN`/`None` pada kolom induk.
+   - Kolom rasio moneter asuransi (`payment_ratio`, `allowance_ratio`): Dihitung secara dinamis dari `paid_amount / billed_amount` dan `allowed_amount / billed_amount`.
+   - Kolom temporal (`day_of_week`, `month`): Diekstraksi otomatis dari `billing_date` atau `service_date`.
+3. **Fitur Imputasi Median Training (*Training Median Imputation*)**:
+   Fitur yang tidak dapat ditemukan maupun diturunkan akan diisi menggunakan nilai **median per-fitur dari data training asli** (`feature_medians` yang disimpan di `_params.json`). Dengan pendekatan ini, nilai masukan model tetap netral secara statistik dan tidak memicu *false positive* yang disebabkan oleh pergeseran distribusi buatan (*artificial drift*).
+
+#### 4.5.3 Diagnostik & Audit Penyelarasan Fitur di UI
+
+Setelah eksekusi deteksi dijalankan, halaman menyajikan diagnostik transparansi penuh:
+- **Status Banner**:
+  - 🟢 **Sukses Penuh**: Seluruh fitur ditemukan langsung atau berhasil diturunkan otomatis.
+  - 🟡 **Peringatan Informatif**: Jika ada fitur yang diimputasi dengan median training, banner menampilkan jumlah fitur yang diimputasi dan menyarankan kelengkapan kolom untuk presisi maksimal.
+- **Expander Detail Penyelarasan Fitur Inferensi (*Feature Alignment Audit*)**:
+  Menampilkan rincian daftar kolom per kategori:
+  - Kolom **Fitur Eksisting**
+  - Kolom **Fitur Diturunkan**
+  - Kolom **Fitur Imputasi Median Training**
+- **Proteksi UI & Panduan Pemulihan (*Recovery Guide*)**:
+  Jika model belum dilatih atau metadata fitur training tidak ditemukan, sistem menampilkan pesan informatif beserta tombol shortcut interaktif `🚀 Ke Halaman Pelatihan Model`.
+
+#### 4.5.4 Spesifikasi 5 Tab Investigasi Deteksi
+
 - **Tab 1: 📊 Ringkasan & Visualisasi**:
   - *Grafik Distribusi Prediksi Anomali*: Visualisasi seimbang jumlah klaim `Normal` vs `Anomali` yang stabil pada berbagai proporsi dataset.
   - *Histogram Skor Probabilitas Anomali*: Distribusi probabilitas ensemble multi-model dilengkapi garis ambang batas (*threshold marker*).
@@ -400,9 +463,9 @@ Modul `pii_masker.py` melindungi data sensitif sesuai regulasi UU Perlindungan D
 
 ---
 
-## 11. Pengujian Kualitas & Quality Gate (53 Test Cases)
+## 11. Pengujian Kualitas & Quality Gate (58 Test Cases)
 
-Seluruh komponen ASTINA diuji secara otomatis menggunakan suite Pytest yang mencakup **53 skenario uji komprehensif** (100% Passed):
+Seluruh komponen ASTINA diuji secara otomatis menggunakan suite Pytest yang mencakup **59 skenario uji terdaftar** (58 Passed, 1 Skipped, 100% Green):
 
 ```powershell
 # Menjalankan seluruh test suite
@@ -418,12 +481,13 @@ Seluruh komponen ASTINA diuji secara otomatis menggunakan suite Pytest yang menc
 | `test_detection_modules.py` | 14 | Uji menyeluruh 9 modul business rules, edge cases, dan integrasi pipeline |
 | `test_feature_selection.py` | 6 | Uji SelectKBest (F-score & MI), Tree Importance, Filter Multikolinearitas, Low-Variance, PCA |
 | `test_gnn_minibatch.py` | 4 | Uji PyTorch GNN mini-batch NeighborLoader, forward pass, dan early stopping |
+| `test_gpu_and_pipeline_fixes.py` | 6 | Uji kebersihan memori GPU, parameter XGBoost hardware, fallback CUDA, fuzzy similarity parity, dan pseudo-label caching |
 | `test_graph_scaling.py` | 2 | Uji batasan node/edge graph builder dan pencegahan OOM pada graf besar |
 | `test_large_file_ingestion.py` | 2 | Uji konversi streaming CSV-to-Parquet per chunk dengan alokasi buffer aman |
 | `test_optuna_ensemble_and_drift.py`| 5 | Uji optimasi hyperparameter Optuna dan deteksi Kolmogorov-Smirnov drift |
 | `test_pipeline_edge_cases.py` | 12 | Uji toleransi data null, data bertipe campuran, sanitasi string, dan extreme amounts |
 | `test_streaming_preprocessing_memory.py` | 2 | Uji batasan pemakaian RAM (<100MB peak) pada pemrosesan streaming skala besar |
-| **Total Test Suite** | **53** | **100% Passed (Green)** |
+| **Total Test Suite** | **59 (58 Passed, 1 Skipped)** | **100% Passed (Green)** |
 
 ---
 

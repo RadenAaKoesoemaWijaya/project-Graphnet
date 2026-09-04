@@ -536,6 +536,16 @@ def load_persisted_detector():
         if training_metadata.get('label_column'):
             st.session_state['training_label_column'] = training_metadata['label_column']
 
+        # Restore named feature medians for inference imputation.
+        # Priority: training_metadata.feature_medians (named) → top-level feature_medians in params
+        _feature_medians = (
+            training_metadata.get('feature_medians')
+            or params.get('feature_medians')
+            or {}
+        )
+        if _feature_medians:
+            st.session_state['feature_medians'] = _feature_medians
+
         return detector
     except Exception as e:
         st.error(f"❌ Gagal memuat model tersimpan: {str(e)}")

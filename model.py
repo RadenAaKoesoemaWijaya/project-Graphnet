@@ -2561,7 +2561,22 @@ class CombinedAnomalyDetector:
         # Impute missing values first, then scale features
         features_imputed = self.imputer.fit_transform(features)
         features_scaled = self.scaler.fit_transform(features_imputed)
-        
+
+        # Collect per-feature medians from training data for inference imputation.
+        # Stored in training_metadata so they survive model serialisation and can
+        # be used by build_aligned_inference_features() on unseen datasets.
+        try:
+            _feature_arr = np.asarray(features_imputed, dtype=np.float64)
+            _feature_medians = {
+                str(i): float(np.nanmedian(_feature_arr[:, i]))
+                for i in range(_feature_arr.shape[1])
+            }
+        except Exception:
+            _feature_medians = {}
+        if not isinstance(self.training_metadata, dict):
+            self.training_metadata = {}
+        self.training_metadata.setdefault('feature_medians_by_index', _feature_medians)
+
         # Dynamic weight optimization based on data characteristics
         if self.use_dynamic_weights and self.weight_optimizer:
             characteristics = self.weight_optimizer.analyze_data_characteristics(features, edge_index)
@@ -4352,6 +4367,22 @@ class CombinedAnomalyDetector:
         joblib.dump(self.imputer, p_imp); artefacts.append(p_imp)
         joblib.dump(self.scaler, p_scl); artefacts.append(p_scl)
 
+        # Build named feature_medians mapping: {feature_name -> median_value}
+        # Used by build_aligned_inference_features() during inference to fill
+        # missing engineered features with training-distribution-neutral values.
+        _tm = self.training_metadata if isinstance(self.training_metadata, dict) else {}
+        _training_features = _tm.get('training_features') or []
+        _medians_by_index = _tm.get('feature_medians_by_index', {})
+        _named_medians: dict = {}
+        if _training_features and _medians_by_index:
+            for _idx, _feat_name in enumerate(_training_features):
+                _val = _medians_by_index.get(str(_idx))
+                if _val is not None:
+                    _named_medians[str(_feat_name)] = float(_val)
+        # Also persist the named medians back into training_metadata for completeness
+        if _named_medians and isinstance(self.training_metadata, dict):
+            self.training_metadata['feature_medians'] = _named_medians
+
         params = {
             'autoencoder_threshold': self.autoencoder_threshold,
             'isolation_weight': self.isolation_weight,
@@ -4375,10 +4406,10 @@ class CombinedAnomalyDetector:
             # QW7: feature schema — list of column names used at training
             # time, so the detection page can validate the inference
             # data against the trained schema.
-            'feature_columns': list(self.training_metadata.get('feature_columns', []))
-                              if isinstance(self.training_metadata, dict) else [],
-            'feature_dtypes': dict(self.training_metadata.get('feature_dtypes', {}))
-                              if isinstance(self.training_metadata, dict) else {},
+            'feature_columns': list(_tm.get('feature_columns', [])),
+            'feature_dtypes': dict(_tm.get('feature_dtypes', {})),
+            # Named median lookup table for inference imputation
+            'feature_medians': _named_medians,
         }
         p_params = f"{path_prefix}_params.json"
         
