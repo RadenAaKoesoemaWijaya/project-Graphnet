@@ -10,6 +10,12 @@ import pandas as pd
 import sys
 from pathlib import Path
 
+if hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+
 # Add workspace to path
 sys.path.insert(0, str(Path(__file__).parent))
 

@@ -8,6 +8,12 @@ import ast
 import sys
 from pathlib import Path
 
+if hasattr(sys.stdout, 'reconfigure'):
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+
 def analyze_model_explainer():
     """Analyze model_explainer.py for the fix"""
     
