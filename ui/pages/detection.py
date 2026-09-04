@@ -185,6 +185,13 @@ def show_detection_page():
     st.title("🔍 Deteksi Anomali Transaksi Klaim")
     st.caption("Deteksi komprehensif menggabungkan Machine Learning & Deep Learning (Isolation Forest, Autoencoder, XGBoost, GNN) dengan 9 Modul Business Rules & AI Investigator Copilot.")
 
+    with st.expander("💡 Panduan Matriks Risiko & Tindak Lanjut Investigasi", expanded=False):
+        st.markdown("""
+        - 🔴 **Risiko Tinggi (Skor >= 0.65)**: **HOLD KLAIM SEGERA**. Tahan pencairan dana, lakukan audit berkas medis mendalam, dan jadwalkan verifikasi lapangan ke faskes terkait.
+        - 🟡 **Risiko Sedang (0.40 <= Skor < 0.65)**: **KLARIFIKASI DOKUMEN**. Minta resume medis atau bukti penunjang (laboratorium/radiologi) kepada faskes sebelum persetujuan.
+        - 🟢 **Risiko Rendah (Skor < 0.40)**: **PERSETUJUAN OTOMATIS (STP)**. Pola klaim normal, diproses pembayaran langsung sesuai alur standar.
+        """)
+
     # ── 1. Model Loading ───────────────────────────────────────────────────────
     detector = load_persisted_detector()
     if detector is None:

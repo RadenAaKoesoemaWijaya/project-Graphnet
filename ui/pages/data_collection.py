@@ -53,6 +53,17 @@ def show_data_collection_page():
     **Sistem ini agnostik terhadap struktur kolom - Gunakan dataset dunia nyata Anda!**
     """)
 
+    with st.expander("ℹ️ Panduan Skema & Format Rekomendasi (14 Kolom Inti)", expanded=False):
+        st.markdown("""
+        Untuk mengaktifkan seluruh modul machine learning dan 9 aturan bisnis fraud secara maksimal, pastikan dataset Anda memuat 14 kolom inti berikut:
+        - **Kunci Identitas**: `claim_id`, `patient_id`, `provider_id`
+        - **Klinis & Prosedur**: `service_code`, `diagnosis_code`, `quantity`, `length_of_stay`
+        - **Finansial**: `billed_amount`, `paid_amount`, `allowed_amount`
+        - **Temporal & Status**: `service_date`, `billing_date`, `claim_status`, `patient_age`
+        
+        *Catatan: Sistem tetap adaptif memproses dataset parsial dengan imputasi dan feature extraction otomatis.*
+        """)
+
     # Upload file
     uploaded_file = st.file_uploader(
         "Unggah file data transaksi (CSV/Excel/Parquet)",

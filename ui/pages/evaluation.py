@@ -9,6 +9,14 @@ def show_evaluation_page():
     st.title("📊 Evaluasi Model")
     st.info("Evaluasi mengukur kualitas model pada data yang tidak digunakan untuk training. Gunakan metrik dan grafik ini untuk menilai apakah threshold deteksi sudah sesuai.")
 
+    with st.expander("💡 Panduan Interpretasi Metrik & Dampak Bisnis", expanded=False):
+        st.markdown("""
+        - **ROC-AUC (Receiver Operating Characteristic)**: Mengukur ketepatan pemisahan klaim anomali vs wajar. Nilai > 0.85 menunjukkan kemampuan diskriminasi model yang sangat baik.
+        - **Recall (Sensitivitas Fraud)**: Persentase fraud yang berhasil tertangkap. *Recall tinggi* sangat krusial dalam asuransi kesehatan guna meminimalkan klaim curang yang lolos pencairan (*False Negative*).
+        - **Precision (Akurasi Prediksi)**: Ketepatan saat model memprediksi anomali. *Precision tinggi* mencegah klaim wajar tertahan review berlebihan (*False Positive*).
+        - **Confusion Matrix**: Menampilkan tabulasi silang aktual vs prediksi untuk menentukan kalibrasi ambang batas (*threshold tuning*).
+        """)
+
     detector = load_persisted_detector()
     if detector is None:
         st.error("❌ Model belum tersedia. Silakan training model terlebih dahulu.")

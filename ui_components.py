@@ -455,6 +455,10 @@ def apply_custom_css():
         background: linear-gradient(90deg, #8B5CF6, #A78BFA);
     }
 
+    .card-accent-amber::before {
+        background: linear-gradient(90deg, #F59E0B, #FBBF24);
+    }
+
     .card-accent-emerald::before {
         background: linear-gradient(90deg, #10B981, #34D399);
     }
@@ -487,6 +491,11 @@ def apply_custom_css():
         border-color: #EDE9FE;
     }
 
+    .icon-box-amber {
+        background: #FFFBEB;
+        border-color: #FEF3C7;
+    }
+
     .icon-box-emerald {
         background: #ECFDF5;
         border-color: #D1FAE5;
@@ -513,6 +522,12 @@ def apply_custom_css():
         background: #F5F3FF;
         color: #6D28D9;
         border-color: #DDD6FE;
+    }
+
+    .badge-amber {
+        background: #FFFBEB;
+        color: #B45309;
+        border-color: #FDE68A;
     }
 
     .badge-emerald {
