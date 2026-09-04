@@ -237,7 +237,16 @@ def get_adaptive_gnn_threshold(device, feature_dim, num_nodes):
                 return 3000
     except Exception as e:
         logger.warning(f"Failed to calculate adaptive GNN threshold, using default: {e}")
-        return 3000  # Conservative default
+def clean_gpu_memory():
+    """Defensively free cached GPU memory across PyTorch operations to prevent OOM."""
+    try:
+        if TORCH_AVAILABLE and torch is not None and getattr(torch, 'cuda', None) is not None:
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                if hasattr(torch.cuda, 'ipc_collect'):
+                    torch.cuda.ipc_collect()
+    except Exception as e:
+        logger.debug(f"Failed to clear GPU memory: {e}")
 
 def fast_rank_normalize(arr, threshold=10000):
     """
@@ -1358,14 +1367,25 @@ class ClaimAnomalyXGBoostModel:
             'eval_metric': 'logloss'
         }
         
+        # Hardware acceleration detection (CUDA)
+        has_cuda = False
+        if TORCH_AVAILABLE and torch is not None and getattr(torch, 'cuda', None) is not None:
+            try:
+                has_cuda = bool(torch.cuda.is_available())
+            except Exception:
+                has_cuda = False
+
         if model_type == 'xgboost' and XGB_AVAILABLE:
+            xgb_tree_method = 'hist'
+            xgb_device = 'cuda' if has_cuda else 'cpu'
             default_params.update({
                 'objective': 'binary:logistic',
                 'subsample': 0.8,
                 'colsample_bytree': 0.8,
                 'reg_alpha': 0.1,
                 'reg_lambda': 1.0,
-                'tree_method': 'hist',  # Optimized for big data
+                'tree_method': xgb_tree_method,
+                'device': xgb_device,
                 'enable_categorical': True  # Handle categorical features
             })
         elif model_type == 'lightgbm' and LGB_AVAILABLE:
@@ -1379,6 +1399,7 @@ class ClaimAnomalyXGBoostModel:
                 'force_row_wise': True  # Memory efficiency
             })
         elif model_type == 'catboost' and CATBOOST_AVAILABLE:
+            cb_task_type = 'GPU' if has_cuda else 'CPU'
             default_params.update({
                 'loss_function': 'Logloss',
                 'eval_metric': 'AUC',
@@ -1388,6 +1409,7 @@ class ClaimAnomalyXGBoostModel:
                 'bagging_temperature': 1.0,
                 'random_seed': 42,
                 'verbose': False,
+                'task_type': cb_task_type,
                 'allow_writing_files': False  # Prevent writing to disk
             })
         elif model_type == 'random_forest':
@@ -1439,17 +1461,30 @@ class ClaimAnomalyXGBoostModel:
         )
 
         if self.model_type == 'xgboost' and XGB_AVAILABLE:
-            self.model = xgb.XGBClassifier(**self.params)
             fit_kwargs = {
                 'X': X_train,
                 'y': y_train,
                 'eval_set': [(X_val, y_val)],
                 'verbose': False,
             }
-            if 'early_stopping_rounds' in inspect.signature(self.model.fit).parameters:
-                fit_kwargs['early_stopping_rounds'] = 10
-                fit_kwargs['eval_metric'] = 'logloss'
-            self.model.fit(**fit_kwargs)
+            try:
+                self.model = xgb.XGBClassifier(**self.params)
+                if 'early_stopping_rounds' in inspect.signature(self.model.fit).parameters:
+                    fit_kwargs['early_stopping_rounds'] = 10
+                    fit_kwargs['eval_metric'] = 'logloss'
+                self.model.fit(**fit_kwargs)
+            except Exception as e:
+                # If GPU acceleration failed (e.g. CUDA device mismatch or missing GPU runtime), fallback to CPU
+                if self.params.get('device') == 'cuda':
+                    logger.warning(f"XGBoost CUDA training failed ({e}), falling back to CPU.")
+                    self.params['device'] = 'cpu'
+                    self.model = xgb.XGBClassifier(**self.params)
+                    if 'early_stopping_rounds' in inspect.signature(self.model.fit).parameters:
+                        fit_kwargs['early_stopping_rounds'] = 10
+                        fit_kwargs['eval_metric'] = 'logloss'
+                    self.model.fit(**fit_kwargs)
+                else:
+                    raise e
         elif self.model_type == 'lightgbm' and LGB_AVAILABLE:
             self.model = lgb.LGBMClassifier(**self.params)
             self.model.fit(
@@ -2610,7 +2645,8 @@ class CombinedAnomalyDetector:
                 logger.warning("VAE mode enabled - this adds ~30% training overhead")
 
             dataset = TensorDataset(torch.FloatTensor(features_scaled))
-            train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+            pin_mem = bool(getattr(device, 'type', '') == 'cuda')
+            train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, pin_memory=pin_mem)
 
             autoencoder_optimizer = torch.optim.Adam(self.autoencoder.parameters(), lr=0.001)
             
@@ -2645,7 +2681,7 @@ class CombinedAnomalyDetector:
             for epoch in range(epochs):
                 total_loss = 0
                 for batch in train_loader:
-                    clean = batch[0].to(device)
+                    clean = batch[0].to(device, non_blocking=pin_mem)
                     # QW4 denoising: corrupt input; target is always the
                     # clean signal so the AE learns to denoise.
                     if ae_noise > 0:
@@ -2748,19 +2784,28 @@ class CombinedAnomalyDetector:
             all_errors = []
             with torch.no_grad():
                 for batch in train_loader:
-                    clean = batch[0].to(device)
+                    clean = batch[0].to(device, non_blocking=pin_mem)
                     out = self.autoencoder(clean)
                     if self.autoencoder.vae:
                         recon = out[0]
                     else:
                         recon = out
                     batch_errors = F.mse_loss(recon, clean, reduction='none').mean(dim=1)
-                    all_errors.extend(batch_errors.cpu().numpy())
+                    all_errors.append(batch_errors)
 
-            self.autoencoder_threshold = np.percentile(all_errors, 95)
+            if all_errors:
+                if isinstance(all_errors[0], torch.Tensor):
+                    all_errors_np = torch.cat(all_errors, dim=0).cpu().numpy()
+                else:
+                    all_errors_np = np.concatenate(all_errors)
+            else:
+                all_errors_np = np.zeros(0)
+
+            self.autoencoder_threshold = float(np.percentile(all_errors_np, 95)) if len(all_errors_np) > 0 else 0.5
             
             # Cache reconstruction errors for pseudo-label generation (avoid redundant computation)
-            self._cached_reconstruction_errors = np.array(all_errors)
+            self._cached_reconstruction_errors = all_errors_np
+            clean_gpu_memory()
 
         # Train HDBSCAN (or DBSCAN if HDBSCAN not available)
         if 'dbscan' in self.algorithms:
@@ -2993,8 +3038,15 @@ class CombinedAnomalyDetector:
                     out = self.autoencoder(batch_features)
                     recon = out[0] if self.autoencoder.vae else out
                     batch_errors = F.mse_loss(recon, batch_features, reduction='none').mean(dim=1)
-                    all_errors.extend(batch_errors.cpu().numpy())
-            ae_scores = np.array(all_errors) / self.autoencoder_threshold
+                    all_errors.append(batch_errors)
+            if all_errors:
+                if isinstance(all_errors[0], torch.Tensor):
+                    all_errors_np = torch.cat(all_errors, dim=0).cpu().numpy()
+                else:
+                    all_errors_np = np.concatenate(all_errors)
+            else:
+                all_errors_np = np.zeros(0)
+            ae_scores = all_errors_np / self.autoencoder_threshold
             individual_scores['autoencoder'] = np.clip(ae_scores, 0, 1)
 
         # 3. XGBoost / Supervised scores
@@ -3010,13 +3062,41 @@ class CombinedAnomalyDetector:
                 self.gnn_model.eval()
                 with torch.no_grad():
                     num_nodes = features_scaled.shape[0]
-                    ei = torch.LongTensor(edge_index).to(device)
-                    if ei.dim() == 2 and ei.size(0) != 2 and ei.size(1) == 2:
-                        ei = ei.t().contiguous()
-                    feat_t = torch.FloatTensor(features_scaled).to(device)
-                    batch_t = torch.zeros(num_nodes, dtype=torch.long, device=device)
-                    out = self.gnn_model(feat_t, ei, batch_t, edge_type)
-                    individual_scores['gnn'] = torch.softmax(out, dim=1)[:, 1].cpu().numpy()
+                    adaptive_threshold = get_adaptive_gnn_threshold(device, features_scaled.shape[1], num_nodes)
+                    ei_tensor = torch.LongTensor(edge_index)
+                    if ei_tensor.dim() == 2 and ei_tensor.size(0) != 2 and ei_tensor.size(1) == 2:
+                        ei_tensor = ei_tensor.t().contiguous()
+
+                    if num_nodes > adaptive_threshold:
+                        try:
+                            from torch_geometric.loader import NeighborLoader
+                            cpu_data = Data(x=torch.FloatTensor(features_scaled), edge_index=ei_tensor.cpu())
+                            loader_bs = get_optimal_batch_size(device, num_nodes, features_scaled.shape[1], default_batch=1024)
+                            loader = NeighborLoader(cpu_data, num_neighbors=[15, 10], batch_size=loader_bs, shuffle=False)
+                            gnn_scores_list = []
+                            for b in loader:
+                                b = b.to(device)
+                                b_out = self.gnn_model(b.x, b.edge_index, None, getattr(b, 'edge_attr', None))
+                                gnn_scores_list.append(torch.softmax(b_out[:b.batch_size], dim=1)[:, 1].cpu().numpy())
+                            individual_scores['gnn'] = np.concatenate(gnn_scores_list)
+                        except Exception as n_err:
+                            logger.warning(f"NeighborLoader scoring failed in weight optimization: {n_err}. Fallback chunking.")
+                            chunk_sz = min(2048, max(256, num_nodes // 10))
+                            gnn_scores_list = []
+                            for ci in range(0, num_nodes, chunk_sz):
+                                cend = min(ci + chunk_sz, num_nodes)
+                                cur_len = cend - ci
+                                sub_x = torch.FloatTensor(features_scaled[ci:cend]).to(device)
+                                sub_ei = torch.arange(cur_len, device=device).repeat(2, 1)
+                                b_out = self.gnn_model(sub_x, sub_ei, None, None)
+                                gnn_scores_list.append(torch.softmax(b_out, dim=1)[:, 1].cpu().numpy())
+                            individual_scores['gnn'] = np.concatenate(gnn_scores_list)
+                    else:
+                        ei = ei_tensor.to(device)
+                        feat_t = torch.FloatTensor(features_scaled).to(device)
+                        batch_t = torch.zeros(num_nodes, dtype=torch.long, device=device)
+                        out = self.gnn_model(feat_t, ei, batch_t, edge_type)
+                        individual_scores['gnn'] = torch.softmax(out, dim=1)[:, 1].cpu().numpy()
             except Exception as e:
                 logger.warning("Error getting GNN scores for weight optimization: %s", e)
 
@@ -3884,9 +3964,17 @@ class CombinedAnomalyDetector:
                     else:
                         reconstructed = out
                     batch_errors = F.mse_loss(reconstructed, batch_features, reduction='none').mean(dim=1)
-                    all_errors.extend(batch_errors.cpu().numpy())
+                    all_errors.append(batch_errors)
 
-            ae_probabilities = np.array(all_errors) / self.autoencoder_threshold
+            if all_errors:
+                if isinstance(all_errors[0], torch.Tensor):
+                    all_errors_np = torch.cat(all_errors, dim=0).cpu().numpy()
+                else:
+                    all_errors_np = np.concatenate(all_errors)
+            else:
+                all_errors_np = np.zeros(0)
+
+            ae_probabilities = all_errors_np / (self.autoencoder_threshold if self.autoencoder_threshold and self.autoencoder_threshold > 0 else 1.0)
             ae_probabilities = np.clip(ae_probabilities, 0, 1)
         else:
             ae_probabilities = np.zeros(len(features))
@@ -3953,9 +4041,10 @@ class CombinedAnomalyDetector:
                         if num_nodes > adaptive_threshold:
                             try:
                                 from torch_geometric.loader import NeighborLoader
-                                data = Data(x=features_tensor, edge_index=ei)
+                                # Keep graph structure on CPU for NeighborLoader to avoid VRAM explosion
+                                cpu_data = Data(x=torch.FloatTensor(features_scaled), edge_index=ei_tensor.cpu())
                                 if edge_attr is not None:
-                                    data.edge_attr = edge_attr
+                                    cpu_data.edge_attr = edge_attr.cpu()
                                 # Use dynamic batch size for NeighborLoader
                                 loader_batch_size = get_optimal_batch_size(
                                     device, 
@@ -3965,7 +4054,7 @@ class CombinedAnomalyDetector:
                                 )
                                 # Use bounded fanout [15, 10] instead of [-1] to prevent neighbor explosion OOM
                                 loader = NeighborLoader(
-                                    data,
+                                    cpu_data,
                                     num_neighbors=[15, 10],
                                     batch_size=loader_batch_size,
                                     shuffle=False,
@@ -3973,19 +4062,24 @@ class CombinedAnomalyDetector:
                                 )
                                 gnn_probs_list = []
                                 for batch in loader:
+                                    # Ensure batch is on target device (CUDA or CPU)
+                                    batch = batch.to(device)
                                     out = self.gnn_model(batch.x, batch.edge_index, None, getattr(batch, 'edge_attr', None))
                                     # Only take the predictions for the seed nodes
                                     probs = torch.softmax(out[:batch.batch_size], dim=1)[:, 1]
                                     gnn_probs_list.append(probs.cpu().numpy())
                                 gnn_probabilities = np.concatenate(gnn_probs_list)
                             except Exception as sampler_err:
-                                logger.warning("NeighborLoader inference failed (%s). Using chunked direct forward.", sampler_err)
-                                # Fallback chunked forward without full-batch OOM
+                                logger.warning("NeighborLoader inference failed (%s). Using chunked direct forward with self-loops.", sampler_err)
+                                # Fallback chunked forward with valid self-loops to satisfy GATConv edge_index requirement
                                 chunk_size = min(2048, max(256, num_nodes // 10))
                                 gnn_probs_list = []
                                 for i in range(0, num_nodes, chunk_size):
                                     chunk_end = min(i + chunk_size, num_nodes)
-                                    out = self.gnn_model(features_tensor[i:chunk_end], None, None, None)
+                                    cur_len = chunk_end - i
+                                    sub_x = features_tensor[i:chunk_end]
+                                    sub_ei = torch.arange(cur_len, device=device).repeat(2, 1)
+                                    out = self.gnn_model(sub_x, sub_ei, None, None)
                                     probs = torch.softmax(out, dim=1)[:, 1]
                                     gnn_probs_list.append(probs.cpu().numpy())
                                 gnn_probabilities = np.concatenate(gnn_probs_list)
@@ -4000,6 +4094,8 @@ class CombinedAnomalyDetector:
                     gnn_probabilities = np.zeros(len(features))
         else:
             gnn_probabilities = np.zeros(len(features))
+
+        clean_gpu_memory()
 
         weights = {
             'isolation_forest': self.isolation_weight if 'isolation_forest' in self.algorithms else 0.0,

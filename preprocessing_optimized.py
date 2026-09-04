@@ -974,6 +974,29 @@ def apply_select_k_best(df, feature_columns, target_col=None, k=20, score_func_n
 
     return selected_features, feature_scores
 
+_PSEUDO_LABEL_CACHE = {}
+
+def get_cached_pseudo_labels(X, contamination=0.1, random_state=42):
+    """Generate or retrieve cached pseudo-labels using Isolation Forest to avoid redundant fits."""
+    cache_key = (
+        len(X),
+        X.shape[1],
+        tuple(X.columns[:5]) if hasattr(X, 'columns') else None,
+        float(X.iloc[0, 0]) if hasattr(X, 'iloc') and not X.empty else 0.0
+    )
+    if cache_key in _PSEUDO_LABEL_CACHE:
+        cached = _PSEUDO_LABEL_CACHE[cache_key]
+        if len(cached) == len(X):
+            return cached
+
+    iso = IsolationForest(contamination=contamination, random_state=random_state)
+    y = iso.fit_predict(X)
+    pseudo_labels = (y == -1).astype(int)
+    if len(_PSEUDO_LABEL_CACHE) >= 5:
+        _PSEUDO_LABEL_CACHE.clear()
+    _PSEUDO_LABEL_CACHE[cache_key] = pseudo_labels
+    return pseudo_labels
+
 @st.cache_data(ttl=1800, max_entries=10)
 def apply_mutual_info_selection(df, feature_columns, target_col=None, k=20, sample_size=10000):
     """
@@ -998,11 +1021,9 @@ def apply_mutual_info_selection(df, feature_columns, target_col=None, k=20, samp
     medians = X.median()
     X = X.fillna(medians).fillna(0) # Fallback to 0 if median is NaN
 
-    # If no target provided, use Isolation Forest to find outliers as pseudo-labels
+    # If no target provided, use cached Isolation Forest pseudo-labels
     if target_col is None or target_col not in df.columns:
-        iso = IsolationForest(contamination=0.1, random_state=42)
-        y = iso.fit_predict(X)
-        y = (y == -1).astype(int)
+        y = get_cached_pseudo_labels(X, contamination=0.1, random_state=42)
     else:
         y = df_sample[target_col].fillna(df_sample[target_col].median() if pd.api.types.is_numeric_dtype(df_sample[target_col]) else df_sample[target_col].mode()[0])
 
@@ -1045,9 +1066,7 @@ def apply_tree_based_selection(df, feature_columns, target_col=None, k=20, sampl
     X = X.fillna(medians).fillna(0) # Fallback to 0 if median is NaN
     
     if target_col is None or target_col not in df.columns:
-        iso = IsolationForest(contamination=0.1, random_state=42)
-        y = iso.fit_predict(X)
-        y = (y == -1).astype(int)
+        y = get_cached_pseudo_labels(X, contamination=0.1, random_state=42)
     else:
         y = df_sample[target_col].fillna(df_sample[target_col].median() if pd.api.types.is_numeric_dtype(df_sample[target_col]) else df_sample[target_col].mode()[0])
     

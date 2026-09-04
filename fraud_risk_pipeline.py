@@ -60,37 +60,49 @@ def compute_patient_level_fuzzy_similarity_scores(
         return pd.Series(dtype=float, index=clean.index, name="fuzzy_similarity_score")
 
     matcher = FuzzyClaimMatcher()
-    scores: Dict[int, float] = {}
+    scores: Dict[int, float] = {int(row_id): 0.0 for row_id in clean["_astina_row_id"]}
 
-    for patient_id, patient_group in clean.groupby("patient_id", dropna=False):
-        patient_group = patient_group.sort_values("billing_date")
-        if patient_group.empty:
+    # Pre-parse billing dates once across the dataset to avoid repetitive pandas parsing
+    clean_copy = clean.copy()
+    clean_copy["_parsed_date"] = pd.to_datetime(clean_copy["billing_date"], errors="coerce")
+
+    # Group by patient_id
+    for _, patient_group in clean_copy.groupby("patient_id", dropna=False):
+        # Sort by parsed billing date
+        patient_group = patient_group.sort_values("_parsed_date")
+        n_claims = len(patient_group)
+        if n_claims < 2:
             continue
 
-        for row_id, row in patient_group.set_index("_astina_row_id").iterrows():
-            base_date = pd.to_datetime(row.get("billing_date"), errors="coerce")
-            if pd.isna(base_date):
-                scores[int(row_id)] = 0.0
+        # Convert to records to avoid heavy pandas .iterrows() Series creation overhead
+        records = patient_group.to_dict("records")
+
+        for i in range(n_claims):
+            rec_i = records[i]
+            date_i = rec_i["_parsed_date"]
+            if pd.isna(date_i):
                 continue
+            row_id_i = int(rec_i["_astina_row_id"])
 
-            candidates = patient_group[patient_group["_astina_row_id"] != row_id].copy()
-            if candidates.empty:
-                scores[int(row_id)] = 0.0
-                continue
+            for j in range(i + 1, n_claims):
+                rec_j = records[j]
+                date_j = rec_j["_parsed_date"]
+                if pd.isna(date_j):
+                    continue
 
-            candidates["time_gap_days"] = (pd.to_datetime(candidates["billing_date"], errors="coerce") - base_date).dt.days.abs()
-            candidates = candidates[candidates["time_gap_days"].le(max_window_days)]
-            if candidates.empty:
-                scores[int(row_id)] = 0.0
-                continue
+                # Because records are sorted by date, break early once gap exceeds max_window_days
+                time_gap_days = abs((date_j - date_i).days)
+                if time_gap_days > max_window_days:
+                    break
 
-            best_score = 0.0
-            for _, candidate in candidates.iterrows():
-                score = matcher.calculate_claim_similarity(row.to_dict(), candidate.to_dict())
-                if score > best_score:
-                    best_score = score
-
-            scores[int(row_id)] = float(best_score if best_score >= min_similarity else 0.0)
+                # Symmetric similarity check: updates both claims simultaneously
+                sim = matcher.calculate_claim_similarity(rec_i, rec_j)
+                if sim >= min_similarity:
+                    row_id_j = int(rec_j["_astina_row_id"])
+                    if sim > scores[row_id_i]:
+                        scores[row_id_i] = float(sim)
+                    if sim > scores[row_id_j]:
+                        scores[row_id_j] = float(sim)
 
     ordered_scores = pd.Series(
         [scores.get(int(row_id), 0.0) for row_id in clean["_astina_row_id"]],
