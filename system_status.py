@@ -57,17 +57,21 @@ def show_system_status_page():
                 st.info(f"📊 Compute Capability: {gpu_info['compute_capability']}")
         else:
             st.warning("💻 Menggunakan CPU Mode - Untuk performa lebih baik, install PyTorch dengan GPU support (CUDA/ROCm)")
-            with st.expander("📖 Lihat Panduan Instalasi GPU"):
+            with st.expander("📖 Lihat Panduan Instalasi GPU (NVIDIA CUDA)"):
                 st.markdown("""
-                Laptop Anda menggunakan **AMD Radeon 740M**. Untuk mengaktifkan GPU acceleration:
+                Sistem mendeteksi bahwa PyTorch saat ini berjalan dalam **Mode CPU**. Untuk mengaktifkan akselerasi GPU:
                 
-                **Opsi 1: ROCm (Recommended)**
-                - Install AMD Radeon Driver terbaru
-                - Download GPU_SETUP_GUIDE.md di project root untuk instruksi lengkap
+                **Langkah Cepat (PowerShell):**
+                ```powershell
+                # 1. Aktifkan venv
+                .\\.venv\\Scripts\\Activate.ps1
+                # 2. Install PyTorch dengan dukungan CUDA 12.4
+                pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+                # 3. Verifikasi ketersediaan CUDA
+                python -c "import torch; print('CUDA Available:', torch.cuda.is_available())"
+                ```
                 
-                **Opsi 2: CPU Mode**
-                - Aplikasi akan tetap berjalan stabil, tapi lebih lambat
-                - Cocok untuk dataset kecil dan development
+                *Panduan lengkap arsitektur dan optimasi VRAM dapat dilihat pada file `README.md` (bagian **Panduan Setup Akselerasi GPU**).*
                 """)
         
         st.markdown("---")

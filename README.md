@@ -142,12 +142,29 @@ Semua dependensi inti dikunci pada [requirements.txt](file:///c:/project-Graphne
      ```
 
 3. **Install semua dependensi**:
-   ```bash
-   pip install --upgrade pip
-   pip install -r requirements.txt
-   ```
+   - **Mode CPU (Standar)**:
+     ```bash
+     pip install --upgrade pip
+     pip install -r requirements.txt
+     ```
+   - **Mode GPU CUDA (Direkomendasikan untuk Akselerasi GNN & XGBoost)**:
+     Bagi pengguna dengan kartu grafis NVIDIA (misalnya GeForce RTX Series):
+     ```powershell
+     pip install --upgrade pip
+     # 1. Install PyTorch dengan CUDA 12.4
+     pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+     # 2. Install PyG dan seluruh dependensi proyek
+     pip install torch-geometric
+     pip install -r requirements.txt
+     ```
 
-4. **Jalankan aplikasi**:
+4. **Verifikasi Deteksi GPU (Khusus Mode CUDA)**:
+   ```powershell
+   python -c "import torch; print('CUDA Available:', torch.cuda.is_available()); print('Device:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'None')"
+   ```
+   *Output yang diharapkan jika berhasil: `CUDA Available: True` beserta nama GPU Anda.*
+
+5. **Jalankan aplikasi**:
    - Menggunakan Streamlit langsung:
      ```bash
      streamlit run main.py
@@ -157,8 +174,55 @@ Semua dependensi inti dikunci pada [requirements.txt](file:///c:/project-Graphne
      python run.py
      ```
 
-5. **Akses Dashboard**:
-   Buka browser pada [http://localhost:8501](http://localhost:8501).
+6. **Akses Dashboard**:
+   Buka browser pada [http://localhost:8501](http://localhost:8501). Pada menu **Status Sistem** atau sidebar, indikator akan otomatis menampilkan ikon 🚀 **GPU CUDA Aktif**.
+
+---
+
+### 🚀 Panduan Khusus: Setup & Optimasi Akselerasi GPU (NVIDIA CUDA)
+
+Jika sistem Anda memiliki GPU diskrit NVIDIA (seperti **NVIDIA GeForce RTX 3050 Laptop GPU** atau seri GTX/RTX lainnya), ASTINA dirancang untuk mempercepat proses komputasi berat secara otomatis:
+
+#### Komponen yang Diakselerasi GPU:
+- **Graph Neural Network (GNN / GAT & GCN)**: Mempercepat komputasi pesan topologi graf klaim medis dan pembaruan bobot layer PyTorch Geometric.
+- **Deep Learning Autoencoder**: Pelatihan representasi laten dan kalkulasi *anomaly reconstruction error*.
+- **XGBoost & Ensemble ML**: Memanfaatkan akselerasi CUDA pada algoritma pohon (`tree_method='hist'`, `device='cuda'`).
+- **Real-time Telemetry**: Dashboard otomatis mendeteksi nama perangkat, memori VRAM, dan compute capability.
+
+#### Langkah Setup Step-by-Step (Windows PowerShell):
+1. **Periksa Kesiapan Driver NVIDIA**:
+   ```powershell
+   nvidia-smi
+   ```
+   Pastikan driver terdeteksi dan versi CUDA Driver Version minimal mendukung CUDA 12.x.
+
+2. **Aktifkan Virtual Environment**:
+   ```powershell
+   cd c:\project-Graphnet
+   .\.venv\Scripts\Activate.ps1
+   ```
+
+3. **Install PyTorch dengan CUDA 12.4**:
+   ```powershell
+   pip install --upgrade pip
+   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+   ```
+
+4. **Install PyTorch Geometric & Dependensi ASTINA**:
+   ```powershell
+   pip install torch-geometric
+   pip install -r requirements.txt
+   ```
+
+5. **Uji Validasi Koneksi CUDA**:
+   ```powershell
+   python -c "import torch; print('CUDA Available:', torch.cuda.is_available()); print('Device:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'None')"
+   ```
+
+#### Fitur Keamanan Memori GPU (VRAM 4 GB Resilience):
+- **Otomatis Pembersihan Cache (`clean_gpu_memory`)**: Cache VRAM dibersihkan secara periodik (`torch.cuda.empty_cache()`) setelah tiap epoch untuk mencegah kebocoran memori.
+- **Mini-Batch NeighborLoader**: Pengambilan sampel subgraf bertahap untuk graf berukuran masif (>50.000 klaim) agar tidak terjadi *CUDA Out of Memory (OOM)*.
+- **Auto Fallback ke CPU**: Apabila VRAM penuh saat inferensi atau pelatihan, sistem secara mulus beralih ke komputasi CPU tanpa memicu *crash* aplikasi.
 
 ---
 
