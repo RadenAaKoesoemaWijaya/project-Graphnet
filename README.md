@@ -25,6 +25,7 @@ Aplikasi ini dilengkapi antarmuka interaktif berbasis **Streamlit**, mendukung p
 - **🧭 Interactive Top Navbar & Pipeline Tracker**: Status bar modern *glassmorphic* di setiap halaman yang memuat *live telemetry pills* (status baris & fitur data, model aktif, akselerasi GPU/CPU, status Copilot) dan *5-stage visual breadcrumb tracker* (`Unggah Data` ➔ `Praproses & Fitur` ➔ `Pelatihan` ➔ `Evaluasi` ➔ `Deteksi`).
 - **📊 Real-Time Sidebar Status Dashboard**: Panel metrik samping dengan *progress bar* kesiapan pipeline (0%–100%), kartu spesifikasi dataset streaming, metrik model AI/ML, dan monitor kesehatan hardware.
 - **🛡️ Cryptographic Audit Trail**: Pencatatan riwayat audit forensik berantai hash SHA-256 anti-tamper untuk setiap aksi ingestion, preprocessing, training, deteksi, dan ekspor data.
+- **🔐 Enterprise Auth Gateway & RBAC (Role-Based Access Control)**: Gerbang autentikasi aman dengan pemisahan 4 peran pengguna (*Admin*, *Auditor*, *Analyst*, *Viewer*) yang mematuhi standar UU No. 27 Tahun 2022 (UU PDP) dan HIPAA Security Rule, dilengkapi pencatatan audit log login/logout otomatis.
 - **🔒 PII Masking & Data Privacy**: Perlindungan data sensitif pasien (NIK, Nama, Rekam Medis) secara dinamis sesuai regulasi perlindungan data pribadi (UU PDP / HIPAA).
 - **⚡ Batch-Only Optimized Streaming Pipeline**: Ingestion data berkecepatan tinggi dengan Polars/PyArrow LazyFrame, penulisan Parquet per chunk terkompresi Zstandard, dan evaluasi kesiapan skema otomatis (0–100%).
 - **🔄 Concept Drift & Automated Retraining**: Deteksi pergeseran distribusi data (*covariate & concept drift*) otomatis menggunakan uji Kolmogorov-Smirnov dengan *Champion-Challenger Quality Gate*.
@@ -51,6 +52,7 @@ Aplikasi ini dilengkapi antarmuka interaktif berbasis **Streamlit**, mendukung p
 project-Graphnet/
 ├── main.py                          # Entry point aplikasi web Streamlit & routing navigasi
 ├── run.py                           # Production & local runtime launcher
+├── auth_manager.py                  # Autentikasi pengguna, RBAC 4-role, & session gateway
 ├── config.py                        # Konfigurasi global, limit memori, & parameter aturan
 ├── schema_harmonizer.py             # Harmonizer skema, semantic aliasing, derivasi deterministik & evaluasi Circuit Breaker
 ├── fraud_risk_pipeline.py           # Pipeline orkestrasi skoring risiko hybrid
@@ -286,6 +288,99 @@ python training_cli.py --data cache/processed_data.parquet --output models/ --op
 
 # Melatih khusus model GNN dengan Graph Attention Network (GAT)
 python training_cli.py --data cache/processed_data.parquet --model-type gnn --epochs 50 --batch-size 1024
+```
+
+---
+
+## 🔐 Autentikasi Pengguna, Manajemen Akun & Hak Akses (RBAC)
+
+Sistem ASTINA dilengkapi gerbang keamanan berlapis (*Enterprise Security Gateway*) berbasis **Role-Based Access Control (RBAC)** yang mematuhi ketentuan regulasi perlindungan data medis:
+- **UU No. 27 Tahun 2022** tentang Perlindungan Data Pribadi (UU PDP).
+- **HIPAA Security Rule** (*Access Control, Unique User Identification, and Audit Controls*).
+
+---
+
+### ⚙️ Mode Pengoperasian: Development vs Production
+
+Aplikasi menyediakan dua mode pengoperasian melalui environment variable `AUTH_ENABLED`:
+
+| Mode | Konfigurasi | Karakteristik & Perilaku Sistem |
+| :--- | :--- | :--- |
+| 🛠️ **Development Mode (Default)** | `AUTH_ENABLED=false` | Gerbang login dilewati secara otomatis (*bypass*) langsung ke Beranda sebagai peran **Admin** (`Administrator (Dev Mode)`). Mode ini dirancang agar pengembang dapat melakukan iterasi kode, pengujian, dan *debugging* tanpa perlu memasukkan kata sandi berulang kali saat Streamlit melakukan *hot-reload*. Tombol logout disembunyikan. |
+| 🔒 **Production / Secured Mode** | `AUTH_ENABLED=true` | Gerbang login **wajib** (*mandatory*). Pengguna harus memasukkan Username dan Password yang valid untuk mengakses sistem. Seluruh menu dan halaman dibatasi secara ketat berdasarkan peran pengguna (*least privilege*). Tombol profil dan logout aktif di sidebar. |
+
+#### 🚀 Cara Mengaktifkan Halaman Login & Logout:
+
+Jalankan perintah berikut pada terminal PowerShell sebelum menjalankan aplikasi:
+
+```powershell
+# 1. Aktifkan penegakan autentikasi
+$env:AUTH_ENABLED="true"
+
+# 2. Jalankan aplikasi ASTINA
+python run.py
+```
+
+*(Untuk pengguna Linux / macOS / Docker, gunakan: `export AUTH_ENABLED="true" && python run.py`)*
+
+---
+
+### 👥 4 Akun Bawaan (Default Accounts) & Hak Akses Modul
+
+Sistem menyediakan 4 akun uji coba terkonfigurasi dengan hash SHA-256 dan *cryptographic salt* di [auth_manager.py](file:///c:/project-Graphnet/auth_manager.py):
+
+| Peran (Role) | Username | Password Default | Modul / Halaman yang Diizinkan | Deskripsi Peran & Tanggung Jawab |
+| :--- | :--- | :--- | :--- | :--- |
+| 🔴 **Admin** | `admin` | `AdminAstina2026!` | **Semua Halaman**:<br>• 🏠 *Beranda* (`home`)<br>• 📥 *Unggah Data* (`collect`)<br>• ⚙️ *Pelatihan Model* (`train`)<br>• 📊 *Evaluasi Model* (`evaluate`)<br>• 🚨 *Deteksi Anomali* (`detect`)<br>• 📈 *Status Sistem* (`status`) | Administrator sistem dengan izin penuh untuk konfigurasi parameter, telemetri, inspeksi rantai audit log, pelatihan model, dan deteksi fraud. |
+| 🔵 **Auditor** | `auditor` | `AuditorAstina2026!` | • 🏠 *Beranda* (`home`)<br>• 🚨 *Deteksi Anomali* (`detect`)<br>• 📈 *Status Sistem* (`status`) | Investigator/auditor klaim asuransi. Fokus pada audit anomali klaim, penelusuran graf sindikat (*fraud ring*), penggunaan AI Copilot RAG, dan pembuatan dokumen Berita Acara Pemeriksaan (BAP). |
+| 🟣 **Analyst** | `analyst` | `AnalystAstina2026!` | • 🏠 *Beranda* (`home`)<br>• 📥 *Unggah Data* (`collect`)<br>• ⚙️ *Pelatihan Model* (`train`)<br>• 📊 *Evaluasi Model* (`evaluate`)<br>• 🚨 *Deteksi Anomali* (`detect`) | Data scientist / AI engineer yang berwenang mengunggah dataset, menjalankan seleksi fitur & PCA, melatih model AI/GNN, serta mengevaluasi metrik AUC/F1-Score. |
+| ⚪ **Viewer** | `viewer` | `ViewerAstina2026!` | • 🏠 *Beranda* (`home`)<br>• 📈 *Status Sistem* (`status`) | Pihak manajemen atau eksekutif dengan hak akses baca (*read-only*). Memantau dashboard ringkasan eksekutif, status kesiapan pipeline, dan kesehatan resource server. |
+
+---
+
+### 🖥️ Panduan Antarmuka Login & Logout Akun
+
+1. **Halaman Gerbang Masuk (Secure Login Gateway)**:
+   - Menampilkan antarmuka modern *glassmorphic* berlatar biru tua dengan logo perisai 🛡️ **ASTINA ENTERPRISE - SECURE FRAUD DETECTION & AUDIT GATEWAY**.
+   - Masukkan **Username / ID Pengguna** (misal: `admin`, `auditor`, `analyst`, atau `viewer`) dan **Kata Sandi (Password)**.
+   - Tersedia menu lipat (*expander*) `ℹ️ Bantuan Akses & Kredensial Default Uji Coba` yang memuat tabel username & password bawaan untuk memudahkan pengujian.
+   - Klik tombol **`🔐 Masuk ke Sistem (Log In)`**.
+2. **Indikator Profil & Role Badge di Sidebar**:
+   - Setelah login berhasil, bagian atas sidebar akan menampilkan kartu pengguna dengan lencana role berwarna:
+     - 🔴 **ADMIN** (Merah)
+     - 🔵 **AUDITOR** (Biru)
+     - 🟣 **ANALYST** (Ungu)
+     - ⚪ **VIEWER** (Abu-abu)
+   - Menu di sidebar otomatis tersaring; modul yang tidak diizinkan untuk peran tersebut tidak akan ditampilkan.
+   - Jika pengguna mencoba mengakses URL/halaman di luar kewenangannya, sistem menampilkan pesan proteksi: `⛔ Akses Ditolak: Peran Anda tidak memiliki izin untuk membuka halaman ini`.
+3. **Mengakhiri Sesi (Logout)**:
+   - Klik tombol **`🚪 Keluar (Logout)`** yang terletak tepat di bawah kartu profil pengguna di sidebar.
+   - Sesi pengguna di-reset secara instan, audit log mencatat aktivitas `USER_LOGOUT`, dan tampilan otomatis dialihkan kembali ke gerbang login.
+4. **Pencatatan Audit Trail Kriptografis Otomatis**:
+   - Setiap kali terjadi login berhasil (`USER_LOGIN_SUCCESS`), kegagalan login (`LOGIN_FAILED`), maupun logout (`USER_LOGOUT`), engine [audit_trail.py](file:///c:/project-Graphnet/audit_trail.py) secara otomatis mencatat username, peran, waktu presisi, dan hash berantai SHA-256 untuk akuntabilitas forensik.
+
+---
+
+### 🔑 Mengubah Kata Sandi Default (Kustomisasi Keamanan)
+
+Untuk keamanan lingkungan operasional riil, kata sandi bawaan dapat ditimpa (*override*) melalui environment variables tanpa mengubah kode sumber:
+
+```powershell
+# Windows PowerShell
+$env:ASTINA_ADMIN_PASSWORD="KataSandiAdminKuat2026!"
+$env:ASTINA_AUDITOR_PASSWORD="KataSandiAuditorKuat2026!"
+$env:ASTINA_ANALYST_PASSWORD="KataSandiAnalystKuat2026!"
+$env:ASTINA_VIEWER_PASSWORD="KataSandiViewerKuat2026!"
+python run.py
+```
+
+```bash
+# Linux / macOS / Docker
+export ASTINA_ADMIN_PASSWORD="KataSandiAdminKuat2026!"
+export ASTINA_AUDITOR_PASSWORD="KataSandiAuditorKuat2026!"
+export ASTINA_ANALYST_PASSWORD="KataSandiAnalystKuat2026!"
+export ASTINA_VIEWER_PASSWORD="KataSandiViewerKuat2026!"
+python run.py
 ```
 
 ---
