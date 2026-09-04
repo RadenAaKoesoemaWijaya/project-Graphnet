@@ -9,13 +9,15 @@ Aplikasi ini dilengkapi antarmuka interaktif berbasis **Streamlit**, mendukung p
 ## 🚀 Fitur Utama
 
 - **🧠 Hybrid Detection Engine**: Menggabungkan probabilitas anomali statistik ML/GNN dengan validasi deterministik kepatuhan 9 aturan bisnis asuransi.
+- **🔄 Semantic Schema Harmonizer & Alias Resolver**: Penyelarasan cerdas sinonim kolom bahasa Indonesia dan standar medis (`no_klaim`, `no_peserta`, `kode_faskes`, `biaya_tagihan`, `lama_rawat`, `diagnosa`, `tgl_pelayanan`, dll.) ke kolom kanonikal, pembersihan simbol moneter (`Rp`, `$`, koma), derivasi deterministik tanggal/LOS/rasio, dan penandaan metadata asal usul (*provenance tagging*) untuk mencegah alarm palsu (*zero crash guarantee*).
+- **⚡ Circuit Breaker & Dynamic Weight Re-normalization**: Evaluasi kesiapan prasyarat 9 modul aturan bisnis secara otomatis. Jika kolom tertentu absen pada dataset, aturan terkait dilewati secara aman (`SKIPPED`) tanpa memicu error, dan bobot risiko dinormalkan ulang secara dinamis agar total bobot tetap 1.0 (100%), mencegah deflasi skor risiko.
 - **⚡ Resilient Multi-Format Data Ingestion**: Dukungan menyeluruh untuk file CSV, Excel (`.xlsx`, `.xls`), dan Parquet dengan normalisasi format otomatis, streaming disk buffering 8MB untuk efisiensi RAM, engine Polars untuk Parquet cepat, dan integrasi parser Excel tahan error.
 - **🎯 Intelligent Feature Selection & Redundancy Filtering**: Modul seleksi fitur multivariat adaptif di UI Praproses yang mencakup SelectKBest (ANOVA F-Score & Mutual Information), Tree-based Feature Importance (ExtraTrees/RandomForest/LightGBM), Filter Multikolinearitas Terbobot Skor, Filter Low-Variance Skala Invarian, serta Reduksi Dimensi PCA interaktif dengan *live explained variance preview*.
 - **⚡ Smart Training Profiles & Complexity Estimator**: Antarmuka pelatihan interaktif dengan preset adaptif (⚡ *Mode Cepat* ~10-30 dtk, ⚖️ *Mode Seimbang* ~1-2 mnt, 🧠 *Mode Lengkap* Deep Graph, 🛠️ *Kustom*) serta monitor estimasi beban komputasi & rekomendasi hardware (CPU vs GPU) *real-time*.
 - **🕸️ Graph Neural Network (GNN)**: Analisis relasional berbasis `GATConv` (Star Graph, Heterogeneous Graph, & k-NN Graph) untuk membongkar sindikat kolusi faskes, dokter, dan pasien (*fraud rings*) dengan evaluasi metrik periodik teroptimasi.
 - **📑 5-Tab Detection & Investigation Workspace**:
   1. 📊 *Ringkasan & Visualisasi*: Distribusi prediksi anomali seimbang, histogram probabilitas multi-model ensemble, panel metrik eksekutif 11 kartu risiko, dan proporsi risiko per kategori.
-  2. 🚨 *Business Risk & Rules*: Audit temuan Repeat Billing & Phantom Service beserta rincian 9 modul aturan fraud medis.
+  2. 🚨 *Business Risk & Rules*: Audit temuan Repeat Billing & Phantom Service beserta rincian 9 modul aturan fraud medis dan status eksekusi Circuit Breaker.
   3. 📋 *Fraud Review Table & Export*: Tabel audit interaktif klaim terfilter, pengurutan tingkat keparahan (*High/Medium/Low Risk*), dan ekspor multiformat.
   4. 🤖 *AI Investigator Copilot & BAP*: Pembuatan Berita Acara Pemeriksaan (BAP) formal & resume medis dalam format Markdown dengan sitasi regulasi medis RAG FAISS.
   5. 📈 *Concept Drift & Retraining*: Pemantauan pergeseran distribusi data (uji Kolmogorov-Smirnov) dan orkestrasi retrain model Champion-Challenger.
@@ -50,6 +52,7 @@ project-Graphnet/
 ├── main.py                          # Entry point aplikasi web Streamlit & routing navigasi
 ├── run.py                           # Production & local runtime launcher
 ├── config.py                        # Konfigurasi global, limit memori, & parameter aturan
+├── schema_harmonizer.py             # Harmonizer skema, semantic aliasing, derivasi deterministik & evaluasi Circuit Breaker
 ├── fraud_risk_pipeline.py           # Pipeline orkestrasi skoring risiko hybrid
 ├── preprocessing_optimized.py       # Pipeline data preprocessing, feature engineering & feature selection
 ├── large_file_processor.py          # Streaming chunk processor untuk dataset skala besar
@@ -84,17 +87,20 @@ project-Graphnet/
 │       ├── detection.py             # Deteksi fraud batch, rule audit, review table & AI Copilot
 │       └── status.py                # Telemetri performa sistem & audit logging
 │
-├── tests/                           # Unit test & integrasi otomatis (Pytest) - 63 Test Cases
+├── tests/                           # Unit test & integrasi otomatis (Pytest) - 75 Test Cases
 │   ├── conftest.py                  # Pytest fixtures & setup lingkungan uji
 │   ├── test_agentic_copilot.py      # Uji Copilot, FAISS RAG, zero-wipeout fallback, & XAI/GNN context
 │   ├── test_app_startup.py          # Uji startup & integritas import modul utama
+│   ├── test_cybersecurity_and_auth.py # Uji autentikasi bcrypt, RBAC 3-tier, AI Guardrail, & lifecycle cache
 │   ├── test_detection_modules.py    # Test suite komprehensif 9 modul aturan & ML
 │   ├── test_feature_selection.py    # Uji metode seleksi fitur, multikolinearitas & varians
 │   ├── test_gnn_minibatch.py        # Uji mini-batch sampling & forward pass GNN
+│   ├── test_gpu_and_pipeline_fixes.py # Uji kebersihan VRAM, fallback CUDA/CPU, & fuzzy parity
 │   ├── test_graph_scaling.py        # Uji penskalaan graf & edge budget limit
 │   ├── test_large_file_ingestion.py # Uji streaming CSV-to-Parquet chunk ingestion
 │   ├── test_optuna_ensemble_and_drift.py # Uji optimasi Optuna & deteksi pergeseran data
 │   ├── test_pipeline_edge_cases.py  # Uji edge cases & robustness data tak standar
+│   ├── test_schema_synthesis_and_resilience.py # Uji resilient schema harmonizer, aliasing Indonesia & circuit breaker
 │   └── test_streaming_preprocessing_memory.py # Uji batasan memori streaming preprocessing
 │
 ├── .cloudrun/                       # Konfigurasi & skrip deploy Google Cloud Run
@@ -313,12 +319,50 @@ Format file yang didukung: **`.csv`**, **`.xlsx`**, **`.xls`**, dan **`.parquet`
 | `length_of_stay` | Integer | Lama rawat inap dalam hari (`0` jika rawat jalan) | Length of Stay & Readmission |
 | `quantity` | Integer | Kuantitas obat/alkes/tindakan | Medication & Device Fraud |
 
-### 🩺 Evaluasi Kesiapan Skema (Schema Readiness Card)
+### 🔄 Penyelarasan Skema Semantik (*Semantic Schema Harmonization*)
 
-Sistem otomatis mengevaluasi kesesuaian kolom saat dataset diunggah:
-- 🟢 **100% Lengkap**: Seluruh 14 kolom inti tersedia; semua 9 modul aturan bisnis dan GNN aktif penuh.
-- 🟡 **70%–99% Memadai**: Sebagian modul non-kritis disesuaikan; sistem memberikan peringatan modul terdampak.
-- 🔴 **< 70% Tidak Memadai**: Kolom esensial kurang; inferensi ditolak atau terdegradasi dan pengguna diarahkan memakai template.
+ASTINA mengintegrasikan mesin penyelarasan skema cerdas (`SchemaHarmonizer`) yang memastikan kompatibilitas format data tanpa perlu repot mengubah nama kolom secara manual:
+
+1. **Penyelarasan Alias Bahasa Indonesia & Standar Medis**:
+   - `claim_id` $\leftarrow$ `no_klaim`, `id_klaim`, `claim_no`, `nomor_klaim`, `no_tagihan`, `id_transaksi`
+   - `patient_id` $\leftarrow$ `no_peserta`, `nomor_kartu`, `id_pasien`, `no_kartu`, `nik`, `no_rekam_medis`, `no_rm`
+   - `provider_id` $\leftarrow$ `kode_faskes`, `id_provider`, `kode_rs`, `hospital_id`, `provider_code`, `kode_klinik`
+   - `service_code` $\leftarrow$ `kode_tindakan`, `kode_prosedur`, `procedure_code`, `kode_layanan`, `cpt`, `kode_tarif`
+   - `diagnosis_code` $\leftarrow$ `diagnosa`, `kode_icd`, `icd10`, `icd_10`, `diagnosa_utama`, `primary_diagnosis`
+   - `billing_date` $\leftarrow$ `tgl_klaim`, `tgl_tagihan`, `tanggal_klaim`, `tgl_billing`, `tgl_pengajuan`
+   - `service_date` $\leftarrow$ `tgl_pelayanan`, `tgl_masuk`, `tanggal_layanan`, `tgl_tindakan`, `tgl_rawat`
+   - `billed_amount` $\leftarrow$ `amount`, `biaya_tagihan`, `total_tagihan`, `biaya_klaim`, `nominal_klaim`, `tagihan`
+   - `paid_amount` $\leftarrow$ `biaya_dibayar`, `nominal_bayar`, `jumlah_bayar`, `total_bayar`, `tarif_riil`
+   - `allowed_amount` $\leftarrow$ `biaya_disetujui`, `nominal_setuju`, `plafon`, `klaim_disetujui`
+   - `claim_status` $\leftarrow$ `status`, `status_klaim`, `status_pembayaran`, `approval_status`
+   - `length_of_stay` $\leftarrow$ `lama_rawat`, `hari_rawat`, `los`, `lama_inap`, `lama_hari_rawat`
+   - `quantity` $\leftarrow$ `jumlah`, `banyaknya`, `qty`, `volume`, `jumlah_tindakan`, `unit`
+
+2. **Pembersihan Moneter & Tipe Data Otomatis**:
+   Pembersihan otomatis simbol mata uang (`Rp`, `$`), pemisah ribuan (titik/koma), serta nilai string kosong secara deterministik.
+
+3. **Derivasi Deterministik Kolom Terkait**:
+   - `amount` $\leftrightarrow$ `billed_amount` disinkronkan timbal-balik secara otomatis.
+   - `billing_date` $\leftrightarrow$ `service_date` disinkronkan secara aman jika salah satunya tidak tersedia.
+   - `admission_date` dan `discharge_date` dapat diturunkan otomatis dari kombinasi `service_date` dan `length_of_stay` (dan sebaliknya).
+   - Rasio moneter `payment_ratio` dan `allowance_ratio` dikalkulasi deterministik dengan proteksi pembagian nol.
+
+4. **Penandaan Metadata Asal Usul (*Provenance Metadata Tagging*)**:
+   Kolom hasil imputasi default ditandai secara internal di dalam `df.attrs["_imputed_columns"]`. Ini melindungi sistem dari alarm palsu (*false positives*) pada modul aturan bisnis (misalnya kolom yang diimputasi netral tidak akan dijadikan bukti pelanggaran).
+
+### 🩺 Evaluasi Kesiapan Skema & Matriks 9 Aturan Bisnis (UI)
+
+Pada halaman **Data Collection** dan **Deteksi**, kartu diagnostik menyajikan dua visualisasi mendalam:
+1. **Matriks Kesiapan 9 Modul Aturan Bisnis (Circuit Breaker)**:
+   - 🟢 **Siap Berjalan (`READY`)**: Seluruh kolom prasyarat aturan tersedia penuh.
+   - 🟡 **Kolom Turunan (`DERIVED`)**: Aturan siap berjalan memanfaatkan kolom hasil derivasi deterministik.
+   - ⚪ **Dilewati Aman (`SKIPPED`)**: Kolom prasyarat belum ada; aturan dilewati secara anggun tanpa menimbulkan exception, dan bobotnya dinormalkan ulang ke aturan aktif.
+2. **Rincian Kolom Data & Penyelarasan Otomatis**:
+   - `✅ Ada Langsung`: Kolom sesuai dengan skema kanonikal.
+   - `🔄 Alias ('nama_alias')`: Kolom berhasil diselaraskan dari alias bahasa Indonesia/industri.
+   - `⚡ Diturunkan Otomatis`: Kolom dibentuk dari perhitungan deterministik kolom terkait.
+   - `⚪ Default Netral`: Kolom bernilai default aman untuk menjaga kesinambungan inferensi.
+   - `❌ Tidak Ada`: Kolom tidak ditemukan dan tidak dapat disintesis.
 
 ### 🔧 Penyesuaian Fitur Otomatis (*Smart Feature Alignment*) & Imputasi Median Training
 
@@ -446,13 +490,19 @@ flowchart TD
 * **Proses:** Membangun topologi graf (Star Graph, Heterogeneous Graph, k-NN) menghubungkan klaim yang berbagi faskes, dokter, diagnosis, atau pasien yang sama.
 * **Peran Krusial:** `InsuranceAnomalyGNNModel` berbasis `GATConv` (Graph Attention Network) mendeteksi pola sindikat kolusi massal (*fraud rings*) dengan evaluasi metrik validasi periodik yang hemat memori dan ramah komputasi multi-device.
 
-### 5. Audit Kepatuhan 9 Modul Business Rules
+### 5. Audit Kepatuhan 9 Modul Business Rules dengan Circuit Breaker
 * **Proses:** Mengeksekusi `run_integrated_claim_risk_pipeline()` secara paralel untuk mengaudit 9 kategori fraud klaim medis, menghasilkan bendera biner, bukti penjelasan (*evidence*), dan `business_risk_score`.
+* **Circuit Breaker:** Sebelum eksekusi, `SchemaHarmonizer.evaluate_rule_readiness()` mengevaluasi prasyarat kolom tiap aturan. Aturan yang prasyaratnya tidak terpenuhi ditandai `SKIPPED` dan dikecualikan dari perhitungan bobot, sehingga bobot aturan aktif dinormalkan ulang secara otomatis.
 
-### 6. Konsolidasi Risiko (Hybrid Score Aggregation)
-* **Formula Bobot Terintegrasi:**
+### 6. Konsolidasi Risiko dengan Dynamic Weight Re-normalization
+* **Formula Bobot Default (Dataset Lengkap):**
 
 $$\text{Business Risk Score} = 0.40(R_{\text{repeat}}) + 0.20(R_{\text{phantom}}) + 0.15(R_{\text{capacity}}) + 0.15(R_{\text{fuzzy}}) + 0.10(R_{\text{additional}})$$
+
+* **Formula Normalisasi Dinamis (Circuit Breaker Aktif):**
+
+Jika aturan ke-$i$ dilewati (SKIPPED), bobot aturan aktif dinormalkan ulang:
+$$w_i' = \frac{w_i}{\sum_{j \in \text{active}} w_j}, \quad \text{sehingga} \sum_{i \in \text{active}} w_i' = 1.0$$
 
 $$\text{Final Risk Score} = 0.50(\text{Business Risk Score}) + 0.30(\text{ML Anomaly Score}) + 0.20(\text{Duplicate Payment Flag})$$
 
@@ -499,11 +549,14 @@ Konfigurasi opsional dapat disetel melalui file `.env` di direktori utama:
 
 ## 🧪 Pengujian & Validasi Kualitas
 
-Aplikasi dilengkapi suite pengujian otomatis komprehensif (**69 Test Cases**) untuk memverifikasi keandalan seluruh komponen sistem secara end-to-end, termasuk pengujian keamanan siber (*cybersecurity*) dan autentikasi:
+Aplikasi dilengkapi suite pengujian otomatis komprehensif (**75 Test Cases**) untuk memverifikasi keandalan seluruh komponen sistem secara end-to-end, termasuk pengujian keamanan siber (*cybersecurity*), autentikasi, dan resiliensi schema:
 
 ```powershell
 # Jalankan seluruh test suite dengan Pytest
-python -m pytest tests/ -v
+.venv\Scripts\python -m pytest tests/ -v
+
+# Hanya uji schema harmonizer dan circuit breaker
+.venv\Scripts\python -m pytest tests/test_schema_synthesis_and_resilience.py -v
 
 # Verifikasi integritas rantai Cryptographic Audit Trail
 python verify_audit_trail.py
@@ -513,7 +566,12 @@ python system_status.py
 ```
 
 Hasil verifikasi memastikan:
-- ✅ **69 Test Cases (68 Passed, 1 Skipped, 100% Green)** mencakup seluruh modul aplikasi.
+- ✅ **75 Test Cases (75 Passed, 100% Green)** mencakup seluruh modul aplikasi.
+- ✅ **Schema Harmonizer & Semantic Aliasing** — Penyelarasan transparan 13+ sinonim kolom bahasa Indonesia/industri ke nama kanonikal terverifikasi akurat.
+- ✅ **Circuit Breaker & Dynamic Weight Re-normalization** — Dataset minimal (hanya 2 kolom) tidak menyebabkan crash; bobot aturan aktif dinormalisasi ulang dengan benar.
+- ✅ **Derivasi Deterministik LOS** — `admission_date` dan `discharge_date` diturunkan otomatis dari `service_date` + `length_of_stay`; `detect_prolonged_stay_and_readmission()` berjalan tanpa error.
+- ✅ **Provenance Metadata Tagging** — Kolom imputasi default (seperti `quantity`, `claim_status`) ditandai di `_imputed_columns` sehingga tidak memicu false positive.
+- ✅ **Zero-Crash on Empty DataFrame** — Harmonisasi skema kosong mengembalikan struktur DataFrame kanonikal tanpa exception.
 - ✅ Seluruh 9 modul deteksi fraud berfungsi normal pada berbagai tipe data dan edge cases.
 - ✅ Seleksi fitur (SelectKBest, Tree Importance, Filter Multikolinearitas, Low-Variance Filter, PCA) terverifikasi matematis.
 - ✅ Agentic Copilot, Zero-Wipeout Fallback, dan FAISS Knowledge RAG (8 dokumen regulasi) merespons analisis investigasi secara akurat.

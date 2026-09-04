@@ -1064,39 +1064,58 @@ def render_schema_readiness_card(df: pd.DataFrame) -> dict:
         - 'missing'        : list[str]
         - 'affected_rules' : list[str]   (unique rules that cannot run)
     """
-    present = [c for c in TEMPLATE_CORE_COLUMNS if c in df.columns]
-    missing = [c for c in TEMPLATE_CORE_COLUMNS if c not in df.columns]
+    from schema_harmonizer import SchemaHarmonizer
+    harmonized_df, report = SchemaHarmonizer.harmonize_claims_schema(df)
+    readiness = SchemaHarmonizer.evaluate_rule_readiness(harmonized_df)
+
+    resolved_aliases = report.get("resolved_aliases", {})
+    derived_cols = set(report.get("derived_columns", []))
+    imputed_cols = set(report.get("imputed_columns", []))
+
+    present = [c for c in TEMPLATE_CORE_COLUMNS if c in df.columns or c in resolved_aliases.values()]
+    missing = [c for c in TEMPLATE_CORE_COLUMNS if c not in present]
     complete_pct = len(present) / len(TEMPLATE_CORE_COLUMNS) * 100
 
-    # Collect rules that cannot run
-    affected_rules: list[str] = []
-    for col in missing:
-        affected_rules.extend(COLUMN_RULE_DEPENDENCIES.get(col, []))
-    affected_rules = list(dict.fromkeys(affected_rules))  # deduplicate preserving order
+    active_rules = [r["name"] for r in readiness.values() if r.get("ready", False)]
+    skipped_rules = [r["name"] for r in readiness.values() if not r.get("ready", False)]
+    active_count = len(active_rules)
+    total_rules = len(readiness)
 
     # ── Banner ──────────────────────────────────────────────────────────────
-    if complete_pct == 100:
+    if active_count == total_rules and complete_pct >= 90:
+        alias_note = f" (termasuk {len(resolved_aliases)} kolom diselaraskan dari alias)" if resolved_aliases else ""
         st.success(
-            f"✅ **Skema Data Lengkap 100%** — Seluruh {len(TEMPLATE_CORE_COLUMNS)} kolom inti tersedia. "
-            "Semua 9 modul aturan bisnis dan GNN aktif penuh."
+            f"✅ **Kesiapan Aturan Bisnis Penuh ({active_count}/{total_rules} Aturan Aktif)** — Seluruh kolom inti terpenuhi{alias_note}. "
+            "Semua 9 modul aturan bisnis dan model AI aktif penuh."
         )
-    elif complete_pct >= 70:
+    elif active_count >= 5:
         st.warning(
-            f"⚠️ **Skema Data {complete_pct:.0f}%** — {len(missing)} kolom inti tidak ditemukan. "
-            f"Modul berikut mungkin tidak aktif: *{', '.join(affected_rules[:4])}*"
-            + (" dan lainnya." if len(affected_rules) > 4 else ".")
+            f"⚠️ **Kesiapan Aturan Bisnis: {active_count}/{total_rules} Aturan Aktif** — {len(skipped_rules)} aturan dilewati secara aman (Circuit Breaker aktif menormalkan bobot): *{', '.join(skipped_rules[:3])}*. "
+            "Deteksi anomali tetap berjalan optimal tanpa error."
         )
     else:
         st.error(
-            f"❌ **Skema Data Tidak Memadai ({complete_pct:.0f}%)** — {len(missing)} kolom penting tidak ada. "
-            "Akurasi deteksi akan sangat terdegradasi. Unduh template dan sesuaikan dataset Anda."
+            f"❌ **Kesiapan Skema Terbatas ({active_count}/{total_rules} Aturan Aktif)** — Beberapa kolom penting tidak ditemukan. "
+            f"Modul tidak aktif: *{', '.join(skipped_rules)}*. Deteksi berjalan pada modul yang tersedia."
         )
 
     # ── Per-column status table ──────────────────────────────────────────────
     table_rows = []
+    # Reverse lookup for resolved aliases
+    alias_inv = {v: k for k, v in resolved_aliases.items()}
     for col in TEMPLATE_CORE_COLUMNS:
-        status = "✅ Ada" if col in df.columns else "❌ Tidak ada"
-        rules  = ", ".join(COLUMN_RULE_DEPENDENCIES.get(col, ["-"]))
+        if col in df.columns:
+            status = "✅ Ada Langsung"
+        elif col in alias_inv:
+            status = f"🔄 Alias ('{alias_inv[col]}')"
+        elif col in derived_cols:
+            status = "⚡ Diturunkan Otomatis"
+        elif col in imputed_cols:
+            status = "⚪ Default Netral"
+        else:
+            status = "❌ Tidak Ada"
+
+        rules = ", ".join(COLUMN_RULE_DEPENDENCIES.get(col, ["-"]))
         table_rows.append({
             "Kolom": col,
             "Status": status,
@@ -1104,17 +1123,29 @@ def render_schema_readiness_card(df: pd.DataFrame) -> dict:
             "Modul yang Bergantung": rules,
         })
 
-    with st.expander("📋 Rincian Kelengkapan Kolom Data", expanded=(complete_pct < 100)):
-        st.dataframe(
-            pd.DataFrame(table_rows),
-            use_container_width=True,
-            hide_index=True,
-        )
+    # ── 9 Rules Execution Readiness Table ─────────────────────────────────────
+    rule_table_rows = []
+    status_icon_map = {"READY": "🟢 Siap Berjalan", "DERIVED": "🟡 Kolom Turunan", "SKIPPED": "⚪ Dilewati (Aman)"}
+    for _, r_spec in readiness.items():
+        rule_table_rows.append({
+            "Aturan Bisnis": r_spec["name"],
+            "Status Eksekusi": status_icon_map.get(r_spec["status"], r_spec["status"]),
+            "Bobot Default": f"{r_spec['default_weight'] * 100:.1f}%",
+            "Diagnostik / Catatan": r_spec["reason"],
+        })
 
+    with st.expander("📋 Rincian Kelengkapan Kolom Data & Kesiapan 9 Aturan", expanded=(active_count < total_rules)):
+        st.markdown("**1. Matriks Kesiapan 9 Modul Aturan Bisnis (Circuit Breaker):**")
+        st.dataframe(pd.DataFrame(rule_table_rows), use_container_width=True, hide_index=True)
+        st.markdown("**2. Rincian Kolom Data & Penyelarasan Otomatis:**")
+        st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
 
     return {
-        "complete_pct":   complete_pct,
-        "present":        present,
-        "missing":        missing,
-        "affected_rules": affected_rules,
+        "complete_pct": complete_pct,
+        "present": present,
+        "missing": missing,
+        "affected_rules": skipped_rules,
+        "active_rules_count": active_count,
+        "total_rules_count": total_rules,
+        "rule_readiness": readiness,
     }

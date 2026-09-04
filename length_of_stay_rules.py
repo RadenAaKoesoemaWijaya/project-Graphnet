@@ -49,13 +49,24 @@ def detect_prolonged_stay_and_readmission(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
         return _empty_fraud_result()
 
+    clean_df = df.copy()
+    if "admission_date" not in clean_df.columns or "discharge_date" not in clean_df.columns:
+        if "length_of_stay" in clean_df.columns:
+            base_date = pd.to_datetime(clean_df.get("service_date", clean_df.get("billing_date")), errors="coerce")
+            los_num = pd.to_numeric(clean_df["length_of_stay"], errors="coerce").fillna(0)
+            if base_date.notna().any():
+                clean_df["admission_date"] = base_date
+                clean_df["discharge_date"] = base_date + pd.to_timedelta(los_num, unit="D")
+            else:
+                anchor = pd.Timestamp("2024-01-01")
+                clean_df["admission_date"] = anchor
+                clean_df["discharge_date"] = anchor + pd.to_timedelta(los_num, unit="D")
+
     required_columns = {"claim_id", "patient_id", "provider_id", "admission_date", "discharge_date"}
-    missing = sorted(required_columns - set(df.columns))
+    missing = sorted(required_columns - set(clean_df.columns))
     if missing:
         logger.warning("Missing required columns for LOS detection: %s", missing)
         return _empty_fraud_result()
-
-    clean_df = df.copy()
     for col in ["diagnosis_code", "procedure_code"]:
         if col not in clean_df.columns:
             clean_df[col] = ""

@@ -24,11 +24,14 @@ Dokumen ini mendokumentasikan secara menyeluruh arsitektur, alur kerja *end-to-e
 
 ```mermaid
 flowchart TD
-    subgraph INGESTION["1. Data Ingestion & Validation"]
+    subgraph INGESTION["1. Data Ingestion, Validation & Schema Harmonization"]
         A[File Klaim CSV / XLSX / Parquet] --> B[check_upload_quota & check_file_size]
         B --> C[read_file_with_optimization / stream_csv_to_parquet]
         C --> D[DataValidator & DataSanitizer]
-        D --> E[Schema Readiness Check 14 Kolom Inti]
+        D --> SH[SchemaHarmonizer: Semantic Alias Resolution]
+        SH --> SH2[Derivasi Deterministik: LOS, Dates, Ratios]
+        SH2 --> SH3[Provenance Metadata Tagging _imputed_cols]
+        SH3 --> E[Schema Readiness Check + Circuit Breaker 9 Rules]
         E --> F[Injeksi Stable _astina_row_id]
     end
 
@@ -53,14 +56,18 @@ flowchart TD
     end
 
     subgraph INFERENCE["4. Hybrid Detection & Risk Aggregation (Data Baru)"]
-        T[Data Klaim Uji / File Baru] --> U[Smart Feature Alignment & Imputasi Median Training]
+        T[Data Klaim Uji / File Baru] --> SHI[SchemaHarmonizer: normalize_claims_dataframe]
+        SHI --> U[Smart Feature Alignment & Imputasi Median Training]
         S -. Load Model Artifacts & Training Medians .-> U
         U --> V[ML Anomaly Score Estimation IF, AE, XGB]
         U --> W[GNN Relational Graph Inference GATConv]
-        T --> X[9 Modul Business Rules Audit Engine]
+        SHI --> CB[Circuit Breaker: evaluate_rule_readiness]
+        CB --> X[9 Modul Business Rules Audit Engine Active Only]
+        CB --> DWR[Dynamic Weight Re-normalization]
         V --> Y[Hybrid Risk Score Aggregator]
         W --> Y
-        X --> Y
+        X --> DWR
+        DWR --> Y
         Y --> Z[Final Risk Score, Flag & Severity Low / Medium / High]
     end
 
@@ -81,6 +88,7 @@ flowchart TD
 | **UI Components & Styles** | `ui_components.py` | Glassmorphic CSS, breadcrumb tracker, live telemetry pills |
 | **UI Sidebar & Nav** | `ui/sidebar.py` | Navigasi menu, status kesiapan pipeline (0–100%), telemetri hardware |
 | **UI Utilities & Charts** | `ui/utils.py` | Smart feature alignment, visual helper, chart Plotly, export data |
+| **Schema Harmonizer** | `schema_harmonizer.py` | Penyelarasan semantik alias kolom (ID/EN/medis), derivasi deterministik, provenance tagging, & evaluasi kesiapan 9 aturan (Circuit Breaker) |
 | **File Handler** | `file_handler.py` | Streaming IO multi-format (CSV, Excel `.xlsx`/`.xls`, Parquet), normalisasi format otomatis, optimasi memory dtype, buffer IO chunking 8MB |
 | **Large File Processor** | `large_file_processor.py` | Chunking dataset, memory-bounded preprocessing per batch |
 | **Data Validator & Sanitizer** | `data_validator.py` | Integritas kolom, sanitasi tipe data, evaluasi skema 14 kolom inti |
@@ -89,7 +97,7 @@ flowchart TD
 | **Model Explainer (XAI)** | `model_explainer.py` | Atribusi SHAP Tree/KernelExplainer, LIME tabular explanations |
 | **Agentic AI Copilot** | `agentic_copilot.py` | AI assistant investigasi fraud, multi-provider LLM & reasoning |
 | **RAG Knowledge Base** | `rag_engine.py` | Indexing FAISS, semantic search ICD-10, CPT, regulasi medis |
-| **Business Rule Pipeline** | `fraud_risk_pipeline.py` | Orkestrasi 9 kelompok aturan kepatuhan klaim asuransi |
+| **Business Rule Pipeline** | `fraud_risk_pipeline.py` | Orkestrasi 9 kelompok aturan kepatuhan klaim asuransi + Dynamic Weight Re-normalization |
 | **Cryptographic Audit Trail** | `audit_trail.py` | Pencatatan rantai log hash SHA-256 anti-tamper |
 | **Audit Verification** | `verify_audit_trail.py` | Skrip verifikasi integritas rantai blok hash audit trail |
 | **State Manager** | `state_manager.py` | Manajemen transisi halaman, session state Streamlit, caching path |
@@ -151,7 +159,14 @@ python run.py
 ### 4.2 Data Collection & Preprocessing (`ui/pages/data_collection.py`)
 - **File Uploader Multi-Format**: Menerima `.csv`, `.xlsx`, `.xls`, dan `.parquet` hingga batas 3 GiB.
 - **Validasi Kuota & Ukuran**: Memeriksa kuota harian dan alokasi memori melalui `rate_limit.py`.
-- **Schema Readiness Card**: Evaluasi otomatis ketersediaan 14 kolom inti (100% Lengkap, 70–99% Parsial, <70% Ditolak).
+- **Schema Harmonizer & Semantic Alias Resolution (`SchemaHarmonizer`)**: Secara transparan menyelaraskan sinonim kolom bahasa Indonesia dan standar medis ke nama kanonikal, tanpa memerlukan preprocessing manual dari pengguna:
+  - Resolusi alias: `no_klaim` → `claim_id`, `no_peserta` → `patient_id`, `kode_faskes` → `provider_id`, `biaya_tagihan` → `billed_amount`, `lama_rawat` → `length_of_stay`, `diagnosa` → `diagnosis_code`, dll.
+  - Pembersihan nilai moneter otomatis (simbol `Rp`, `$`, koma ribuan, spasi).
+  - Derivasi deterministik `admission_date` & `discharge_date` dari `service_date` + `length_of_stay` (dan sebaliknya).
+  - Sinkronisasi timbal-balik `amount` ↔ `billed_amount`, `billing_date` ↔ `service_date`.
+  - Kalkulasi rasio `payment_ratio` & `allowance_ratio` dengan proteksi bagi-nol.
+  - Penandaan metadata provenance pada kolom hasil imputasi default (`df.attrs["_imputed_columns"]`), mencegah false positive pada aturan bisnis.
+- **Matriks Kesiapan 9 Aturan Bisnis (Circuit Breaker UI)**: Kartu diagnostik interaktif yang menampilkan status eksekusi per aturan (`🟢 READY`, `🟡 DERIVED`, `⚪ SKIPPED`) dan rincian per kolom (`✅ Ada Langsung`, `🔄 Alias`, `⚡ Diturunkan`, `⚪ Default`, `❌ Tidak Ada`).
 - **Exploratory Data Analysis (EDA)**: Distribusi nilai numerik, visualisasi *missing value*, dan analisis korelasi awal.
 - **Opsi Preprocessing Terpadu**:
   - Deteksi dan capping outlier berbasis IQR.
@@ -350,6 +365,52 @@ Input Raw DataFrame
 6. **Reduksi Dimensi PCA (`apply_pca_reduction`)**:
    Melakukan dekomposisi nilai singular (*SVD*) pada matriks kovarians terstandarisasi untuk menghasilkan komponen ortogonal baru yang mencakup varians kumulatif yang ditargetkan (misalnya $95\%$).
 
+### 6.3 Schema Harmonizer & Pengelolaan Skema Input
+
+Sebelum preprocessing dimulai, `SchemaHarmonizer.harmonize_claims_schema()` dieksekusi sebagai lapisan **Input Schema Normalization** yang memastikan setiap DataFrame klaim — apa pun asal sumber datanya — memasuki pipeline dalam kondisi konsisten dan valid:
+
+**Tahapan Harmonisasi:**
+
+```text
+Input Raw DataFrame (sembarang nama kolom)
+  │
+  ├── 1. Semantic Alias Resolution
+  │     Mendeteksi kolom sinonim (no_klaim, biaya_tagihan, lama_rawat, dll.)
+  │     dan memetakannya ke nama kanonikal (claim_id, billed_amount, length_of_stay)
+  │
+  ├── 2. Injeksi _astina_row_id (Stable Identifier)
+  │     Menetapkan ID stabil per baris sebelum chunk/sorting
+  │
+  ├── 3. Sinkronisasi amount ↔ billed_amount
+  │     Jika hanya salah satu tersedia, yang lainnya disalin secara deterministik
+  │
+  ├── 4. Sinkronisasi billing_date ↔ service_date
+  │     Jika hanya salah satu tersedia, yang lainnya diturunkan secara aman
+  │
+  ├── 5. Derivasi LOS & Tanggal Rawat
+  │     admission_date, discharge_date ↔ service_date + length_of_stay
+  │     (dapat diturunkan ke dua arah)
+  │
+  ├── 6. Kalkulasi Rasio Finansial
+  │     payment_ratio = paid_amount / billed_amount (proteksi bagi-nol)
+  │     allowance_ratio = allowed_amount / billed_amount (proteksi bagi-nol)
+  │
+  ├── 7. Imputasi Default Aman (nilai netral, bukan fabricated fact)
+  │     quantity=1, patient_age=45, claim_status="APPROVED", dll.
+  │
+  └── 8. Provenance Metadata Tagging
+        df.attrs["_resolved_aliases"]  → alias yang diselaraskan
+        df.attrs["_derived_columns"]   → kolom hasil derivasi
+        df.attrs["_imputed_columns"]   → kolom yang diimputasi default
+```
+
+**Evaluasi Kesiapan 9 Aturan Bisnis (`evaluate_rule_readiness`):**
+
+Setelah harmonisasi, setiap aturan bisnis dievaluasi secara individual:
+- Kolom hasil imputasi default **tidak dihitung** sebagai "tersedia" untuk mencegah false positive.
+- Aturan dengan prasyarat tidak terpenuhi diset `SKIPPED` dan bobotnya tidak dimasukkan ke agregasi.
+- Metadata `rule_readiness` dikembalikan dalam `summary` pipeline untuk audit dan visualisasi UI.
+
 ---
 
 ## 7. Model AI Ensemble & Graph Neural Network
@@ -375,23 +436,50 @@ Model ensemble menggabungkan berbagai paradigma machine learning:
 
 ---
 
-## 8. Agregasi Risiko Hybrid & 9 Modul Aturan Bisnis
+## 8. Agregasi Risiko Hybrid, 9 Modul Aturan Bisnis & Circuit Breaker
 
-### 8.1 9 Modul Business Rules
+### 8.1 9 Modul Business Rules & Prasyarat Kolom
 
+Sebelum setiap eksekusi, `SchemaHarmonizer.evaluate_rule_readiness()` memeriksa apakah kolom prasyarat tiap modul benar-benar tersedia (bukan hasil imputasi default netral). Aturan yang prasyaratnya tidak terpenuhi ditandai `SKIPPED` (Circuit Breaker aktif) dan dikecualikan dari agregasi bobot.
+
+| # | Modul | Prasyarat Kolom Wajib | Bobot Default |
+|:---:|:---|:---|:---:|
+| 1 | **Repeat Billing** | `patient_id`, `provider_id`, `service_code`, `billing_date`, `amount` | 40% |
+| 2 | **Phantom Service** | `service_code` | 20% |
+| 3 | **Provider Capacity** | `provider_id`, `service_date`, `service_code` | 15% |
+| 4 | **Fuzzy Claim Matching** | `patient_id`, `billing_date` | 15% |
+| 5 | **Upcoding & Unbundling** | `claim_id`, `patient_id`, `provider_id`, `amount`, `diagnosis_code` | 2.5% |
+| 6 | **Inflated Bill & Cloning** | `claim_id`, `patient_id`, `provider_id`, `amount` | 2.5% |
+| 7 | **Length of Stay & Readmission** | `claim_id`, `patient_id`, `provider_id`, `length_of_stay` | 2.5% |
+| 8 | **Medication & Device Fraud** | `claim_id`, `patient_id`, `provider_id`, `amount`, `quantity` | 2.5% |
+| 9 | **Duplicate Payment** | `claim_id`, `claim_status` | 10% |
+
+Penjelasan masing-masing modul:
 1. **Repeat Billing**: Mendeteksi pengajuan ulang klaim pasien yang sama untuk tindakan serupa dalam rentang $\le 30$ hari.
 2. **Phantom Service**: Mendeteksi layanan fiktif, tanggal tindakan tidak valid, atau tindakan medis yang tercatat di luar tanggal rawat inap.
 3. **Provider Capacity**: Mengidentifikasi volume layanan dokter/faskes yang melebihi kapasitas fisiologis maksimal per hari kalender.
 4. **Claim Status & Duplicate Payment**: Mendeteksi duplikasi pencairan klaim yang telah berstatus `PAID` atau disetujui sebelumnya.
 5. **Upcoding & Unbundling**: Mendeteksi manipulasi penetapan kode tarif lebih tinggi dan pemecahan tindakan terpadu menjadi tagihan parsial terpisah.
 6. **Inflated Bill & Cloning**: Mengidentifikasi tagihan ekstrem di atas ambang batas benchmark medis dan rekam medis hasil duplikasi (*cloned charts*).
-7. **Length of Stay & Readmission**: Evaluasi lama hari rawat inap yang melampaui batas wajar klinis (*LOS outlier*) serta readmisi pasien dalam waktu singkat.
+7. **Length of Stay & Readmission**: Evaluasi lama hari rawat inap yang melampaui batas wajar klinis (*LOS outlier*) serta readmisi pasien dalam waktu singkat. Kolom `admission_date`/`discharge_date` dapat diturunkan otomatis dari `service_date` + `length_of_stay` melalui `SchemaHarmonizer`.
 8. **Medication & Device Fraud**: Mengaudit kuantitas obat berlebih, dosis di luar batas rasional, dan markup harga alat kesehatan tak wajar.
 9. **Fuzzy Claim Matching**: Pencocokan kemiripan leksikal klaim non-identik berbasis algoritma Levenshtein/Jaro-Winkler.
 
-### 8.2 Formula Agregasi Skor Risiko
+### 8.2 Formula Agregasi Skor Risiko dengan Dynamic Weight Re-normalization
+
+**Formula Bobot Default (Dataset Lengkap — semua 9 modul aktif):**
 
 $$\text{Business Risk Score} = 0.40(R_{\text{repeat}}) + 0.20(R_{\text{phantom}}) + 0.15(R_{\text{capacity}}) + 0.15(R_{\text{fuzzy}}) + 0.10(R_{\text{additional}})$$
+
+**Formula Normalisasi Dinamis (Circuit Breaker Aktif — sebagian aturan SKIPPED):**
+
+Bobot aturan yang aktif ($\text{READY}$ atau $\text{DERIVED}$) dinormalkan ulang sehingga total bobot tetap = 1.0:
+
+$$w_i' = \frac{w_i}{\sum_{j \in \text{active}} w_j}, \quad \text{sehingga} \sum_{i \in \text{active}} w_i' = 1.0$$
+
+Ini menjamin `business_risk_score` tetap berada dalam rentang $[0.0, 1.0]$ meskipun dataset hanya memiliki kolom minimal.
+
+**Formula Skor Risiko Final:**
 
 $$\text{Final Risk Score} = 0.50(\text{Business Risk Score}) + 0.30(\text{ML Anomaly Score}) + 0.20(\text{Duplicate Payment Flag})$$
 
@@ -488,13 +576,16 @@ Modul `pii_masker.py` melindungi data sensitif sesuai regulasi UU Perlindungan D
 
 ---
 
-## 11. Pengujian Kualitas & Quality Gate (69 Test Cases)
+## 11. Pengujian Kualitas & Quality Gate (75 Test Cases)
 
-Seluruh komponen ASTINA diuji secara otomatis menggunakan suite Pytest yang mencakup **69 skenario uji terdaftar** (68 Passed, 1 Skipped, 100% Green), termasuk module uji keamanan siber khusus (`test_cybersecurity_and_auth.py`):
+Seluruh komponen ASTINA diuji secara otomatis menggunakan suite Pytest yang mencakup **75 skenario uji terdaftar** (75 Passed, 100% Green), termasuk modul uji keamanan siber, autentikasi, dan resiliensi schema harmonizer:
 
 ```powershell
 # Menjalankan seluruh test suite
 .\.venv\Scripts\python.exe -m pytest tests/ -v
+
+# Menjalankan hanya uji Schema Harmonizer & Circuit Breaker
+.\.venv\Scripts\python.exe -m pytest tests/test_schema_synthesis_and_resilience.py -v
 ```
 
 ### Rincian Modul Uji
@@ -510,10 +601,11 @@ Seluruh komponen ASTINA diuji secara otomatis menggunakan suite Pytest yang menc
 | `test_gpu_and_pipeline_fixes.py` | 6 | Uji kebersihan memori GPU, parameter XGBoost hardware, fallback CUDA, fuzzy similarity parity, dan pseudo-label caching |
 | `test_graph_scaling.py` | 2 | Uji batasan node/edge graph builder dan pencegahan OOM pada graf besar |
 | `test_large_file_ingestion.py` | 2 | Uji konversi streaming CSV-to-Parquet per chunk dengan alokasi buffer aman |
-| `test_optuna_ensemble_and_drift.py`| 5 | Uji optimasi hyperparameter Optuna dan deteksi Kolmogorov-Smirnov drift |
+| `test_optuna_ensemble_and_drift.py` | 5 | Uji optimasi hyperparameter Optuna dan deteksi Kolmogorov-Smirnov drift |
 | `test_pipeline_edge_cases.py` | 12 | Uji toleransi data null, data bertipe campuran, sanitasi string, dan extreme amounts |
+| `test_schema_synthesis_and_resilience.py` | 6 | Uji resiliensi SchemaHarmonizer: zero-crash dataset minimal, aliasing bahasa Indonesia, derivasi LOS deterministik, circuit breaker weight re-normalization, provenance tagging, dan empty DataFrame |
 | `test_streaming_preprocessing_memory.py` | 2 | Uji batasan pemakaian RAM (<100MB peak) pada pemrosesan streaming skala besar |
-| **Total Test Suite** | **69 (68 Passed, 1 Skipped)** | **100% Passed (Green)** |
+| **Total Test Suite** | **75 (75 Passed)** | **100% Passed (Green)** |
 
 ---
 

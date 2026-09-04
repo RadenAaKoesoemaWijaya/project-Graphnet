@@ -16,6 +16,7 @@ from phantom_service_rules import PhantomServiceRuleEngine
 from provider_capacity_validator import ProviderCapacityValidator
 from repeat_billing_detector import RepeatBillingDetector
 from upcoding_unbundling_rules import detect_upcoding_and_unbundling
+from schema_harmonizer import SchemaHarmonizer
 
 logger = logging.getLogger("astina.fraud_risk_pipeline")
 
@@ -32,20 +33,7 @@ REQUIRED_CLAIM_FIELDS = {
 def normalize_claims_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     if df is None:
         raise ValueError("DataFrame klaim tidak boleh None")
-    clean = df.copy()
-    if "_astina_row_id" not in clean.columns:
-        clean["_astina_row_id"] = np.arange(len(clean), dtype=np.int64)
-    for column in ["claim_id", "patient_id", "provider_id", "service_code", "diagnosis_code"]:
-        if column not in clean.columns:
-            clean[column] = ""
-    for column in ["billing_date", "service_date"]:
-        if column not in clean.columns:
-            clean[column] = pd.NaT
-    if "amount" not in clean.columns:
-        clean["amount"] = 0.0
-    clean["amount"] = pd.to_numeric(clean["amount"], errors="coerce").fillna(0.0)
-    clean["billing_date"] = pd.to_datetime(clean["billing_date"], errors="coerce")
-    clean["service_date"] = pd.to_datetime(clean["service_date"], errors="coerce")
+    clean, _ = SchemaHarmonizer.harmonize_claims_schema(df)
     return clean
 
 
@@ -242,15 +230,47 @@ def enrich_claims_with_business_risk_features(df: pd.DataFrame) -> Tuple[pd.Data
     clean["additional_fraud_score"] = additional_total.clip(0, 1)
     clean["additional_fraud_flag"] = (clean["additional_fraud_score"] >= 0.5).astype(int)
 
-    clean["business_risk_score"] = (
-        clean["repeat_billing_score"] * 0.40 +
-        clean["phantom_service_score"] * 0.20 +
-        clean["provider_capacity_score"] * 0.15 +
-        clean["fuzzy_similarity_score"] * 0.15 +
-        clean["additional_fraud_score"] * 0.10
-    ).clip(0, 1)
+    # Dynamic Weight Re-normalization (Circuit Breaker)
+    readiness = SchemaHarmonizer.evaluate_rule_readiness(clean)
+    active_weights: Dict[str, float] = {}
+    if readiness.get("repeat_billing", {}).get("ready", True):
+        active_weights["repeat_billing"] = 0.40
+    if readiness.get("phantom_service", {}).get("ready", True):
+        active_weights["phantom_service"] = 0.20
+    if readiness.get("provider_capacity", {}).get("ready", True):
+        active_weights["provider_capacity"] = 0.15
+    if readiness.get("fuzzy_similarity", {}).get("ready", True):
+        active_weights["fuzzy_similarity"] = 0.15
+
+    # Additional fraud is active if any of its sub-modules is ready
+    additional_ready = any(
+        readiness.get(m, {}).get("ready", False)
+        for m in ["upcoding_unbundling", "inflated_bill_cloning", "prolonged_stay_readmission", "medication_device_fraud"]
+    )
+    if additional_ready:
+        active_weights["additional_fraud"] = 0.10
+
+    total_weight = sum(active_weights.values())
+    if total_weight > 0:
+        w_repeat = active_weights.get("repeat_billing", 0.0) / total_weight
+        w_phantom = active_weights.get("phantom_service", 0.0) / total_weight
+        w_capacity = active_weights.get("provider_capacity", 0.0) / total_weight
+        w_fuzzy = active_weights.get("fuzzy_similarity", 0.0) / total_weight
+        w_additional = active_weights.get("additional_fraud", 0.0) / total_weight
+
+        clean["business_risk_score"] = (
+            clean["repeat_billing_score"] * w_repeat +
+            clean["phantom_service_score"] * w_phantom +
+            clean["provider_capacity_score"] * w_capacity +
+            clean["fuzzy_similarity_score"] * w_fuzzy +
+            clean["additional_fraud_score"] * w_additional
+        ).clip(0, 1)
+    else:
+        clean["business_risk_score"] = pd.Series(0.0, index=clean.index)
+
     clean["business_risk_flag"] = (clean["business_risk_score"] >= 0.6).astype(int)
 
+    active_count = sum(1 for r in readiness.values() if r.get("ready", False))
     summary = {
         "total_claims": len(clean),
         "repeat_billing_cases": len(repeat_results),
@@ -262,6 +282,9 @@ def enrich_claims_with_business_risk_features(df: pd.DataFrame) -> Tuple[pd.Data
         "medication_device_fraud_cases": int(clean["medication_device_fraud_flag"].sum()) if "medication_device_fraud_flag" in clean.columns else 0,
         "avg_business_risk_score": float(clean["business_risk_score"].mean()) if not clean.empty else 0.0,
         "high_risk_claims": int(clean["business_risk_flag"].sum()),
+        "rule_readiness": readiness,
+        "active_rules_count": active_count,
+        "total_rules_count": len(readiness),
     }
     return clean, summary
 
