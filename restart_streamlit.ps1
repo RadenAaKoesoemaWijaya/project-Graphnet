@@ -21,8 +21,10 @@ function Stop-ProjectProcesses {
         $cmdLine = [string]($proc.CommandLine)
 
         if (-not $procId) { continue }
+        $escapedRoot = [regex]::Escape($projectRoot)
         $targetProcess = ($procName -match 'python|streamlit' -or $cmdLine -match 'streamlit|main.py') -and (
-            $cmdLine -match 'project-Graphnet-main' -or
+            $cmdLine -match $escapedRoot -or
+            $cmdLine -match 'project-Graphnet' -or
             $cmdLine -match 'streamlit' -or
             $cmdLine -match 'main.py'
         )

@@ -42,9 +42,27 @@ if (-not $pythonExe) {
 
 Write-Host "Using: $pythonExe" -ForegroundColor Green
 
+function Stop-VenvProcesses {
+  $fullVenv = [System.IO.Path]::GetFullPath($VenvDir)
+  $allProcs = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue
+  if (-not $allProcs) { return }
+  foreach ($p in $allProcs) {
+    if (-not $p.ProcessId -or $p.ProcessId -eq $PID) { continue }
+    $pCmd = [string]($p.CommandLine)
+    $pPath = [string]($p.ExecutablePath)
+    if ($pCmd -like "*$fullVenv*" -or $pPath -like "*$fullVenv*") {
+      try {
+        Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop
+        Write-Host "Menghentikan proses yang mengunci venv: PID $($p.ProcessId) ($($p.Name))" -ForegroundColor Yellow
+      } catch {}
+    }
+  }
+}
+
 if (Test-Path $VenvDir) {
   if ($Force) {
     Write-Host "Removing existing venv: $VenvDir" -ForegroundColor Yellow
+    Stop-VenvProcesses
     Remove-Item -Recurse -Force $VenvDir
   } else {
     Write-Host "Venv already exists: $VenvDir (use -Force to recreate)" -ForegroundColor Yellow
@@ -52,6 +70,7 @@ if (Test-Path $VenvDir) {
 }
 
 if (-not (Test-Path $VenvDir)) {
+  Stop-VenvProcesses
   & py -$PythonTag -m venv $VenvDir
 }
 
