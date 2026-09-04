@@ -263,38 +263,39 @@ def increment_quota(user_id: str, action: str):
 # STREAMLIT INTEGRATION
 # ============================================================================
 
+def _resolve_user_and_role(user_id: Optional[str] = None) -> Tuple[str, str]:
+    """Helper to resolve current username and role from AuthManager or fallback."""
+    try:
+        from auth_manager import AuthManager
+        user = AuthManager.get_current_user()
+        resolved_id = user_id or user.get('username', 'anonymous')
+        resolved_role = user.get('role', 'analyst')
+        return resolved_id, resolved_role
+    except Exception:
+        return user_id or "anonymous", "analyst"
+
 def check_upload_quota(user_id: str = None) -> Tuple[bool, Optional[str]]:
     """Check upload quota for current user"""
-    if user_id is None:
-        user_id = "anonymous"
-    
-    # For now, use analyst as default role (will be updated with auth in Phase 2)
-    allowed, error = check_user_quota(user_id, 'upload', 'analyst')
+    u_id, u_role = _resolve_user_and_role(user_id)
+    allowed, error = check_user_quota(u_id, 'upload', u_role)
     if not allowed:
         return False, error
-    
     return True, None
 
 def check_training_quota(user_id: str = None) -> Tuple[bool, Optional[str]]:
     """Check training quota for current user"""
-    if user_id is None:
-        user_id = "anonymous"
-    
-    allowed, error = check_user_quota(user_id, 'training', 'analyst')
+    u_id, u_role = _resolve_user_and_role(user_id)
+    allowed, error = check_user_quota(u_id, 'training', u_role)
     if not allowed:
         return False, error
-    
     return True, None
 
 def check_inference_quota(user_id: str = None) -> Tuple[bool, Optional[str]]:
     """Check inference quota for current user"""
-    if user_id is None:
-        user_id = "anonymous"
-    
-    allowed, error = check_user_quota(user_id, 'inference', 'analyst')
+    u_id, u_role = _resolve_user_and_role(user_id)
+    allowed, error = check_user_quota(u_id, 'inference', u_role)
     if not allowed:
         return False, error
-    
     return True, None
 
 # ============================================================================

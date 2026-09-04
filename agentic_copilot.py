@@ -9,11 +9,12 @@ Ensures strict HIPAA/GDPR PII anonymization via pii_masker before sending contex
 """
 
 import os
+import re
 import json
 import logging
 import urllib.request
 import urllib.error
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 import pandas as pd
 import numpy as np
 
@@ -21,6 +22,37 @@ from pii_masker import PIIMasker
 from rag_engine import get_rag_knowledge_base
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# AI SECURITY GUARDRAIL (PROMPT INJECTION & LEAK PREVENTION)
+# =============================================================================
+
+class AIGuardrail:
+    """Security filter to detect and prevent prompt injections, jailbreaks, and sensitive leaks."""
+
+    INJECTION_PATTERNS = [
+        r'(?i)(ignore|bypass|override)\s+(all\s+)?(previous|prior|system)\s+(instructions|prompts|rules)',
+        r'(?i)(reveal|show|leak|print|output|dump)\s+(your\s+)?(system\s+prompt|initial\s+prompt|developer\s+instructions)',
+        r'(?i)(you\s+are\s+now|act\s+as|pretend\s+to\s+be)\s+(dan|unrestricted|jailbreak|developer\s+mode|root)',
+        r'(?i)(<\|im_start\|>|<\|im_end\|>|\[SYSTEM\]|\[INST\])',
+        r'(?i)(drop\s+database|drop\s+table|delete\s+from\s+claims)',
+    ]
+
+    @classmethod
+    def validate_query(cls, user_question: str) -> Tuple[bool, str]:
+        """
+        Validate user input against prompt injection attacks.
+        Returns: (is_safe: bool, reason_or_sanitized: str)
+        """
+        if not user_question or not user_question.strip():
+            return False, "Pertanyaan kosong."
+
+        for pattern in cls.INJECTION_PATTERNS:
+            if re.search(pattern, user_question):
+                return False, f"Pola instruksi mencurigakan terdeteksi ({pattern})."
+
+        return True, user_question.strip()
 
 
 # =============================================================================
@@ -199,6 +231,27 @@ class AgenticInvestigatorCopilot:
         """
         Answer an ad-hoc investigative question regarding a specific claim context.
         """
+        # Cybersecurity Guardrail Check
+        is_safe, guard_detail = AIGuardrail.validate_query(user_question)
+        if not is_safe:
+            logger.warning(f"AI Guardrail blocked query: '{user_question}' - Reason: {guard_detail}")
+            try:
+                from audit_trail import get_audit_logger
+                audit = get_audit_logger()
+                audit.log_event(
+                    event_type="AI_PROMPT_INJECTION_BLOCKED",
+                    actor=str(context.get('claim_id', 'unknown_claim')),
+                    details={"reason": guard_detail, "blocked_query": user_question[:100]}
+                )
+            except Exception:
+                pass
+            return (
+                "⚠️ **[SECURITY ALERT - AKSES DITOLAK]**\n\n"
+                "Pertanyaan Anda terdeteksi melanggar kebijakan keamanan siber sistem ASTINA "
+                "(upaya *prompt injection*, modifikasi instruksi sistem, atau ekstraksi data terlarang). "
+                "Insiden keamanan ini telah dicatat ke dalam audit trail berantai."
+            )
+
         rag_context = self.rag.get_regulation_context(
             active_flags=context.get("active_rules", []),
             query_extra=user_question

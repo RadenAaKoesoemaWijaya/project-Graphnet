@@ -419,9 +419,9 @@ Modul `agentic_copilot.py` dan `rag_engine.py` bertindak sebagai asisten investi
      - `REG-004`: Kaidah Koding INA-CBGs & Upcoding Severity Level.
      - `REG-005`: Batasan FORNAS & Pemakaian Obat/Alkes Sekali Pakai.
      - `REG-006`: Evaluasi Lama Rawat Inap (ALOS) & Premature Discharge.
-     - `REG-007`: Pedoman Audit Klaim Deviasi Biaya & Rasio Ekstrem (Outlier Statistik ML).
-     - `REG-008`: Kaidah Kesesuaian Klinis Diagnosis (ICD-10) & Tindakan Medis.
-   - Menyajikan skor kesamaan semantik (*similarity score*) dan otomatis memetakan klaim anomali non-rule ke standar kewajaran tarif.
+     - `REG-007` *(Baru)*: Pedoman Audit Klaim Deviasi Biaya & Rasio Ekstrem (Outlier Statistik ML) — mencakup klaim >2 SD dari median grup diagnosa, wajib verifikasi itemized bill audit.
+     - `REG-008` *(Baru)*: Kaidah Kesesuaian Klinis Diagnosis (ICD-10) & Tindakan Medis — deteksi *Inappropriate Clinical Utilization* saat prosedur tidak sesuai diagnosa utama.
+   - Menyajikan skor kesamaan semantik (*similarity score*) dari FAISS dan otomatis memetakan klaim anomali non-rule (murni outlier ML) ke standar kewajaran tarif menggunakan fallback query deviasi biaya multivariat.
 
 3. **Multi-Provider LLM Integration & Graceful Resilience (`AgenticInvestigatorCopilot`)**:
    - **Google Gemini**: Integrasi REST API model `gemini-1.5-flash`, `gemini-1.5-pro`, dan `gemini-2.0-flash`.
@@ -431,8 +431,18 @@ Modul `agentic_copilot.py` dan `rag_engine.py` bertindak sebagai asisten investi
 
 4. **Automated BAP & Interactive Multi-turn Q&A**:
    - Menghasilkan dokumen **Berita Acara Pemeriksaan (BAP)** formal berstempel hash kriptografis SHA-256 anti-manipulasi yang siap diunduh dalam format Markdown (`.md`).
-   - Menyediakan fitur tanya-jawab interaktif (*Interactive Q&A*) dengan penyimpanan riwayat percakapan (*chat history*) berbasis session state sehingga tidak hilang saat berpindah atau mengunduh dokumen.
+   - Menyediakan fitur tanya-jawab interaktif (*Interactive Multi-Turn Q&A*) dengan penyimpanan riwayat percakapan (*chat history*) berbasis session state sehingga tidak hilang saat berpindah klaim atau mengunduh dokumen.
    - Konfigurasi engine (pilihan provider, model, API key, dan nama auditor) tersimpan secara persisten di level sesi pengguna (*no-reset on claim switch*).
+
+5. **AI Security Guardrail (`AIGuardrail`)**:
+   - Lapisan pertahanan keamanan AI terintegrasi yang memvalidasi setiap input pertanyaan auditor sebelum dikirim ke LLM menggunakan deteksi pola regex multi-tier.
+   - Mendeteksi dan memblokir 5 kategori serangan AI: *prompt injection*, *jailbreak*, *role override*, *token injection* (BOS/EOS), dan *SQL/command injection*.
+   - Setiap upaya serangan yang diblokir otomatis dicatat ke dalam **Cryptographic Audit Trail** (`AI_PROMPT_INJECTION_BLOCKED`) untuk keperluan forensik dan kepatuhan.
+
+6. **Dynamic XAI & GNN Context Injection (Tahap Pra-Copilot)**:
+   - Sebelum memanggil Copilot, sistem mengekstrak deviasi fitur numerik klaim terpilih menggunakan z-score *real-time* terhadap distribusi dataset berjalan (kandidat fitur: `billed_amount`, `length_of_stay`, `procedure_count`, dll.).
+   - Klaster topologi GNN diekstrak secara dinamis: jumlah klaim terhubung dari faskes yang sama, dan jumlah episode diagnosis yang sama dalam periode audit.
+   - Kedua elemen ini diinjeksikan ke `ClaimContextBuilder.build_sanitized_context()` sebagai `shap_contributions` dan `gnn_neighbors` sehingga SHAP & GNN selalu tersedia dalam konteks LLM.
 
 ---
 
@@ -440,7 +450,13 @@ Modul `agentic_copilot.py` dan `rag_engine.py` bertindak sebagai asisten investi
 
 ### 10.1 Chained Hash Audit Logging
 
-Setiap aksi kritis dalam sistem (upload dataset, eksekusi preprocessing, training model, inferensi deteksi, ekspor laporan) dicatat ke dalam `logs/audit_trail.jsonl`.
+Setiap aksi kritis dalam sistem (upload dataset, eksekusi preprocessing, training model, inferensi deteksi, ekspor laporan, dan deteksi ancaman keamanan AI) dicatat ke dalam `logs/audit_trail.jsonl`.
+
+Event-event keamanan yang dicatat secara khusus:
+- `DETECTION_BATCH_COMPLETED`: Eksekusi deteksi anomali selesai.
+- `AI_PROMPT_INJECTION_BLOCKED`: Upaya *prompt injection* terdeteksi dan diblokir oleh `AIGuardrail`.
+- `LOGIN_FAILED`: Percobaan autentikasi gagal dengan IP source.
+- `DATA_EXPORT`: Ekspor laporan klaim oleh pengguna terautentikasi.
 
 Struktur blok log audit:
 ```json
@@ -472,9 +488,9 @@ Modul `pii_masker.py` melindungi data sensitif sesuai regulasi UU Perlindungan D
 
 ---
 
-## 11. Pengujian Kualitas & Quality Gate (58 Test Cases)
+## 11. Pengujian Kualitas & Quality Gate (69 Test Cases)
 
-Seluruh komponen ASTINA diuji secara otomatis menggunakan suite Pytest yang mencakup **59 skenario uji terdaftar** (58 Passed, 1 Skipped, 100% Green):
+Seluruh komponen ASTINA diuji secara otomatis menggunakan suite Pytest yang mencakup **69 skenario uji terdaftar** (68 Passed, 1 Skipped, 100% Green), termasuk module uji keamanan siber khusus (`test_cybersecurity_and_auth.py`):
 
 ```powershell
 # Menjalankan seluruh test suite
@@ -485,7 +501,8 @@ Seluruh komponen ASTINA diuji secara otomatis menggunakan suite Pytest yang menc
 
 | Modul Test | Jumlah Uji | Cakupan Verifikasi |
 | :--- | :---: | :--- |
-| `test_agentic_copilot.py` | 9 | Uji pencarian semantik FAISS RAG, retrieval outlier ML, inferensi Copilot, fallback zero-wipeout, dan Q&A |
+| `test_agentic_copilot.py` | 9 | Uji pencarian semantik FAISS RAG (8 reg), retrieval outlier ML, inferensi Copilot, fallback zero-wipeout, Q&A heuristic, XAI/GNN context |
+| `test_cybersecurity_and_auth.py` | 6 | Uji bcrypt auth, RBAC 3-tier (admin/auditor/viewer), AI Guardrail (5 pola injeksi), blokir prompt injection di Copilot, cache lifecycle purge, rate-limit role resolution |
 | `test_app_startup.py` | 1 | Uji startup aplikasi dan validitas seluruh dependensi import utama |
 | `test_detection_modules.py` | 14 | Uji menyeluruh 9 modul business rules, edge cases, dan integrasi pipeline |
 | `test_feature_selection.py` | 6 | Uji SelectKBest (F-score & MI), Tree Importance, Filter Multikolinearitas, Low-Variance, PCA |
@@ -496,7 +513,7 @@ Seluruh komponen ASTINA diuji secara otomatis menggunakan suite Pytest yang menc
 | `test_optuna_ensemble_and_drift.py`| 5 | Uji optimasi hyperparameter Optuna dan deteksi Kolmogorov-Smirnov drift |
 | `test_pipeline_edge_cases.py` | 12 | Uji toleransi data null, data bertipe campuran, sanitasi string, dan extreme amounts |
 | `test_streaming_preprocessing_memory.py` | 2 | Uji batasan pemakaian RAM (<100MB peak) pada pemrosesan streaming skala besar |
-| **Total Test Suite** | **63 (62 Passed, 1 Skipped)** | **100% Passed (Green)** |
+| **Total Test Suite** | **69 (68 Passed, 1 Skipped)** | **100% Passed (Green)** |
 
 ---
 

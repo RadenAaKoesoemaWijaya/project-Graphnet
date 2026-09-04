@@ -274,3 +274,38 @@ def get_cache_stats():
             'oldest_file': None,
             'newest_file': None
         }
+
+
+def purge_expired_cache(max_age_hours: float = 24.0) -> int:
+    """
+    Purge cache files older than max_age_hours for data governance & privacy compliance.
+    Prevents indefinite accumulation of patient transaction data on local disk.
+    
+    Returns:
+        Number of purged files.
+    """
+    if not os.path.exists(CACHE_DIR):
+        return 0
+
+    now = time.time()
+    cutoff_time = now - (max_age_hours * 3600)
+    purged_count = 0
+
+    try:
+        for filename in os.listdir(CACHE_DIR):
+            file_path = os.path.join(CACHE_DIR, filename)
+            if os.path.isfile(file_path):
+                try:
+                    file_mtime = os.path.getmtime(file_path)
+                    if file_mtime < cutoff_time:
+                        os.remove(file_path)
+                        purged_count += 1
+                except Exception as err:
+                    print(f"Error purging expired cache file {file_path}: {err}")
+
+        if purged_count > 0:
+            print(f"Data governance purge completed: {purged_count} files older than {max_age_hours}h removed.")
+    except Exception as e:
+        print(f"Error during cache purge: {e}")
+
+    return purged_count

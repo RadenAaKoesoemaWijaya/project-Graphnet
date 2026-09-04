@@ -2,6 +2,19 @@ import streamlit as st
 import logging
 import sys
 import os
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FIX: Windows asyncio ProactorEventLoop ConnectionResetError (Python 3.12+)
+# Must be set BEFORE uvicorn/anyio creates the event loop.
+# ProactorEventLoop has a known bug causing noisy unhandled exceptions when
+# browsers close TCP connections: _ProactorBasePipeTransport._call_connection_lost
+# → sock.shutdown(SHUT_RDWR) → [WinError 10054] Connection reset by remote host.
+# SelectorEventLoop is stable for Streamlit's HTTP/WebSocket I/O workload.
+# ─────────────────────────────────────────────────────────────────────────────
+if sys.platform == "win32":
+    import asyncio
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 from state_manager import navigate_to_page
 
 # Setup logger
@@ -31,6 +44,8 @@ from ui.pages.evaluation import show_evaluation_page
 from ui.pages.detection import show_detection_page
 from ui.pages.status import show_status_page
 
+from auth_manager import AuthManager
+
 def main():
     # Initialize session state
     if 'page' not in st.session_state:
@@ -43,13 +58,26 @@ def main():
         st.session_state['processing_message'] = ''
     if 'page_before_processing' not in st.session_state:
         st.session_state['page_before_processing'] = None
-    
+
+    # Check Authentication Gateway
+    if not AuthManager.is_authenticated():
+        AuthManager.render_login_page()
+        render_footer()
+        return
+
     # Render Sidebar
     render_sidebar()
 
     # Get current page safely
     current_page = st.session_state.get('page', 'home')
-    
+
+    # RBAC Access Guard
+    if not AuthManager.can_access_page(current_page):
+        st.error(f"⛔ **Akses Ditolak**: Peran Anda (`{AuthManager.get_current_role().upper()}`) tidak memiliki izin untuk membuka halaman `{current_page}`.")
+        st.info("Silakan gunakan navigasi menu di sebelah kiri untuk mengakses modul yang diizinkan.")
+        render_footer()
+        return
+
     # Display appropriate page
     try:
         if current_page == 'home':

@@ -2,16 +2,43 @@ import streamlit as st
 from model_registry import get_versions, load_model_version
 from state_manager import navigate_to_page
 from ui.utils import load_persisted_detector, get_gpu_status, get_gpu_status_display
+from auth_manager import AuthManager
 
 MODEL_PREFIX = "models/fraud_detector"
 
 def render_sidebar():
     st.sidebar.markdown("""
-    <div style="text-align: center; padding: 10px; background-color: #FFD700; border-radius: 10px; margin-bottom: 20px;">
+    <div style="text-align: center; padding: 10px; background-color: #FFD700; border-radius: 10px; margin-bottom: 14px;">
         <h2 style="color: #000000; margin: 0;">🛡️ ASTINA</h2>
         <p style="color: #000000; font-size: 0.8em; font-weight: bold; margin: 0;">ANALISIS SISTEM TRANSAKSI IDENTIFIKASI NILAI ANOMALI</p>
     </div>
     """, unsafe_allow_html=True)
+
+    # User Profile Card & Role Badge
+    current_user = AuthManager.get_current_user()
+    role_color_map = {
+        'admin': ('#dc2626', '#fee2e2'),
+        'auditor': ('#2563eb', '#dbeafe'),
+        'analyst': ('#7c3aed', '#ede9fe'),
+        'viewer': ('#475569', '#f1f5f9')
+    }
+    r_color, r_bg = role_color_map.get(current_user.get('role', 'viewer'), ('#475569', '#f1f5f9'))
+    
+    st.sidebar.markdown(f"""
+    <div style="background:{r_bg};border:1px solid {r_color}44;border-radius:8px;padding:8px 12px;margin-bottom:14px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+            <span style="font-size:0.75rem;color:#475569;font-weight:600;">👤 {current_user.get('name', 'User')}</span>
+            <span style="background:{r_color};color:#ffffff;font-size:0.65rem;font-weight:700;padding:2px 8px;border-radius:10px;text-transform:uppercase;">
+                {current_user.get('role', 'viewer')}
+            </span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Optional logout button if authenticated
+    if AuthManager.is_auth_enforced() or st.session_state.get('authenticated'):
+        if st.sidebar.button("🚪 Keluar (Logout)", width='stretch', key="sidebar_logout_btn"):
+            AuthManager.logout()
     
     st.sidebar.title("Menu Utama")
     
@@ -27,23 +54,30 @@ def render_sidebar():
     # Disable sidebar buttons if processing
     sidebar_disabled = is_processing
     
-    if st.sidebar.button("🏠 Beranda", width='stretch', key="sidebar_home", disabled=sidebar_disabled):
-        navigate_to_page('home')
+    # Role-Based Page Access
+    if AuthManager.can_access_page('home'):
+        if st.sidebar.button("🏠 Beranda", width='stretch', key="sidebar_home", disabled=sidebar_disabled):
+            navigate_to_page('home')
     
-    if st.sidebar.button("📂 Unggah Data", width='stretch', key="sidebar_collect", disabled=sidebar_disabled):
-        navigate_to_page('collect')
+    if AuthManager.can_access_page('collect'):
+        if st.sidebar.button("📂 Unggah Data", width='stretch', key="sidebar_collect", disabled=sidebar_disabled):
+            navigate_to_page('collect')
     
-    if st.sidebar.button("🎯 Pelatihan Model", width='stretch', key="sidebar_train", disabled=sidebar_disabled):
-        navigate_to_page('train')
+    if AuthManager.can_access_page('train'):
+        if st.sidebar.button("🎯 Pelatihan Model", width='stretch', key="sidebar_train", disabled=sidebar_disabled):
+            navigate_to_page('train')
     
-    if st.sidebar.button("📊 Evaluasi Model", width='stretch', key="sidebar_evaluate", disabled=sidebar_disabled):
-        navigate_to_page('evaluate')
+    if AuthManager.can_access_page('evaluate'):
+        if st.sidebar.button("📊 Evaluasi Model", width='stretch', key="sidebar_evaluate", disabled=sidebar_disabled):
+            navigate_to_page('evaluate')
     
-    if st.sidebar.button("🔍 Deteksi Anomali", width='stretch', key="sidebar_detect", disabled=sidebar_disabled):
-        navigate_to_page('detect')
+    if AuthManager.can_access_page('detect'):
+        if st.sidebar.button("🔍 Deteksi Anomali", width='stretch', key="sidebar_detect", disabled=sidebar_disabled):
+            navigate_to_page('detect')
     
-    if st.sidebar.button("🖥️ Status Sistem", width='stretch', key="sidebar_status", disabled=sidebar_disabled):
-        navigate_to_page('status')
+    if AuthManager.can_access_page('status'):
+        if st.sidebar.button("🖥️ Status Sistem", width='stretch', key="sidebar_status", disabled=sidebar_disabled):
+            navigate_to_page('status')
     
     st.sidebar.markdown("---")
     st.sidebar.markdown("---")

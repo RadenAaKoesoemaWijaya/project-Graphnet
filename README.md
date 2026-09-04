@@ -398,7 +398,13 @@ $$\text{Final Risk Score} = 0.50(\text{Business Risk Score}) + 0.30(\text{ML Ano
 * **Tab 1: 📊 Ringkasan & Visualisasi**: Distribusi klaim Normal vs Anomali yang seimbang, histogram probabilitas multi-model dengan garis ambang batas dinamis, panel ringkasan 11 kartu risiko eksekutif (*Total Klaim, Anomali, High Risk, Repeat Billing, Phantom, Provider Capacity, Duplicate, Upcoding, Cloning, Stay Risk, Med/Device*), dan visualisasi proporsi risiko kategori bar & donut chart.
 * **Tab 2: 🚨 Business Risk & Rules**: Analisis mendalam pelanggaran aturan bisnis (Repeat Billing & Phantom Service Insights).
 * **Tab 3: 📋 Fraud Review Table & Export**: Tabel audit interaktif terfilter dengan badge *severity* (🔴 High, 🟡 Medium, 🟢 Low), filter pencarian klaim, dan ekspor CSV/Excel/JSON.
-* **Tab 4: 🤖 AI Investigator Copilot & BAP**: Pembuatan Berita Acara Pemeriksaan (BAP) formal dan resume medis secara otomatis dalam format Markdown (.md) yang dapat langsung diunduh, didukung sitasi regulasi medis RAG FAISS (REG-001 s.d. REG-008 termasuk anomali outlier statistik ML), integrasi multi-provider LLM (Gemini, OpenAI, Ollama, Heuristic) dengan *zero-wipeout graceful fallback*, persistensi konfigurasi sesi, injeksi deviasi fitur XAI & klaster kolusi GNN, serta riwayat obrolan interaktif (*multi-turn Q&A*).
+* **Tab 4: 🤖 AI Investigator Copilot & BAP**: Pembuatan Berita Acara Pemeriksaan (BAP) formal dan resume medis secara otomatis dalam format Markdown (`.md`) yang dapat langsung diunduh, dengan fitur lengkap:
+  - **RAG Knowledge Base** berisi 8 dokumen regulasi (REG-001 s.d. REG-008) termasuk REG-007 *(Audit Klaim Deviasi Biaya & Outlier Statistik ML)* dan REG-008 *(Kesesuaian Klinis ICD-10 & CPT)*.
+  - **Multi-provider LLM** (Google Gemini, OpenAI/Azure, Local Ollama, Heuristic Offline) dengan **Zero-Wipeout Graceful Fallback** — data klaim tidak hilang saat API gagal/timeout.
+  - **AI Security Guardrail** (`AIGuardrail`) memblokir *prompt injection* dan jailbreak secara otomatis, dicatat ke audit trail.
+  - **Persistensi Konfigurasi Sesi** — pemilihan provider, API key, nama auditor, dan model tersimpan saat berpindah klaim.
+  - **Injeksi Konteks XAI/GNN Dinamis** — deviasi fitur numerik (z-score real-time) dan klaster kolusi faskes GNN diekstrak dan diinjeksikan ke konteks Copilot secara otomatis.
+  - **Multi-Turn Q&A Chat History** — riwayat percakapan investigatif persisten dalam sesi tanpa kehilangan konteks saat pengajuan ulang pertanyaan.
 * **Tab 5: 📈 Concept Drift & Retraining**: Uji statistik Kolmogorov-Smirnov untuk mendeteksi pergeseran pola klaim dan memicu retrain model Champion-Challenger.
 
 ### 8. Explainable AI & Transparansi Model
@@ -429,7 +435,7 @@ Konfigurasi opsional dapat disetel melalui file `.env` di direktori utama:
 
 ## 🧪 Pengujian & Validasi Kualitas
 
-Aplikasi dilengkapi suite pengujian otomatis komprehensif (**63 Test Cases**) untuk memverifikasi keandalan seluruh komponen sistem secara end-to-end:
+Aplikasi dilengkapi suite pengujian otomatis komprehensif (**69 Test Cases**) untuk memverifikasi keandalan seluruh komponen sistem secara end-to-end, termasuk pengujian keamanan siber (*cybersecurity*) dan autentikasi:
 
 ```powershell
 # Jalankan seluruh test suite dengan Pytest
@@ -443,10 +449,13 @@ python system_status.py
 ```
 
 Hasil verifikasi memastikan:
-- ✅ **63 Test Cases (62 Passed, 1 Skipped, 100% Green)** mencakup seluruh modul aplikasi.
+- ✅ **69 Test Cases (68 Passed, 1 Skipped, 100% Green)** mencakup seluruh modul aplikasi.
 - ✅ Seluruh 9 modul deteksi fraud berfungsi normal pada berbagai tipe data dan edge cases.
 - ✅ Seleksi fitur (SelectKBest, Tree Importance, Filter Multikolinearitas, Low-Variance Filter, PCA) terverifikasi matematis.
-- ✅ Agentic Copilot, Zero-Wipeout Fallback, dan FAISS Knowledge RAG merespons analisis investigasi secara akurat.
+- ✅ Agentic Copilot, Zero-Wipeout Fallback, dan FAISS Knowledge RAG (8 dokumen regulasi) merespons analisis investigasi secara akurat.
+- ✅ **AI Security Guardrail** memblokir 5 jenis pola *prompt injection* dan jailbreak secara deterministik.
+- ✅ **RBAC Autentikasi** (Admin, Auditor, Viewer) dengan bcrypt hashing terverifikasi menghasilkan output deterministik.
+- ✅ **Data Governance Lifecycle** — purge otomatis cache expired (>24 jam) terverifikasi bersih tanpa kebocoran data.
 - ✅ Penanganan data kosong, missing values, dan format numerik tak standar berjalan aman tanpa crash.
 - ✅ Polars out-of-core streaming memory bounded (<100MB RAM peak) pada dataset besar.
 - ✅ Proteksi UI Guard aktif mencegah error kalkulasi SHAP/LIME pada model non-kompatibel.

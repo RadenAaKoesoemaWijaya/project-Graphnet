@@ -95,26 +95,30 @@ has_tests = len(list(Path('tests').glob('*.py'))) > 0 if test_dir else False
 audit['Testing'].append(('Test Suite', 'PASS' if has_tests else 'WARN'))
 audit['Testing'].append(('Test Coverage', 'WARN'))  # Would need coverage report
 
+import sys
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+
 # Print audit report
 print('\n' + '='*70)
-print('PRODUCTION READINESS AUDIT — ASTINA')
+print('PRODUCTION READINESS AUDIT - ASTINA')
 print('='*70)
 
 summary = {'PASS': 0, 'WARN': 0, 'FAIL': 0}
 for category, checks in audit.items():
-    print(f'\n📋 {category.upper()}')
+    print(f'\n[*] {category.upper()}')
     print('-' * 70)
     for check, status in checks:
         if status.startswith('PASS'):
-            symbol = '✅'
+            symbol = '[PASS]'
             summary['PASS'] += 1
         elif status.startswith('WARN'):
-            symbol = '⚠️'
+            symbol = '[WARN]'
             summary['WARN'] += 1
         else:
-            symbol = '❌'
+            symbol = '[FAIL]'
             summary['FAIL'] += 1
-        print(f'{symbol}  {check:30s} {status}')
+        print(f'{symbol:8s} {check:30s} {status}')
 
 print('\n' + '='*70)
 print(f'SUMMARY: {summary["PASS"]} PASS | {summary["WARN"]} WARN | {summary["FAIL"]} FAIL')
