@@ -400,13 +400,35 @@ def show_evaluation_page():
         st.session_state['adaptive_learning_manager'] = AdaptiveLearningManager(detector=detector)
     
     # Log current evaluation metrics
+    # Initialize metric variables with safe defaults so they are always bound,
+    # regardless of whether the supervised block above executed (unsupervised mode
+    # skips that block and would otherwise cause UnboundLocalError here).
+    accuracy = float(np.mean(test_predictions == test_predictions))  # 1.0 placeholder
+    precision = 0.0
+    recall = 0.0
+    f1 = 0.0
+    roc_auc_value = 0.0
+    if y_true is not None and len(np.unique(y_true)) == 2:
+        try:
+            accuracy = float((test_predictions == y_true).mean())
+            from sklearn.metrics import precision_score as _ps, recall_score as _rs, f1_score as _f1, roc_auc_score as _roc
+            precision = float(_ps(y_true, test_predictions, zero_division=0))
+            recall = float(_rs(y_true, test_predictions, zero_division=0))
+            f1 = float(_f1(y_true, test_predictions, zero_division=0))
+            try:
+                roc_auc_value = float(_roc(y_true, test_probabilities))
+            except Exception:
+                roc_auc_value = 0.0
+        except Exception:
+            pass
+
     if st.session_state['eval_y_true'] is not None:
         current_metrics = {
             'accuracy': accuracy,
             'precision': precision,
             'recall': recall,
             'f1_score': f1,
-            'roc_auc': roc_auc_value if 'roc_auc_value' in locals() else 0.0
+            'roc_auc': roc_auc_value,
         }
         st.session_state['performance_monitor'].log_performance(current_metrics)
         

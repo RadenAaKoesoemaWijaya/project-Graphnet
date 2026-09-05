@@ -1136,9 +1136,9 @@ def render_schema_readiness_card(df: pd.DataFrame) -> dict:
 
     with st.expander("📋 Rincian Kelengkapan Kolom Data & Kesiapan 9 Aturan", expanded=(active_count < total_rules)):
         st.markdown("**1. Matriks Kesiapan 9 Modul Aturan Bisnis (Circuit Breaker):**")
-        st.dataframe(pd.DataFrame(rule_table_rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(rule_table_rows), width='stretch', hide_index=True)
         st.markdown("**2. Rincian Kolom Data & Penyelarasan Otomatis:**")
-        st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(table_rows), width='stretch', hide_index=True)
 
     return {
         "complete_pct": complete_pct,

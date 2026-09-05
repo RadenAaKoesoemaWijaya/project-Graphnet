@@ -66,14 +66,14 @@ def show_repeat_phantom_insights(df: pd.DataFrame):
             st.warning(f"⚠️ Ditemukan {len(repeat_results)} potensi repeat billing")
             top_repeat = repeat_results.sort_values("risk_score", ascending=False).head(10)
             avail_cols = [c for c in ["first_claim_id", "repeat_claim_id", "time_gap_days", "similarity_score", "risk_score", "detection_reason"] if c in top_repeat.columns]
-            st.dataframe(top_repeat[avail_cols], use_container_width=True)
+            st.dataframe(top_repeat[avail_cols], width='stretch')
 
     with col2:
         if phantom_df.empty:
             st.success("✅ Tidak ditemukan indikasi phantom service pada dataset ini.")
         else:
             st.warning(f"⚠️ Ditemukan {len(phantom_df)} potensi phantom service")
-            st.dataframe(phantom_df.head(10), use_container_width=True)
+            st.dataframe(phantom_df.head(10), width='stretch')
 
     if not repeat_results.empty or not phantom_df.empty:
         st.info("📌 Kombinasi repeat billing + phantom service berfungsi sebagai sinyal prioritas audit untuk tim verifikator klaim.")
@@ -333,7 +333,7 @@ def show_detection_page():
     # Schema completeness inspection
     with st.expander("🩺 Periksa Kesiapan Skema Kolom Bisnis", expanded=False):
         render_schema_readiness_card(raw_df)
-        st.dataframe(raw_df.head(5), use_container_width=True)
+        st.dataframe(raw_df.head(5), width='stretch')
 
     # ── 4. Detection Configuration & Action Panel ─────────────────────────────
     st.subheader("⚙️ 2. Konfigurasi & Eksekusi Deteksi")
@@ -360,11 +360,10 @@ def show_detection_page():
         run_detection_clicked = st.button(
             "🚀 Jalankan Deteksi Anomali Multi-Algoritma",
             type="primary",
-            use_container_width=True,
             key="btn_run_detection_primary"
         )
     with btn_col2:
-        if st.button("🔄 Reset Hasil Deteksi", use_container_width=True, key="btn_reset_detection"):
+        if st.button("🔄 Reset Hasil Deteksi", key="btn_reset_detection"):
             st.session_state.pop('detection_results', None)
             st.session_state.pop('detection_executed', None)
             st.rerun()
@@ -546,14 +545,14 @@ def show_detection_page():
                                            title='Distribusi Prediksi Anomali',
                                            labels={'x': 'Kategori', 'y': 'Jumlah'})
                 fig_pred.update_layout(showlegend=False)
-                st.plotly_chart(fig_pred, use_container_width=True)
+                st.plotly_chart(fig_pred, width='stretch')
 
             with v_col2:
                 fig_hist = create_histogram_chart(df_result, 'anomaly_probability', nbins=40,
                                                  title='Distribusi Skor Anomali (Multi-Model Ensemble)')
                 fig_hist.add_vline(x=threshold, line_dash="dash", line_color="red",
                                    annotation_text=f"Threshold: {threshold:.2f}")
-                st.plotly_chart(fig_hist, use_container_width=True)
+                st.plotly_chart(fig_hist, width='stretch')
 
             st.markdown("#### 🛡️ Executive Risk Summary Panel")
             summary_cards = _build_safety_summary(df_result, risk_summary)
@@ -589,7 +588,7 @@ def show_detection_page():
                         color_discrete_sequence=['#0f172a', '#2563eb', '#f59e0b', '#ef4444', '#8b5cf6', '#10b981', '#14b8a6', '#f97316']
                     )
                     risk_fig.update_layout(showlegend=False, plot_bgcolor='white', paper_bgcolor='white', margin=dict(l=10, r=10, t=30, b=10))
-                    st.plotly_chart(risk_fig, use_container_width=True)
+                    st.plotly_chart(risk_fig, width='stretch')
                 with c_right:
                     pie_fig = px.pie(
                         category_counts,
@@ -600,7 +599,7 @@ def show_detection_page():
                         color_discrete_sequence=['#2563eb', '#f59e0b', '#ef4444', '#8b5cf6', '#10b981', '#14b8a6', '#f97316', '#64748b']
                     )
                     pie_fig.update_traces(textinfo='percent+label', hole=0.35)
-                    st.plotly_chart(pie_fig, use_container_width=True)
+                    st.plotly_chart(pie_fig, width='stretch')
 
         # ── TAB 2: Business Rules ──
         with tab_rules:
@@ -692,7 +691,7 @@ def show_detection_page():
                     return ['background-color: #fff7ed'] * len(row)
                 return [''] * len(row)
 
-            st.dataframe(fraud_table.style.apply(highlight_fraud, axis=1), use_container_width=True)
+            st.dataframe(fraud_table.style.apply(highlight_fraud, axis=1), width='stretch')
 
             # Export button
             st.markdown("---")
@@ -922,9 +921,9 @@ def show_detection_page():
                     # ── ACTION BUTTONS ──
                     btn_bap_col, btn_rag_col = st.columns(2)
                     with btn_bap_col:
-                        btn_gen_bap = st.button("📑 Generate Berkas BAP & Resume Medis", key=f"btn_bap_{selected_claim}", type="primary", use_container_width=True)
+                        btn_gen_bap = st.button("📑 Generate Berkas BAP & Resume Medis", key=f"btn_bap_{selected_claim}", type="primary")
                     with btn_rag_col:
-                        btn_view_rag = st.button("⚖️ Cek Dasar Regulasi Terkait (RAG)", key=f"btn_rag_{selected_claim}", use_container_width=True)
+                        btn_view_rag = st.button("⚖️ Cek Dasar Regulasi Terkait (RAG)", key=f"btn_rag_{selected_claim}")
 
                     dossier_key = f"generated_bap_{selected_claim}"
                     rag_key = f"rag_results_{selected_claim}"
@@ -1027,7 +1026,7 @@ def show_detection_page():
                     with q_col1:
                         user_question = st.text_input("Pertanyaan audit:", placeholder="Contoh: Apakah biaya klaim ini wajar untuk diagnosis tersebut?", key=f"q_input_{selected_claim}", label_visibility="collapsed")
                     with q_col2:
-                        ask_clicked = st.button("Tanyakan", key=f"q_btn_{selected_claim}", use_container_width=True)
+                        ask_clicked = st.button("Tanyakan", key=f"q_btn_{selected_claim}")
 
                     if ask_clicked and user_question and user_question.strip():
                         with st.spinner("🤖 Menganalisis respon audit..."):

@@ -14,7 +14,7 @@ Aplikasi ini dilengkapi antarmuka interaktif berbasis **Streamlit**, mendukung p
 - **⚡ Resilient Multi-Format Data Ingestion**: Dukungan menyeluruh untuk file CSV, Excel (`.xlsx`, `.xls`), dan Parquet dengan normalisasi format otomatis, streaming disk buffering 8MB untuk efisiensi RAM, engine Polars untuk Parquet cepat, dan integrasi parser Excel tahan error.
 - **🎯 Intelligent Feature Selection & Redundancy Filtering**: Modul seleksi fitur multivariat adaptif di UI Praproses yang mencakup SelectKBest (ANOVA F-Score & Mutual Information), Tree-based Feature Importance (ExtraTrees/RandomForest/LightGBM), Filter Multikolinearitas Terbobot Skor, Filter Low-Variance Skala Invarian, serta Reduksi Dimensi PCA interaktif dengan *live explained variance preview*.
 - **⚡ Smart Training Profiles & Complexity Estimator**: Antarmuka pelatihan interaktif dengan preset adaptif (⚡ *Mode Cepat* ~10-30 dtk, ⚖️ *Mode Seimbang* ~1-2 mnt, 🧠 *Mode Lengkap* Deep Graph, 🛠️ *Kustom*) serta monitor estimasi beban komputasi & rekomendasi hardware (CPU vs GPU) *real-time*.
-- **🕸️ Graph Neural Network (GNN)**: Analisis relasional berbasis `GATConv` (Star Graph, Heterogeneous Graph, & k-NN Graph) untuk membongkar sindikat kolusi faskes, dokter, dan pasien (*fraud rings*) dengan evaluasi metrik periodik teroptimasi.
+- **🕸️ Graph Neural Network (GNN)**: Analisis relasional berbasis `GATConv` (Star Graph, Heterogeneous Graph, & k-NN Graph) untuk membongkar sindikat kolusi faskes, dokter, dan pasien (*fraud rings*) dengan evaluasi metrik periodik teroptimasi. Visualisasi interaktif Graph Network (NetworkX + Plotly) tersedia setelah training — node diwarnai berdasarkan GNN anomaly probability (merah = tinggi, biru = rendah). Jika PyTorch tidak tersedia, banner peringatan otomatis muncul di UI dan GNN/Autoencoder di-skip secara graceful.
 - **📑 5-Tab Detection & Investigation Workspace**:
   1. 📊 *Ringkasan & Visualisasi*: Distribusi prediksi anomali seimbang, histogram probabilitas multi-model ensemble, panel metrik eksekutif 11 kartu risiko, dan proporsi risiko per kategori.
   2. 🚨 *Business Risk & Rules*: Audit temuan Repeat Billing & Phantom Service beserta rincian 9 modul aturan fraud medis dan status eksekusi Circuit Breaker.
@@ -124,7 +124,9 @@ project-Graphnet/
 - **Docker**: Docker Desktop versi terbaru dengan Docker Compose v2.
 
 Semua dependensi inti dikunci pada [requirements.txt](file:///c:/project-Graphnet/requirements.txt):
-`streamlit`, `pandas`, `numpy`, `scikit-learn`, `scipy`, `joblib`, `torch`, `torch-geometric`, `imbalanced-learn`, `plotly`, `xgboost`, `lightgbm`, `catboost`, `polars`, `pyarrow`, `optuna`, `hdbscan`, `faiss-cpu`, `psutil`, `shap`, `lime`, `google-cloud-storage`, `cryptography`.
+`streamlit==1.61.1`, `pandas`, `numpy`, `scikit-learn`, `scipy`, `joblib`, `torch>=2.4.0`, `torch-geometric>=2.6.0`, `imbalanced-learn`, `plotly>=6.0.0`, `xgboost`, `lightgbm`, `catboost`, `polars`, `pyarrow`, `optuna`, `hdbscan`, `faiss-cpu`, `psutil`, `shap`, `lime`, `alibi-detect>=0.12.0`, `google-cloud-storage`.
+
+> **Catatan Streamlit API:** Sejak `streamlit>=1.45`, parameter `use_container_width` pada `st.plotly_chart`, `st.dataframe`, dan `st.button` telah dihapus dan digantikan oleh `width='stretch'` / `width='content'`. Seluruh komponen UI ASTINA sudah menggunakan API baru ini.
 
 ---
 
@@ -231,6 +233,7 @@ Jika sistem Anda memiliki GPU diskrit NVIDIA (seperti **NVIDIA GeForce RTX 3050 
 - **Otomatis Pembersihan Cache (`clean_gpu_memory`)**: Cache VRAM dibersihkan secara periodik (`torch.cuda.empty_cache()`) setelah tiap epoch untuk mencegah kebocoran memori.
 - **Mini-Batch NeighborLoader**: Pengambilan sampel subgraf bertahap untuk graf berukuran masif (>50.000 klaim) agar tidak terjadi *CUDA Out of Memory (OOM)*.
 - **Auto Fallback ke CPU**: Apabila VRAM penuh saat inferensi atau pelatihan, sistem secara mulus beralih ke komputasi CPU tanpa memicu *crash* aplikasi.
+- **Mixed Precision Training (AMP)**: Training Autoencoder menggunakan `torch.amp.GradScaler` dan `torch.amp.autocast` (API baru PyTorch >= 2.0) untuk mengurangi penggunaan VRAM hingga ~40% pada GPU CUDA.
 
 ---
 
@@ -694,6 +697,17 @@ Hasil verifikasi memastikan:
   Pastikan folder `cache/` dan `models/` ada di root project sebelum menjalankan `docker-compose up`.
 - **Dataset Besar Out of Memory**:
   Gunakan format Parquet. Ingestion CSV besar berjalan secara streaming per chunk, namun disarankan menyediakan RAM minimal 16 GB untuk graph sampling GNN berskala jutaan node.
+- **Warning `use_container_width` / `width=`**:
+  Pada Streamlit >= 1.45, parameter `use_container_width` dihapus. Gunakan `width='stretch'` (setara `True`) atau `width='content'` (setara `False`). Seluruh kode ASTINA telah dimigrasikan.
+- **`ConnectionResetError: [WinError 10054]` di log**:
+  Ini adalah perilaku normal Windows ketika browser menutup tab WebSocket saat server masih aktif. Tidak menyebabkan crash aplikasi — hanya log warning asyncio. Konfigurasi `.streamlit/config.toml` sudah disetel untuk meminimalkan frekuensi kejadian ini.
+- **PyTorch tidak terdeteksi (GNN/Autoencoder di-skip)**:
+  Jika `TORCH_AVAILABLE = False` muncul di log atau UI menampilkan banner peringatan, install ulang PyTorch:
+  ```powershell
+  pip install torch --index-url https://download.pytorch.org/whl/cpu
+  # Untuk GPU NVIDIA CUDA 12.4:
+  pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+  ```
 
 ---
 

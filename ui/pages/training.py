@@ -4,10 +4,12 @@ import numpy as np
 import pandas as pd
 try:
     import torch
+    _TORCH_AVAILABLE = True
 except (ImportError, OSError, Exception):
     import sys
     sys.modules.pop('torch', None)
     torch = None
+    _TORCH_AVAILABLE = False
 from ui.utils import *
 from state_manager import *
 def show_training_page():
@@ -15,6 +17,14 @@ def show_training_page():
     edge_index = None
     st.title("Pelatihan Model Deteksi Anomali")
     st.info("Training mempelajari pola dataset yang sudah diproses. Pilih algoritma sesuai kebutuhan: model tabular untuk pola fitur dan GNN untuk hubungan antar klaim.")
+
+    # Warn user if PyTorch / PyTorch Geometric failed to load
+    if not _TORCH_AVAILABLE:
+        st.warning(
+            "⚠️ **PyTorch tidak tersedia** — library deep learning gagal dimuat (kemungkinan masalah DLL di Windows "
+            "atau instalasi torch yang tidak kompatibel). Algoritma **GNN dan Autoencoder akan di-skip otomatis**. "
+            "Install ulang torch dengan: `pip install torch --index-url https://download.pytorch.org/whl/cpu`"
+        )
 
     # Check if data is available
     if 'df_processed_path' not in st.session_state or 'feature_columns' not in st.session_state:
@@ -695,6 +705,7 @@ def show_training_page():
             st.session_state.pop('graph_method', None)
             st.session_state.pop('graph_node_count', None)
             st.session_state.pop('graph_edge_count', None)
+            st.session_state.pop('graph_node_features', None)
             
             # Build graph for GNN if selected
             if "GNN" in algo_options and training_mode == TRAINING_MODE_UNSUPERVISED:
@@ -723,6 +734,9 @@ def show_training_page():
                                 node_features, edge_index = graph_result
                                 
                             st.session_state['edge_index'] = edge_index
+                            # Persist node_features so the visualization block can
+                            # access it after st.rerun() clears local variables.
+                            st.session_state['graph_node_features'] = node_features
                             st.session_state['graph_method'] = graph_method
                             st.session_state['graph_k'] = graph_k
                             st.session_state['graph_node_count'] = int(node_features.shape[0])
@@ -1082,6 +1096,8 @@ def show_training_page():
                 
                 # Graph Visualization if GNN was trained
                 current_edge_index = st.session_state.get('edge_index', edge_index)
+                # Restore node_features from session_state (local var is None after st.rerun)
+                current_node_features = st.session_state.get('graph_node_features', node_features)
                 if detector.gnn_weight > 0 and hasattr(detector, 'gnn_model') and detector.gnn_model is not None and current_edge_index is not None:
                     st.markdown("---")
                     st.subheader("🕸️ Visualisasi Graph Network")
@@ -1094,25 +1110,34 @@ def show_training_page():
                         # rows are not interchangeable with training graph nodes.
                         graph_scores = None
                         try:
-                            _, graph_individual_probs = detector.predict_anomaly_probability(
-                                node_features,
-                                edge_index=current_edge_index,
-                                edge_type=st.session_state.get('edge_type'),
-                                device=device,
-                            )
-                            graph_scores = np.asarray(graph_individual_probs.get('gnn', []), dtype=float)
-                            if graph_scores.size != node_features.shape[0]:
-                                graph_scores = None
+                            if current_node_features is not None:
+                                _, graph_individual_probs = detector.predict_anomaly_probability(
+                                    current_node_features,
+                                    edge_index=current_edge_index,
+                                    edge_type=st.session_state.get('edge_type'),
+                                    device=device,
+                                )
+                                graph_scores = np.asarray(graph_individual_probs.get('gnn', []), dtype=float)
+                                if graph_scores.size != current_node_features.shape[0]:
+                                    graph_scores = None
                         except Exception as score_error:
                             logger.warning("GNN visualization scoring failed: %s", score_error)
+
+                        # Determine total node count safely
+                        total_node_count = (
+                            int(current_node_features.shape[0])
+                            if current_node_features is not None
+                            else int(current_edge_index.max().item()) + 1
+                        )
+                        total_node_count = max(1, total_node_count)
 
                         # Render a relevant graph slice while preserving stable node IDs.
                         total_edges = int(current_edge_index.shape[1])
                         requested_nodes = int(st.number_input(
                             "Jumlah node untuk visualisasi",
                             min_value=1,
-                            max_value=max(1, int(node_features.shape[0]) if node_features is not None else total_edges),
-                            value=min(300, max(1, int(node_features.shape[0]) if node_features is not None else total_edges)),
+                            max_value=total_node_count,
+                            value=min(300, total_node_count),
                             step=50,
                             key="gnn_visualization_node_limit",
                         ))
@@ -1129,7 +1154,7 @@ def show_training_page():
                         if graph_scores is not None:
                             selected_nodes = set(np.argsort(graph_scores)[-max_nodes:].tolist())
                         else:
-                            selected_nodes = set(range(min(max_nodes, int(node_features.shape[0]))))
+                            selected_nodes = set(range(min(max_nodes, total_node_count)))
                         G.add_nodes_from(selected_nodes)
                         selected_edges = []
                         for edge_index_position, edge in enumerate(edge_list):

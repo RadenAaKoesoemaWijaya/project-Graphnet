@@ -34,4 +34,4 @@ google-cloud-storage>=3.0.0
 faiss-cpu>=1.7.4
 psutil>=7.0.0
 shap>=0.48.0
-lime>=0.2.0.0
+alibi-detect>=0.12.0

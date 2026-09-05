@@ -118,7 +118,7 @@ def show_home_page():
             <p class="action-card-desc">Ingest dataset klaim (CSV, Parquet, Excel hingga 3GB), evaluasi skema 14 kolom inti, dan praproses fitur otomatis.</p>
         </div>
         """, unsafe_allow_html=True)
-        collect_button = st.button("🚀 Mulai Unggah", key="home_collect", use_container_width=True, type="primary")
+        collect_button = st.button("🚀 Mulai Unggah", key="home_collect", type="primary")
 
     with col2:
         st.markdown("""
@@ -131,7 +131,7 @@ def show_home_page():
             <p class="action-card-desc">Latih Hybrid Ensemble (Isolation Forest, Deep Autoencoder, XGBoost/LightGBM) & Graph Neural Network (GNN).</p>
         </div>
         """, unsafe_allow_html=True)
-        train_button = st.button("⚡ Latih Model", key="home_train", use_container_width=True)
+        train_button = st.button("⚡ Latih Model", key="home_train")
 
     with col3:
         st.markdown("""
@@ -144,7 +144,7 @@ def show_home_page():
             <p class="action-card-desc">Validasi performa model melalui ROC-AUC, Precision-Recall, Confusion Matrix, dan kalibrasi ambang batas risiko.</p>
         </div>
         """, unsafe_allow_html=True)
-        evaluate_button = st.button("📈 Evaluasi Model", key="home_eval", use_container_width=True)
+        evaluate_button = st.button("📈 Evaluasi Model", key="home_eval")
 
     with col4:
         st.markdown("""
@@ -157,7 +157,7 @@ def show_home_page():
             <p class="action-card-desc">Eksekusi skoring risiko hybrid, audit 9 aturan kecurangan bisnis, serta investigasi terpandu via AI Copilot.</p>
         </div>
         """, unsafe_allow_html=True)
-        detect_button = st.button("🔍 Deteksi Anomali", key="home_detect", use_container_width=True)
+        detect_button = st.button("🔍 Deteksi Anomali", key="home_detect")
 
     with col5:
         st.markdown("""
@@ -170,7 +170,7 @@ def show_home_page():
             <p class="action-card-desc">Pantau kesehatan runtime, telemetri RAM/GPU, manajemen cache, dan log audit trail transaksi berkriptografi SHA-256.</p>
         </div>
         """, unsafe_allow_html=True)
-        status_button = st.button("⚙️ Cek Status", key="home_status", use_container_width=True)
+        status_button = st.button("⚙️ Cek Status", key="home_status")
 
     # Action Handlers
     if collect_button:
@@ -198,10 +198,10 @@ def show_home_page():
             st.info("🔧 Model belum dilatih atau dimuat dari registry. Silakan unggah data dan latih model terlebih dahulu.")
             sub_col1, sub_col2 = st.columns(2)
             with sub_col1:
-                if st.button("📂 Unggah Data Transaksi", key="btn_collect_fallback", use_container_width=True):
+                if st.button("📂 Unggah Data Transaksi", key="btn_collect_fallback"):
                     navigate_to_page('collect')
             with sub_col2:
-                if st.button("🧠 Latih Model AI", key="btn_train_fallback", use_container_width=True):
+                if st.button("🧠 Latih Model AI", key="btn_train_fallback"):
                     navigate_to_page('train')
 
     st.markdown("<div style='margin-top: 36px;'></div>", unsafe_allow_html=True)
@@ -238,7 +238,7 @@ def show_home_page():
             {"No": 14, "Nama Kolom": "quantity", "Tipe": "Integer", "Contoh": "10", "Fungsi Utama": "Jumlah obat / alkes, deteksi medication & device fraud."}
         ]
         df_schema = pd.DataFrame(schema_data)
-        st.dataframe(df_schema, use_container_width=True, hide_index=True)
+        st.dataframe(df_schema, width='stretch', hide_index=True)
 
         st.info("💡 **Spesifikasi Engine Ingest**: ASTINA mendukung file hingga **3 GB** dalam format `.csv`, `.parquet`, `.xlsx`, dan `.json` dengan pemrosesan streaming non-blocking menggunakan engine Polars LazyFrame.")
 
@@ -312,7 +312,7 @@ def show_home_page():
                 "Tindakan Operasional yang Disarankan": "PERSETUJUAN OTOMATIS (STP). Klaim dapat diproses langsung untuk pembayaran sesuai alur standar tanpa hambatan operasional."
             }
         ]
-        st.dataframe(pd.DataFrame(matrix_data), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(matrix_data), width='stretch', hide_index=True)
 
         st.markdown("<div style='margin-top: 18px;'></div>", unsafe_allow_html=True)
         st.markdown("#### 🔐 Matriks Hak Akses Peran Pengguna (RBAC)")
@@ -322,7 +322,7 @@ def show_home_page():
             {"Peran": "🎯 Analyst", "Unggah Data": "✅ Penuh", "Pelatihan Model": "✅ Penuh", "Evaluasi Model": "✅ Penuh", "Deteksi Anomali": "✅ Penuh + AI Copilot", "Status & Audit Log": "👁️ Lihat Saja"},
             {"Peran": "👁️ Viewer", "Unggah Data": "❌ Akses Ditolak", "Pelatihan Model": "❌ Akses Ditolak", "Evaluasi Model": "👁️ Lihat Metrik", "Deteksi Anomali": "👁️ Lihat Hasil", "Status & Audit Log": "👁️ Ringkasan Status"}
         ]
-        st.dataframe(pd.DataFrame(rbac_data), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(rbac_data), width='stretch', hide_index=True)
 
     # --- TAB 4: HYBRID AI ARCHITECTURE ---
     with tab4:

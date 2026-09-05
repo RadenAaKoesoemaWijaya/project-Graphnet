@@ -25,7 +25,7 @@ def show_system_status_page():
         # Refresh button
         col1, col2 = st.columns([1, 5])
         with col1:
-            if st.button("🔄 Refresh", use_container_width=True):
+            if st.button("🔄 Refresh"):
                 st.rerun()
         with col2:
             st.caption(f"Terakhir diupdate: {datetime.now().strftime('%H:%M:%S')}")
@@ -171,7 +171,7 @@ def show_system_status_page():
             alert_df['severity_icon'] = alert_df['severity'].apply(color_severity)
             
             display_cols = ['severity_icon', 'metric_name', 'current_value', 'threshold_value', 'timestamp']
-            st.dataframe(alert_df[display_cols], use_container_width=True)
+            st.dataframe(alert_df[display_cols], width='stretch')
         else:
             st.info("✅ Tidak ada alert aktif")
         
@@ -190,7 +190,7 @@ def show_system_status_page():
             display_cols = ['timestamp', 'event_type', 'action', 'resource', 'severity']
             available_cols = [col for col in display_cols if col in event_df.columns]
             
-            st.dataframe(event_df[available_cols].head(10), use_container_width=True)
+            st.dataframe(event_df[available_cols].head(10), width='stretch')
             
             # Event type breakdown
             st.markdown("**Distribusi Event Type:**")
@@ -277,7 +277,7 @@ def show_system_status_page():
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            if st.button("🧹 Bersihkan Cache Lama", use_container_width=True):
+            if st.button("🧹 Bersihkan Cache Lama"):
                 try:
                     cleaned = audit_trail.cleanup_old_logs(days_to_keep=30)
                     st.success(f"✅ {cleaned} file log lama dibersihkan")
@@ -285,7 +285,7 @@ def show_system_status_page():
                     st.error(f"❌ Gagal membersihkan cache: {e}")
         
         with col2:
-            if st.button("📊 Export Metrics", use_container_width=True):
+            if st.button("📊 Export Metrics"):
                 try:
                     import json
                     status = get_system_status()
@@ -295,7 +295,7 @@ def show_system_status_page():
                     st.error(f"❌ Gagal export metrics: {e}")
         
         with col3:
-            if st.button("🔄 Reset Counters", use_container_width=True):
+            if st.button("🔄 Reset Counters"):
                 try:
                     for counter_name in all_metrics['counters']:
                         metrics_collector.performance.reset_counter(counter_name)

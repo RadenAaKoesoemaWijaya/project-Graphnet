@@ -2682,8 +2682,16 @@ class CombinedAnomalyDetector:
             scaler = None
             if use_amp:
                 try:
-                    from torch.cuda.amp import GradScaler, autocast
-                    scaler = GradScaler()
+                    # Use the new torch.amp API (torch >= 2.0); fall back to
+                    # the deprecated torch.cuda.amp path only when unavailable.
+                    try:
+                        from torch.amp import GradScaler, autocast as _autocast
+                        scaler = GradScaler('cuda')
+                        def autocast():  # noqa: E306
+                            return _autocast('cuda')
+                    except (ImportError, TypeError):
+                        from torch.cuda.amp import GradScaler, autocast  # type: ignore[no-redef]
+                        scaler = GradScaler()
                     logger.info("Mixed precision training enabled for GPU")
                 except ImportError:
                     logger.warning("AMP not available, falling back to FP32")
@@ -4771,39 +4779,50 @@ def analyze_anomaly_networks(df, fraud_predictions):
     """Analyze networks of anomaly transactions"""
     try:
         fraud_df = df[fraud_predictions == 1]
-        
-        # Provider anomaly analysis
-        provider_fraud_rates = fraud_df.groupby('provider_id').size().sort_values(ascending=False)
-        
-        # Diagnosis anomaly patterns
-        diagnosis_fraud_patterns = fraud_df['diagnosis_code'].value_counts().head(10)
-        
-        # Service type anomaly analysis
-        service_fraud_patterns = fraud_df['service_type'].value_counts().head(10)
-        
-        # Amount analysis for anomaly vs legitimate
-        fraud_amounts = fraud_df['billed_amount']
-        legitimate_amounts = df[fraud_predictions == 0]['billed_amount']
-        
-        analysis_results = {
+
+        result = {
             'total_anomaly_claims': len(fraud_df),
-            'anomaly_rate': len(fraud_df) / len(df),
-            'top_anomaly_providers': provider_fraud_rates.head(10).to_dict(),
-            'top_anomaly_diagnoses': diagnosis_fraud_patterns.to_dict(),
-            'top_anomaly_services': service_fraud_patterns.to_dict(),
-            'anomaly_amount_stats': {
-                'mean': fraud_amounts.mean(),
-                'median': fraud_amounts.median(),
-                'std': fraud_amounts.std()
-            },
-            'legitimate_amount_stats': {
-                'mean': legitimate_amounts.mean(),
-                'median': legitimate_amounts.median(),
-                'std': legitimate_amounts.std()
-            }
+            'anomaly_rate': len(fraud_df) / max(len(df), 1),
+            'top_anomaly_providers': {},
+            'top_anomaly_diagnoses': {},
+            'top_anomaly_services': {},
+            'anomaly_amount_stats': {'mean': 0, 'median': 0, 'std': 0},
+            'legitimate_amount_stats': {'mean': 0, 'median': 0, 'std': 0},
         }
-        
-        return analysis_results
+
+        # Provider anomaly analysis (optional column)
+        if 'provider_id' in fraud_df.columns:
+            provider_fraud_rates = fraud_df.groupby('provider_id').size().sort_values(ascending=False)
+            result['top_anomaly_providers'] = provider_fraud_rates.head(10).to_dict()
+
+        # Diagnosis anomaly patterns (optional column)
+        if 'diagnosis_code' in fraud_df.columns:
+            result['top_anomaly_diagnoses'] = fraud_df['diagnosis_code'].value_counts().head(10).to_dict()
+
+        # Service type anomaly analysis (optional column)
+        if 'service_type' in fraud_df.columns:
+            result['top_anomaly_services'] = fraud_df['service_type'].value_counts().head(10).to_dict()
+
+        # Amount analysis — try common column name variants
+        amount_col = next(
+            (c for c in ['billed_amount', 'claim_amount', 'amount', 'total_amount'] if c in df.columns),
+            None,
+        )
+        if amount_col:
+            fraud_amounts = fraud_df[amount_col]
+            legitimate_amounts = df[fraud_predictions == 0][amount_col]
+            result['anomaly_amount_stats'] = {
+                'mean': float(fraud_amounts.mean()) if len(fraud_amounts) > 0 else 0,
+                'median': float(fraud_amounts.median()) if len(fraud_amounts) > 0 else 0,
+                'std': float(fraud_amounts.std()) if len(fraud_amounts) > 0 else 0,
+            }
+            result['legitimate_amount_stats'] = {
+                'mean': float(legitimate_amounts.mean()) if len(legitimate_amounts) > 0 else 0,
+                'median': float(legitimate_amounts.median()) if len(legitimate_amounts) > 0 else 0,
+                'std': float(legitimate_amounts.std()) if len(legitimate_amounts) > 0 else 0,
+            }
+
+        return result
     except Exception as e:
         logger.error("Error analyzing anomaly networks: %s", e)
         return {

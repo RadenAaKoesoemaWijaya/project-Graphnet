@@ -301,6 +301,12 @@ class ModelExplainer:
             return
             
         importance_df = self.get_feature_importance(model_name, X=X)
+        if importance_df is None or importance_df.empty:
+            st.warning(
+                f"⚠️ Feature importance tidak tersedia untuk model '{model_name}'. "
+                f"Model yang didukung: {sorted(SUPPORTED_EXPLAINABILITY_MODELS)}."
+            )
+            return
         # Limit to top features
         importance_df = importance_df.head(max_features)
         
@@ -319,7 +325,7 @@ class ModelExplainer:
         )
         
         fig.update_layout(yaxis={'categoryorder': 'total ascending'})
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
     
     def plot_shap_summary(self, X, model_name='isolation_forest', max_display=10):
         """
@@ -569,7 +575,7 @@ class ConceptDriftDetector:
         fig.add_vline(x=self.threshold, line_dash="dash", line_color="red",
                      annotation_text=f"Threshold ({self.threshold})")
         
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
         
         # Show summary
         drifted_count = drift_df['drift'].sum()
@@ -746,7 +752,7 @@ class PerformanceMonitor:
                 )
         
         fig.update_layout(height=200*len(metric_names), showlegend=False)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
 
 
 class AdaptiveLearningManager:
@@ -913,7 +919,7 @@ class AdaptiveLearningManager:
             ])
             
             fig = px.pie(feedback_df, values='Count', names='Type', title='Feedback Distribution')
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width='stretch')
 
     def evaluate_champion_challenger(self, champion_detector, challenger_detector, validation_data,
                                       validation_labels=None, max_fpr_increase=0.01, min_recall_retention=0.95):

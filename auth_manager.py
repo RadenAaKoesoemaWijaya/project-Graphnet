@@ -206,7 +206,7 @@ class AuthManager:
                 username_input = st.text_input("Username / ID Pengguna:", placeholder="admin / auditor / analyst / viewer", key="login_username_field")
                 password_input = st.text_input("Kata Sandi (Password):", type="password", placeholder="••••••••••••", key="login_password_field")
 
-                if st.button("🔐 Masuk ke Sistem (Log In)", type="primary", use_container_width=True, key="login_btn_submit"):
+                if st.button("🔐 Masuk ke Sistem (Log In)", type="primary", key="login_btn_submit"):
                     if username_input and password_input:
                         success = AuthManager.authenticate(username_input, password_input)
                         if success:

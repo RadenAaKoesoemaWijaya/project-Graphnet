@@ -25,8 +25,11 @@ print(f'   Edge index shape: {edge_index.shape}')
 print('\nTesting GNN training...')
 start = time.time()
 detector = CombinedAnomalyDetector(algorithms=['isolation_forest', 'xgboost', 'gnn'], random_state=42, verbose=False)
+# create_claim_graph returns edge_index as a torch.LongTensor with shape (2, N_edges).
+# Convert to numpy keeping the same (2, N_edges) layout — CombinedAnomalyDetector.fit()
+# normalises orientation internally, so passing (2, N) is the canonical convention.
 ei_arr = edge_index.numpy() if hasattr(edge_index, 'numpy') else np.asarray(edge_index)
-detector.fit(X, edge_index=ei_arr.T, device='cpu')
+detector.fit(X, edge_index=ei_arr, device='cpu')
 train_time = time.time() - start
 print(f'[OK] Training completed in {train_time:.2f}s')
 status = 'trained' if detector.gnn_model is not None else 'skipped'

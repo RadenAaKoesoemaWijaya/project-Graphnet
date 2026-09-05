@@ -187,6 +187,11 @@ python run.py
 
 ### 4.3 Training Model (`ui/pages/training.py`)
 - **Data Splitting**: Pembagian data latih (*train*) dan data uji (*test*) dengan metode *Stratified Split* (mempertahankan proporsi label fraud) atau *Random Split*.
+- **Visualisasi Topologi Graf (Post-Training)**: Setelah training selesai, ditampilkan visualisasi interaktif Graph Network (NetworkX + Plotly) dengan ketentuan:
+  - Node diwarnai berdasarkan **GNN anomaly probability** (skala `RdYlBu_r`: merah = tinggi, biru = rendah).
+  - Edge dibedakan warnanya per tipe relasi pada Heterogeneous Graph: Provider (biru `#2563eb`), Patient (hijau `#10b981`), Diagnosis (kuning `#f59e0b`).
+  - `node_features` dipersisten ke `st.session_state['graph_node_features']` agar tetap tersedia setelah `st.rerun()` — ini adalah fix kritis untuk mencegah semua node berwarna seragam.
+- **Peringatan PyTorch Tidak Tersedia**: Jika PyTorch gagal diimport (misalnya DLL error pada Windows atau versi tidak kompatibel), banner peringatan informatif otomatis ditampilkan di halaman Training. GNN dan Autoencoder akan di-skip secara *graceful*, sementara Isolation Forest dan XGBoost tetap berjalan normal.
 - **Smart Training Profiles & Complexity Estimator**:
   - ⚡ **Mode Cepat (*Tabular Fast*)**: Isolation Forest (50 tree) + XGBoost, tanpa Autoencoder/GNN/Optuna (~10–30 dtk). Sangat efisien untuk CPU lokal dan serverless Cloud Run.
   - ⚖️ **Mode Seimbang (*Balanced*)**: Isolation Forest + PyTorch Autoencoder (20 epoch) + XGBoost (~1–2 mnt).
@@ -422,6 +427,7 @@ Model ensemble menggabungkan berbagai paradigma machine learning:
 1. **Isolation Forest**: Memisahkan anomali melalui pemotongan acak pohon partisi (*isolation depth*).
 2. **PyTorch Deep Autoencoder**: Arsitektur neural network *encoder-bottleneck-decoder* non-linear yang mengukur anomali dari *Reconstruction Loss*:
    $$\mathcal{L}_{\text{recon}} = \frac{1}{d} \sum_{k=1}^d (x_k - \hat{x}_k)^2$$
+   Training menggunakan **Mixed Precision (AMP)** via `torch.amp.GradScaler('cuda')` dan `torch.amp.autocast('cuda')` (API PyTorch >= 2.0 — menggantikan `torch.cuda.amp` yang deprecated) untuk menghemat VRAM hingga ~40% pada GPU CUDA.
 3. **XGBoost / LightGBM**: *Gradient Boosted Decision Trees* yang memprediksi probabilitas anomali berdasarkan fitur terstruktur non-linear.
 4. **DBSCAN / HDBSCAN**: *Density-based spatial clustering* untuk mendeteksi *noise points* terisolasi.
 
@@ -610,6 +616,40 @@ Seluruh komponen ASTINA diuji secara otomatis menggunakan suite Pytest yang menc
 ---
 
 ## 12. Panduan Deployment Multi-Environment
+
+### 12.0 Catatan Kompatibilitas & Konfigurasi Penting
+
+#### Streamlit API — Migrasi `width=`
+Sejak `streamlit >= 1.45`, parameter `use_container_width` pada `st.plotly_chart`, `st.dataframe`, dan komponen terkait **sudah dihapus** dan digantikan API baru:
+- `use_container_width=True` → `width='stretch'`
+- `use_container_width=False` → `width='content'`
+- Pada `st.button`: hapus parameter `use_container_width` sepenuhnya (button mengikuti lebar kolom secara default).
+
+Seluruh kode UI ASTINA (`detection.py`, `home.py`, `model_explainer.py`, `system_status.py`, `ui/utils.py`, `auth_manager.py`) telah dimigrasikan ke API baru ini.
+
+#### Konfigurasi `.streamlit/config.toml`
+File konfigurasi telah diperbarui dengan pengaturan berikut untuk performa optimal:
+```toml
+[server]
+maxCachedMessageAge = 2      # Batasi cache in-process untuk hemat RAM
+
+[runner]
+fastReruns = true            # Kurangi overhead re-render
+postScriptGC = true          # Paksa GC setelah setiap script run (bebaskan tensor/DataFrame)
+
+[client]
+toolbarMode = "minimal"      # Kurangi render overhead pada sistem RAM rendah
+```
+Konfigurasi ini terutama penting pada mesin dengan RAM ≤ 8 GB (seperti mesin dengan RAM terpakai ≥ 75% sebelum aplikasi dijalankan).
+
+#### `ConnectionResetError: [WinError 10054]`
+Error ini muncul di log Windows ketika browser menutup tab/koneksi WebSocket saat server Streamlit masih aktif. Ini adalah perilaku normal asyncio ProactorEventLoop di Windows — **tidak menyebabkan crash aplikasi**, hanya log warning. Tidak perlu tindakan dari sisi kode aplikasi.
+
+#### Dependensi Baru: `alibi-detect`
+Library `alibi-detect>=0.12.0` telah ditambahkan ke `requirements.txt` untuk mengaktifkan fitur advanced concept drift detection (`ALIBI_DETECT_AVAILABLE`). Install otomatis via `pip install -r requirements.txt`.
+
+#### Fix `large_file_processor.py` — Temp Directory
+Direktori temp (`TEMP_DATA_DIR`) kini dibuat ulang (`os.makedirs(..., exist_ok=True)`) tepat sebelum `sink_parquet()` dipanggil. Ini mencegah `FileNotFoundError` yang terjadi ketika Windows membersihkan direktori temp antara dua sesi jalannya aplikasi.
 
 ### 12.1 Localhost Environment
 ```powershell

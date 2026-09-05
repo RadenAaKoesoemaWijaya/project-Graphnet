@@ -277,6 +277,9 @@ def stream_transform_to_parquet(input_parquet_path: str, output_parquet_path: st
             dedup_final_features.append(f)
 
     # Execute streaming sink to disk
+    # Ensure the output directory exists — the OS may have cleaned the temp
+    # folder between runs, causing Polars sink_parquet to raise FileNotFoundError.
+    os.makedirs(os.path.dirname(output_parquet_path), exist_ok=True)
     logger.info(f"Streaming transformed dataset to {output_parquet_path}...")
     lf_transformed.sink_parquet(output_parquet_path, compression="zstd")
 
