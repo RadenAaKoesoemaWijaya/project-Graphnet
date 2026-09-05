@@ -89,8 +89,30 @@ def read_large_csv(file_path, chunk_size=None, progress_bar=True):
         chunk_size = get_optimal_chunk_size(file_size)
 
     if chunk_size is None or file_size < 50 * 1024 * 1024:  # < 50MB
-        # Read whole file
-        df = pd.read_csv(file_path)
+        # Read whole file — try auto-detecting delimiter first so that files
+        # with ';', '\t', or '|' separators are parsed correctly.
+        try:
+            df = pd.read_csv(file_path)
+            # Heuristic: if the file has more than one row but only one column,
+            # the delimiter was probably not a comma — re-try with auto-sniff.
+            if df.shape[1] == 1 and file_size > 0:
+                import csv as _csv
+                with open(file_path, 'r', encoding='utf-8', errors='replace') as _f:
+                    sample = _f.read(4096)
+                dialect = _csv.Sniffer().sniff(sample, delimiters=',;\t|')
+                if dialect.delimiter != ',':
+                    df = pd.read_csv(file_path, sep=dialect.delimiter)
+        except UnicodeDecodeError:
+            # Fallback for non-UTF-8 encoded files (e.g. Latin-1, Windows-1252)
+            df = pd.read_csv(file_path, encoding='latin-1')
+        except Exception:
+            # Last resort: let pandas sniff everything
+            df = pd.read_csv(file_path, sep=None, engine='python')
+        if df.empty:
+            raise ValueError(
+                "File berhasil dibaca tetapi tidak mengandung baris data (hanya header). "
+                "Pastikan file memiliki minimal 1 baris data di bawah baris header."
+            )
         return optimize_memory_usage(df)
 
     # Materialize through a temporary Parquet file instead of retaining every

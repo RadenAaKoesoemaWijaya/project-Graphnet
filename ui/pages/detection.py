@@ -278,10 +278,58 @@ def show_detection_page():
                 fmt_map = {"csv": "csv", "xlsx": "xlsx", "xls": "xls", "parquet": "parquet"}
                 file_format: str = fmt_map.get(file_ext, file_ext) or "csv"
                 raw_df = read_file_with_optimization(uploaded_file, file_format)
-                source_description = f"File: {uploaded_file.name} ({len(raw_df):,} baris)"
+
+                # ── Post-read validation ──────────────────────────────────
+                if raw_df is None or not isinstance(raw_df, pd.DataFrame):
+                    raise ValueError("File tidak menghasilkan tabel data yang valid.")
+                if raw_df.empty:
+                    raise ValueError(
+                        "File berhasil dibaca tetapi tidak mengandung baris data. "
+                        "Pastikan terdapat minimal 1 baris data di bawah baris header."
+                    )
+                if raw_df.shape[1] == 1:
+                    # Single-column almost always means wrong delimiter
+                    col_sample = raw_df.columns[0]
+                    for sep_char in (';', '\t', '|'):
+                        if sep_char in col_sample:
+                            st.warning(
+                                f"⚠️ Terdeteksi hanya 1 kolom (`{col_sample[:40]}`). "
+                                f"File CSV mungkin menggunakan pemisah `'{sep_char}'` bukan koma. "
+                                "Simpan ulang file dengan pemisah koma (,) atau ubah ke format Excel/Parquet."
+                            )
+                            break
+
+                source_description = f"File: {uploaded_file.name} ({len(raw_df):,} baris, {raw_df.shape[1]} kolom)"
+                st.success(f"✅ File berhasil dimuat — **{len(raw_df):,} baris**, **{raw_df.shape[1]} kolom**.")
+
+            except ValueError as e:
+                st.error(f"❌ Format file tidak valid: {e}")
+                logger.error("Detection upload ValueError: %s", e)
             except Exception as e:
-                st.error(f"❌ Gagal membaca file: {str(e)}")
-                logger.error(f"Detection file read error: {e}", exc_info=True)
+                # Provide actionable guidance based on error type
+                err_str = str(e).lower()
+                if "codec" in err_str or "unicode" in err_str or "encoding" in err_str:
+                    st.error(
+                        "❌ **Error Encoding**: File menggunakan karakter non-UTF-8. "
+                        "Simpan ulang file sebagai UTF-8 (di Excel: Simpan Sebagai → CSV UTF-8)."
+                    )
+                elif "memory" in err_str or "allocat" in err_str:
+                    st.error(
+                        "❌ **Error Memori**: File terlalu besar untuk dimuat langsung. "
+                        "Gunakan format **Parquet** atau pecah file menjadi bagian lebih kecil (<500MB per file)."
+                    )
+                elif "password" in err_str or "crypt" in err_str:
+                    st.error("❌ **File Terproteksi**: File Excel dilindungi kata sandi. Hapus proteksi terlebih dahulu.")
+                elif "no sheet" in err_str or "worksheet" in err_str:
+                    st.error("❌ **Sheet Tidak Ditemukan**: Pastikan file Excel memiliki sheet aktif dengan data klaim.")
+                elif "zip" in err_str or "xlsx" in err_str:
+                    st.error(
+                        "❌ **File Excel Rusak**: File `.xlsx` tidak dapat dibuka. "
+                        "Coba simpan ulang dari Excel atau ekspor ke CSV terlebih dahulu."
+                    )
+                else:
+                    st.error(f"❌ Gagal membaca file: {e}")
+                logger.error("Detection file read error: %s", e, exc_info=True)
 
     elif selected_source.startswith("🔄 Gunakan"):
         raw_df = session_df

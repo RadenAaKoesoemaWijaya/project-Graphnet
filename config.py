@@ -167,6 +167,8 @@ def optimize_memory_usage(df):
         for col in df.select_dtypes(include=['object']).columns:
             num_unique_values = len(df[col].unique())
             num_total_values = len(df[col])
+            if num_total_values == 0:
+                continue  # skip empty column — avoids ZeroDivisionError
             if num_unique_values / num_total_values < 0.5:  # Less than 50% unique values
                 # Don't convert to category if there are missing values to avoid setitem error
                 if df[col].isnull().sum() == 0:
