@@ -217,8 +217,15 @@ class LocalRAGKnowledgeBase:
         if active_flags:
             search_terms = " ".join(active_flags) + " " + query_extra
         else:
-            # When no deterministic rule triggered, target statistical deviance / outlier & coding guidelines
-            search_terms = f"deviasi biaya anomali statistik outlier multivariat kewajaran tarif {query_extra}"
+            # When no deterministic rule triggered, use the claim's own service_code
+            # and diagnosis_code (passed via query_extra) so that the RAG result is
+            # specific to the actual clinical context rather than always returning
+            # the same generic outlier/deviasi document.
+            search_terms = (
+                f"deviasi biaya anomali statistik outlier multivariat kewajaran tarif {query_extra}"
+                if not query_extra.strip()
+                else query_extra
+            )
         
         matched_docs = self.retrieve(search_terms, top_k=2)
 

@@ -758,12 +758,34 @@ def show_detection_page():
             st.subheader("🤖 AI Investigator Copilot & Berkas BAP")
             st.caption("Gunakan Agentic AI & RAG Regulasi Medis (*Permenkes, INA-CBGs, FORNAS*) untuk menyusun Berita Acara Pemeriksaan (BAP) audit klaim secara otomatis.")
 
-            if not display_df.empty:
-                claim_choices = ["-- Pilih Klaim untuk Diinvestigasi --"] + display_df['claim_id'].astype(str).dropna().unique().tolist() if 'claim_id' in display_df.columns else ["-- Data klaim tidak memiliki claim_id --"]
-                selected_claim = st.selectbox("Pilih nomor klaim:", claim_choices, index=0, key="copilot_claim_select")
+            # ── FIX #1: Use the full df_result, not the filtered display_df from Tab 3.
+            # This ensures Tab 4 always shows all detected claims regardless of
+            # whatever filter the user applied in Tab 3.
+            copilot_base_df = df_result  # df_result is persisted in session_state above
 
-                if selected_claim != "-- Pilih Klaim untuk Diinvestigasi --" and selected_claim != "-- Data klaim tidak memiliki claim_id --":
-                    selected_row = display_df[display_df['claim_id'].astype(str) == str(selected_claim)].iloc[0]
+            if copilot_base_df is None or copilot_base_df.empty:
+                st.info("📤 Jalankan deteksi anomali terlebih dahulu untuk mengaktifkan Copilot.")
+            elif 'claim_id' not in copilot_base_df.columns:
+                st.warning("⚠️ Kolom `claim_id` tidak ditemukan pada dataset. Tambahkan kolom tersebut agar Copilot dapat memilih klaim secara spesifik.")
+            else:
+                # Sort: high-risk first so investigator sees most critical claims at the top
+                _cop_df = copilot_base_df.copy()
+                if 'final_risk_score' in _cop_df.columns:
+                    _cop_df = _cop_df.sort_values('final_risk_score', ascending=False)
+
+                claim_choices = (
+                    ["-- Pilih Klaim untuk Diinvestigasi --"]
+                    + _cop_df['claim_id'].astype(str).dropna().unique().tolist()
+                )
+                selected_claim = st.selectbox(
+                    "Pilih nomor klaim (diurutkan: risiko tertinggi dulu):",
+                    claim_choices,
+                    index=0,
+                    key="copilot_claim_select",
+                )
+
+                if selected_claim not in ("-- Pilih Klaim untuk Diinvestigasi --",):
+                    selected_row = _cop_df[_cop_df['claim_id'].astype(str) == str(selected_claim)].iloc[0]
 
                     # ── CLAIM IDENTITY PANEL ──
                     severity_val = str(selected_row.get('severity', 'Low'))
@@ -915,6 +937,23 @@ def show_detection_page():
                                     key="copilot_cfg_endpoint_openai"
                                 )
 
+                        # ── FIX #2: Connection test button ────────────────────
+                        if provider_choice != "Heuristic Engine (Offline)":
+                            if st.button("🔌 Test Koneksi LLM", key="btn_test_llm_conn"):
+                                _test_engine = AgenticInvestigatorCopilot(
+                                    provider={"Google Gemini": "gemini", "OpenAI / Compatible": "openai", "Local Ollama": "ollama"}.get(provider_choice, "heuristic"),
+                                    api_key=api_key_input,
+                                    model_name=model_name_choice,
+                                    endpoint_url=endpoint_choice if endpoint_choice else None,
+                                )
+                                with st.spinner("Menguji koneksi..."):
+                                    _conn = _test_engine.test_connection()
+                                if _conn["ok"]:
+                                    st.success(f"{_conn['message']} — Provider: **{_conn['provider']}**")
+                                else:
+                                    st.error(f"{_conn['message']}")
+                                    st.info("💡 Jika API Key salah atau habis kuota, BAP akan tetap dibuat menggunakan **Heuristic Engine (Offline)** sebagai fallback.")
+
                     provider_map = {
                         "Heuristic Engine (Offline)": "heuristic",
                         "Google Gemini": "gemini",
@@ -929,15 +968,15 @@ def show_detection_page():
                     )
 
                     # ── DYNAMIC XAI & GNN CONTEXT EXTRACTION ──
-                    # 1. Feature deviation calculation
+                    # 1. Feature deviation (z-score relative to full result set)
                     feature_contributions = dict(st.session_state.get('shap_contributions', {}))
                     candidate_num_cols = ['billed_amount', 'paid_amount', 'amount', 'length_of_stay', 'procedure_count', 'medication_count', 'daily_claims_by_provider']
                     for num_col in candidate_num_cols:
                         if num_col in selected_row and pd.notna(selected_row[num_col]):
                             try:
                                 c_val = float(selected_row[num_col])
-                                if num_col in display_df.columns:
-                                    s = pd.to_numeric(display_df[num_col], errors='coerce').dropna()
+                                if num_col in copilot_base_df.columns:
+                                    s = pd.to_numeric(copilot_base_df[num_col], errors='coerce').dropna()
                                     if len(s) > 1 and s.std() > 0:
                                         z = (c_val - s.mean()) / (s.std() + 1e-6)
                                         if abs(z) >= 0.8:
@@ -949,13 +988,13 @@ def show_detection_page():
                     gnn_clusters = []
                     prov_id = selected_row.get('provider_id')
                     if prov_id and str(prov_id) not in ('N/A', 'None', ''):
-                        p_matches = display_df[display_df['provider_id'] == prov_id]
+                        p_matches = copilot_base_df[copilot_base_df['provider_id'] == prov_id]
                         if len(p_matches) > 1:
                             susp_c = int((pd.to_numeric(p_matches.get('anomaly_prediction', 0), errors='coerce') == 1).sum())
                             gnn_clusters.append(f"Faskes {prov_id}: {len(p_matches)} klaim terhubung ({susp_c} anomali) dalam klaster audit")
                     diag_code = selected_row.get('diagnosis_code')
                     if diag_code and str(diag_code) not in ('N/A', 'None', ''):
-                        d_matches = display_df[display_df['diagnosis_code'] == diag_code]
+                        d_matches = copilot_base_df[copilot_base_df['diagnosis_code'] == diag_code]
                         if len(d_matches) > 5:
                             gnn_clusters.append(f"Diagnosa {diag_code}: {len(d_matches)} episode klaim terdaftar pada periode berjalan")
 
@@ -977,7 +1016,8 @@ def show_detection_page():
                     rag_key = f"rag_results_{selected_claim}"
 
                     if btn_gen_bap:
-                        with st.spinner("🤖 Menyusun Berita Acara Pemeriksaan (BAP)..."):
+                        _engine_label = provider_choice
+                        with st.spinner(f"🤖 Menyusun BAP menggunakan **{_engine_label}**... (maks. ~30 detik untuk cloud LLM)"):
                             dossier_res = copilot_engine.generate_investigation_dossier(
                                 context=claim_ctx,
                                 investigator_name=auditor_name
@@ -987,10 +1027,16 @@ def show_detection_page():
                     if btn_view_rag:
                         with st.spinner("🔍 Mencari pasal regulasi terkait di RAG Knowledge Base..."):
                             rag_kb = get_rag_knowledge_base()
-                            matched_docs = rag_kb.retrieve(
-                                query=" ".join(claim_ctx.get("active_rules", [])) + f" {claim_ctx.get('service_code')} {claim_ctx.get('diagnosis_code')}",
-                                top_k=3
+                            # ── FIX #4: build a richer query including claim-specific codes ──
+                            _active = claim_ctx.get("active_rules", [])
+                            _svc    = claim_ctx.get("service_code", "")
+                            _diag   = claim_ctx.get("diagnosis_code", "")
+                            _rag_query = (
+                                " ".join(_active) + f" {_svc} {_diag}"
+                                if _active
+                                else f"deviasi biaya outlier statistik kewajaran tarif {_svc} {_diag}"
                             )
+                            matched_docs = rag_kb.retrieve(query=_rag_query.strip(), top_k=3)
                             st.session_state[rag_key] = matched_docs
 
                     # ── RAG RESULTS PANEL ──
@@ -1002,7 +1048,7 @@ def show_detection_page():
                             for i, doc in enumerate(matched_docs, 1):
                                 score_val = doc.get('similarity_score', 0.0)
                                 score_badge = f"<span style='background:#dbeafe;color:#1e40af;font-size:0.75rem;padding:2px 8px;border-radius:10px;font-weight:700;'>Skor Relevansi: {score_val:.2f}</span>"
-                                with st.expander(f"📋 [{i}] {doc.get('title', 'Regulasi')} — {doc.get('category', '')}"):
+                                with st.expander(f"📋 [{i}] {doc.get('title', 'Regulasi')} — {doc.get('category', '')}", expanded=(i == 1)):
                                     st.markdown(f"""
                                     <div style="margin-bottom:8px;">{score_badge} &nbsp; <span style="font-size:0.75rem;color:#64748b;">Tags: {', '.join(doc.get('tags', []))}</span></div>
                                     <div style="background:#f8fafc;border-left:4px solid #3b82f6;border-radius:0 8px 8px 0;padding:10px 14px;font-size:0.87rem;color:#334155;line-height:1.6;">
@@ -1017,6 +1063,21 @@ def show_detection_page():
                         dossier_data = st.session_state[dossier_key]
                         st.markdown("---")
 
+                        # ── FIX #3: Clear LLM vs Heuristic visual indicator ────
+                        _prov_used = str(dossier_data.get("provider_used", "heuristic")).lower()
+                        _is_llm    = "heuristic" not in _prov_used and "fallback" not in _prov_used
+                        _is_fallback = "fallback" in _prov_used
+
+                        if _is_llm:
+                            st.success(f"✅ Dokumen BAP dihasilkan oleh **LLM: {dossier_data.get('provider_used', '').upper()}**")
+                        elif _is_fallback:
+                            st.warning(
+                                f"⚠️ LLM tidak merespons — BAP dihasilkan oleh **Heuristic Engine (Fallback)**. "
+                                "Periksa API Key atau koneksi internet, lalu coba generate ulang."
+                            )
+                        else:
+                            st.info("🔧 Dokumen BAP dihasilkan oleh **Heuristic Engine (Offline)** — hasil deterministik tanpa LLM.")
+
                         # Metadata strip above the report
                         meta_provider = str(dossier_data.get("provider_used", "heuristic")).upper()
                         meta_hash = dossier_data.get("audit_hash", "N/A")
@@ -1029,7 +1090,7 @@ def show_detection_page():
                                 🗂️ <span style="opacity:0.7;">Berkas BAP</span> &nbsp;|&nbsp; Nomor: <code style="background:rgba(255,255,255,0.1);padding:2px 7px;border-radius:4px;font-size:0.75rem;">{dossier_data.get('dossier_number', f"BAP/{selected_claim}/...")}</code>
                             </div>
                             <div style="display:flex;flex-wrap:wrap;gap:8px;">
-                                <span style="background:rgba(59,130,246,0.2);color:#93c5fd;border:1px solid rgba(59,130,246,0.3);border-radius:12px;padding:2px 10px;font-size:0.72rem;font-weight:600;">🧠 Engine: {meta_provider}</span>
+                                <span style="background:{'rgba(16,185,129,0.25)' if _is_llm else 'rgba(59,130,246,0.2)'};color:{'#34d399' if _is_llm else '#93c5fd'};border:1px solid {'rgba(16,185,129,0.4)' if _is_llm else 'rgba(59,130,246,0.3)'};border-radius:12px;padding:2px 10px;font-size:0.72rem;font-weight:600;">{'🤖' if _is_llm else '🔧'} Engine: {meta_provider}</span>
                                 <span style="background:rgba(16,185,129,0.15);color:#34d399;border:1px solid rgba(16,185,129,0.3);border-radius:12px;padding:2px 10px;font-size:0.72rem;font-weight:600;">⚠️ {meta_rules_count} Aturan Terpicu</span>
                                 <span style="background:rgba(245,158,11,0.15);color:#fbbf24;border:1px solid rgba(245,158,11,0.3);border-radius:12px;padding:2px 10px;font-size:0.72rem;font-weight:600;">🔐 Hash: {meta_hash}</span>
                                 <span style="background:rgba(148,163,184,0.1);color:#94a3b8;border:1px solid rgba(148,163,184,0.2);border-radius:12px;padding:2px 10px;font-size:0.72rem;">🕐 {meta_generated}</span>
@@ -1053,14 +1114,26 @@ def show_detection_page():
                     # ── INTERACTIVE MULTI-TURN Q&A ──
                     st.markdown("---")
                     st.markdown("##### 💬 Tanya Copilot tentang Klaim Ini:")
-                    
+
                     qa_history_key = f"copilot_qa_history_{selected_claim}"
                     if qa_history_key not in st.session_state:
                         st.session_state[qa_history_key] = []
 
-                    # Render previous questions and answers
-                    if st.session_state[qa_history_key]:
-                        for q_item in st.session_state[qa_history_key]:
+                    # ── FIX #5: Q&A history controls — limit + clear button ──
+                    QA_MAX = 10
+                    _qa_hist = st.session_state[qa_history_key]
+                    if _qa_hist:
+                        _qa_hdr_col, _qa_clr_col = st.columns([5, 1])
+                        with _qa_hdr_col:
+                            st.caption(f"Riwayat percakapan: **{len(_qa_hist)}** pertanyaan (maks. {QA_MAX})")
+                        with _qa_clr_col:
+                            if st.button("🗑️ Hapus", key=f"clear_qa_{selected_claim}", help="Hapus seluruh riwayat percakapan untuk klaim ini"):
+                                st.session_state[qa_history_key] = []
+                                st.rerun()
+
+                        # Show only last QA_MAX exchanges; oldest are silently dropped
+                        visible_hist = _qa_hist[-QA_MAX:]
+                        for q_item in visible_hist:
                             st.markdown(
                                 f"<div style='background:#f1f5f9;border-radius:8px;padding:8px 12px;margin-bottom:6px;font-size:0.85rem;'><b>👤 Auditor:</b> {q_item['question']}</div>",
                                 unsafe_allow_html=True
@@ -1072,17 +1145,23 @@ def show_detection_page():
 
                     q_col1, q_col2 = st.columns([4, 1])
                     with q_col1:
-                        user_question = st.text_input("Pertanyaan audit:", placeholder="Contoh: Apakah biaya klaim ini wajar untuk diagnosis tersebut?", key=f"q_input_{selected_claim}", label_visibility="collapsed")
+                        user_question = st.text_input(
+                            "Pertanyaan audit:",
+                            placeholder="Contoh: Apakah biaya klaim ini wajar untuk diagnosis tersebut?",
+                            key=f"q_input_{selected_claim}",
+                            label_visibility="collapsed",
+                        )
                     with q_col2:
                         ask_clicked = st.button("Tanyakan", key=f"q_btn_{selected_claim}")
 
                     if ask_clicked and user_question and user_question.strip():
                         with st.spinner("🤖 Menganalisis respon audit..."):
                             ans = copilot_engine.answer_investigator_query(context=claim_ctx, user_question=user_question.strip())
-                            st.session_state[qa_history_key].append({
-                                "question": user_question.strip(),
-                                "answer": ans
-                            })
+                            _qa_list = st.session_state[qa_history_key]
+                            _qa_list.append({"question": user_question.strip(), "answer": ans})
+                            # Trim to QA_MAX so session state doesn't grow unbounded
+                            if len(_qa_list) > QA_MAX:
+                                st.session_state[qa_history_key] = _qa_list[-QA_MAX:]
                             st.rerun()
 
         # ── TAB 5: Concept Drift ──

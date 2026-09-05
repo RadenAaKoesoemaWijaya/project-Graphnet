@@ -416,6 +416,56 @@ Sajikan dokumen dalam Markdown resmi yang rapi, ringkas, dan to-the-point menggu
             logger.warning(f"Ollama call failed: {e}")
             return None
 
+    def test_connection(self) -> dict:
+        """
+        Quick connectivity check for the configured LLM provider.
+        Sends the smallest possible request and returns a result dict:
+        {
+          "ok": bool,
+          "provider": str,
+          "message": str,   # user-facing status message
+          "latency_ms": int | None
+        }
+        """
+        import time
+        ping_prompt = "Balas hanya dengan kata: OK"
+        t0 = time.time()
+
+        if self.provider == "heuristic":
+            return {
+                "ok": True,
+                "provider": "Heuristic (Offline)",
+                "message": "✅ Mode offline — tidak memerlukan koneksi. Selalu tersedia.",
+                "latency_ms": 0,
+            }
+
+        if self.provider == "gemini":
+            if not self.api_key:
+                return {"ok": False, "provider": "Gemini", "message": "❌ API Key kosong.", "latency_ms": None}
+            resp = self._call_gemini_raw(ping_prompt)
+            ms = int((time.time() - t0) * 1000)
+            if resp:
+                return {"ok": True, "provider": f"Gemini ({self.model_name})", "message": f"✅ Koneksi berhasil ({ms} ms).", "latency_ms": ms}
+            return {"ok": False, "provider": "Gemini", "message": f"❌ Koneksi gagal — periksa API Key dan quota.", "latency_ms": ms}
+
+        if self.provider in ("openai", "azure"):
+            if not self.api_key:
+                return {"ok": False, "provider": "OpenAI", "message": "❌ API Key kosong.", "latency_ms": None}
+            resp = self._call_openai_raw(ping_prompt)
+            ms = int((time.time() - t0) * 1000)
+            if resp:
+                return {"ok": True, "provider": f"OpenAI ({self.model_name})", "message": f"✅ Koneksi berhasil ({ms} ms).", "latency_ms": ms}
+            return {"ok": False, "provider": "OpenAI/Azure", "message": f"❌ Koneksi gagal — periksa endpoint, API Key, dan model name.", "latency_ms": ms}
+
+        if self.provider == "ollama":
+            resp = self._call_ollama_raw(ping_prompt)
+            ms = int((time.time() - t0) * 1000)
+            if resp:
+                return {"ok": True, "provider": f"Ollama ({self.model_name})", "message": f"✅ Ollama lokal merespons ({ms} ms).", "latency_ms": ms}
+            return {"ok": False, "provider": "Ollama", "message": f"❌ Ollama tidak merespons di `{self.endpoint_url}`. Pastikan `ollama serve` sudah berjalan.", "latency_ms": ms}
+
+        return {"ok": False, "provider": self.provider, "message": f"❌ Provider '{self.provider}' tidak dikenal.", "latency_ms": None}
+
     # Backward compatibility wrappers
     def _call_gemini_api(self, prompt: str, context: Optional[Dict[str, Any]] = None, rag_context: str = "", investigator_name: str = "Auditor ASTINA") -> str:
         resp = self._call_gemini_raw(prompt)
