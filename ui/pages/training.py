@@ -15,6 +15,7 @@ from state_manager import *
 def show_training_page():
     X_train = None
     edge_index = None
+    node_features = None   # declared here so Python never treats it as unbound
     st.title("Pelatihan Model Deteksi Anomali")
     st.info("Training mempelajari pola dataset yang sudah diproses. Pilih algoritma sesuai kebutuhan: model tabular untuk pola fitur dan GNN untuk hubungan antar klaim.")
 
@@ -706,6 +707,7 @@ def show_training_page():
             st.session_state.pop('graph_node_count', None)
             st.session_state.pop('graph_edge_count', None)
             st.session_state.pop('graph_node_features', None)
+            st.session_state.pop('gnn_anomaly_subgraph', None)
             
             # Build graph for GNN if selected
             if "GNN" in algo_options and training_mode == TRAINING_MODE_UNSUPERVISED:
@@ -940,6 +942,16 @@ def show_training_page():
                 
                 version = save_model_version(MODEL_PREFIX)
                 st.success(f"✅ Model training completed and saved as version {version}!")
+
+                # ── Persist anomaly subgraph to session_state for visualization ──
+                # The subgraph was pre-computed inside _train_gnn (model is warm,
+                # scores are fresh). Store it now so the render block below can use
+                # it without re-running inference on the full dataset.
+                _prebuilt_sub = getattr(detector, 'gnn_anomaly_subgraph', None)
+                if _prebuilt_sub is not None:
+                    st.session_state['gnn_anomaly_subgraph'] = _prebuilt_sub
+                else:
+                    st.session_state.pop('gnn_anomaly_subgraph', None)
                 
                 # We can remove the temp json
                 import os
@@ -1094,201 +1106,285 @@ def show_training_page():
                 else:
                     st.info("🎛️ **Manual Weights Applied**: Using manually configured weights.")
                 
-                # Graph Visualization if GNN was trained
-                current_edge_index = st.session_state.get('edge_index', edge_index)
-                # Restore node_features from session_state (local var is None after st.rerun)
-                current_node_features = st.session_state.get('graph_node_features', node_features)
-                if detector.gnn_weight > 0 and hasattr(detector, 'gnn_model') and detector.gnn_model is not None and current_edge_index is not None:
+                # ── GNN Anomaly-Focused Subgraph Visualization ─────────────────
+                # Uses the pre-computed subgraph (top-K anomaly seeds + 1-hop
+                # neighbors) stored in session_state by the training pipeline.
+                # This is orders of magnitude faster than scoring the full graph
+                # at render time — the subgraph is ≤ 300 nodes regardless of how
+                # large the original training set was.
+                _sub = st.session_state.get('gnn_anomaly_subgraph')
+                if detector.gnn_weight > 0 and hasattr(detector, 'gnn_model') and detector.gnn_model is not None and _sub is not None:
                     st.markdown("---")
-                    st.subheader("🕸️ Visualisasi Graph Network")
+                    st.subheader("🕸️ Visualisasi Jaringan Anomali GNN")
 
                     try:
                         import networkx as nx
                         import plotly.graph_objects as go
 
-                        # Score the same graph nodes that are rendered. Evaluation
-                        # rows are not interchangeable with training graph nodes.
-                        graph_scores = None
-                        try:
-                            if current_node_features is not None:
-                                _, graph_individual_probs = detector.predict_anomaly_probability(
-                                    current_node_features,
-                                    edge_index=current_edge_index,
-                                    edge_type=st.session_state.get('edge_type'),
-                                    device=device,
-                                )
-                                graph_scores = np.asarray(graph_individual_probs.get('gnn', []), dtype=float)
-                                if graph_scores.size != current_node_features.shape[0]:
-                                    graph_scores = None
-                        except Exception as score_error:
-                            logger.warning("GNN visualization scoring failed: %s", score_error)
+                        # ── Unpack pre-computed subgraph ──────────────────────
+                        sub_node_ids  = _sub['sub_node_ids']      # list[int] ID asli
+                        sub_ei        = _sub['sub_edge_index']     # np (2, E_sub) ID baru
+                        sub_et        = _sub['sub_edge_type']      # np (E_sub,) atau None
+                        sub_scores    = _sub['sub_scores']         # np (N_sub,) skor GNN
+                        is_seed       = _sub['is_seed']            # bool (N_sub,)
+                        n_total_nodes = _sub['n_total_nodes']
+                        n_total_edges = _sub['n_total_edges']
+                        top_k_used    = _sub['top_k_used']
+                        n_sub         = len(sub_node_ids)
 
-                        # Determine total node count safely
-                        total_node_count = (
-                            int(current_node_features.shape[0])
-                            if current_node_features is not None
-                            else int(current_edge_index.max().item()) + 1
-                        )
-                        total_node_count = max(1, total_node_count)
+                        # ── Info header metrics ────────────────────────────────
+                        mc1, mc2, mc3, mc4 = st.columns(4)
+                        mc1.metric("Total Node (Dataset)", f"{n_total_nodes:,}")
+                        mc2.metric("Total Edge (Dataset)", f"{n_total_edges:,}")
+                        mc3.metric("Node Anomali Seed", f"{int(is_seed.sum())}")
+                        mc4.metric("Node Divisualisasikan", f"{n_sub}")
 
-                        # Render a relevant graph slice while preserving stable node IDs.
-                        total_edges = int(current_edge_index.shape[1])
-                        requested_nodes = int(st.number_input(
-                            "Jumlah node untuk visualisasi",
-                            min_value=1,
-                            max_value=total_node_count,
-                            value=min(300, total_node_count),
-                            step=50,
-                            key="gnn_visualization_node_limit",
-                        ))
-                        max_nodes = requested_nodes
-                        edge_list = current_edge_index.t().tolist()
-                        edge_type_values = None
-                        current_edge_type = st.session_state.get('edge_type')
-                        if current_edge_type is not None:
-                            edge_type_values = np.asarray(current_edge_type).reshape(-1).tolist()
-
-                        # Create networkx graph
-                        G = nx.Graph()
-
-                        if graph_scores is not None:
-                            selected_nodes = set(np.argsort(graph_scores)[-max_nodes:].tolist())
-                        else:
-                            selected_nodes = set(range(min(max_nodes, total_node_count)))
-                        G.add_nodes_from(selected_nodes)
-                        selected_edges = []
-                        for edge_index_position, edge in enumerate(edge_list):
-                            if edge[0] in selected_nodes and edge[1] in selected_nodes:
-                                G.add_edge(edge[0], edge[1])
-                                selected_edges.append((edge_index_position, edge))
-
-                        # Check if graph has nodes
-                        if len(G.nodes()) == 0:
-                            st.warning("⚠️ Graph tidak memiliki nodes untuk divisualisasikan.")
-                        else:
-                            # Get layout
-                            pos = nx.spring_layout(G, seed=42)
-
-                            # Prepare relation-specific edge traces. A
-                            # heterogeneous graph keeps provider/patient/
-                            # diagnosis edges visually distinguishable.
-                            relation_colors = {
-                                0: ('Provider', '#2563eb'),
-                                1: ('Patient', '#10b981'),
-                                2: ('Diagnosis', '#f59e0b'),
-                            }
-                            edge_traces = []
-                            relation_groups = {}
-                            for edge_position, edge in selected_edges:
-                                relation_id = (
-                                    edge_type_values[edge_position]
-                                    if edge_type_values is not None and edge_position < len(edge_type_values)
-                                    else None
-                                )
-                                relation_groups.setdefault(relation_id, []).append(edge)
-                            for relation_id, relation_edges in relation_groups.items():
-                                edge_x = []
-                                edge_y = []
-                                for edge in relation_edges:
-                                    x0, y0 = pos[edge[0]]
-                                    x1, y1 = pos[edge[1]]
-                                    edge_x.extend([x0, x1, None])
-                                    edge_y.extend([y0, y1, None])
-                                label, color = relation_colors.get(
-                                    relation_id, ('Relation', '#888888')
-                                )
-                                edge_traces.append(go.Scatter(
-                                    x=edge_x, y=edge_y,
-                                    line=dict(width=0.7, color=color),
-                                    hoverinfo='none',
-                                    mode='lines',
-                                    name=label,
-                                ))
-
-                            # Prepare node traces with anomaly coloring
-                            node_x = []
-                            node_y = []
-                            node_colors = []
-                            node_text = []
-
-                            # Get anomaly predictions for coloring
-                            try:
-                                eval_result_df = st.session_state.get('eval_result_df')
-                                if eval_result_df is not None and 'anomaly_probability' in eval_result_df.columns:
-                                    if 'node_id' in eval_result_df.columns:
-                                        anomaly_probs = dict(zip(
-                                            eval_result_df['node_id'],
-                                            eval_result_df['anomaly_probability'],
-                                        ))
-                                    else:
-                                        anomaly_probs = dict(enumerate(eval_result_df['anomaly_probability'].values))
-                                    for node in G.nodes():
-                                        x, y = pos[node]
-                                        node_x.append(x)
-                                        node_y.append(y)
-                                        # Color based on anomaly probability
-                                        if graph_scores is not None and node < len(graph_scores):
-                                            prob = float(graph_scores[node])
-                                            node_colors.append(prob)
-                                            node_text.append(f"Node {node}<br>GNN Probability: {prob:.3f}")
-                                        elif node in anomaly_probs:
-                                            prob = anomaly_probs[node]
-                                            node_colors.append(prob)
-                                            node_text.append(f"Node {node}<br>Anomaly Prob: {prob:.3f}")
-                                        else:
-                                            node_colors.append(0.5)
-                                            node_text.append(f"Node {node}")
-                                else:
-                                    for node in G.nodes():
-                                        x, y = pos[node]
-                                        node_x.append(x)
-                                        node_y.append(y)
-                                        node_colors.append(0.5)
-                                        node_text.append(f"Node {node}")
-                            except Exception:
-                                # Fallback to simple coloring
-                                for node in G.nodes():
-                                    x, y = pos[node]
-                                    node_x.append(x)
-                                    node_y.append(y)
-                                    node_colors.append(0.5)
-                                    node_text.append(f"Node {node}")
-
-                            node_trace = go.Scatter(
-                                x=node_x, y=node_y,
-                                mode='markers',
-                                hoverinfo='text',
-                                marker=dict(
-                                    size=8,
-                                    color=node_colors,
-                                    colorscale='RdYlBu_r',  # Red for high anomaly, blue for low
-                                    cmin=0,
-                                    cmax=1,
-                                    showscale=True,
-                                    colorbar=dict(title="Anomaly Probability"),
-                                    line=dict(width=1, color='blue')
-                                ),
-                                text=node_text
+                        # ── Optional: user controls how many seeds to show ─────
+                        with st.expander("⚙️ Pengaturan Visualisasi", expanded=False):
+                            viz_top_k = st.slider(
+                                "Jumlah node anomali teratas (seed)",
+                                min_value=5,
+                                max_value=min(200, n_sub),
+                                value=min(50, n_sub),
+                                step=5,
+                                key="gnn_viz_top_k_slider",
+                                help="Hanya tampilkan N node dengan skor anomali GNN tertinggi beserta tetangga 1-hop-nya.",
+                            )
+                            viz_show_neighbors = st.checkbox(
+                                "Tampilkan tetangga 1-hop node anomali",
+                                value=True,
+                                key="gnn_viz_show_neighbors",
+                                help="Tetangga langsung dari node anomali membantu melihat koneksi sindikat.",
+                            )
+                            viz_min_score = st.slider(
+                                "Skor anomali minimum untuk ditampilkan",
+                                min_value=0.0,
+                                max_value=1.0,
+                                value=0.0,
+                                step=0.05,
+                                key="gnn_viz_min_score",
+                                help="Filter node dengan skor GNN di bawah nilai ini dari visualisasi.",
                             )
 
-                            # Create figure
-                            fig = go.Figure(data=edge_traces + [node_trace],
-                                           layout=go.Layout(
-                                               title=f'Graph Network Visualization ({len(G.nodes())} nodes, {len(G.edges())} edges)',
-                                               showlegend=edge_type_values is not None,
-                                               hovermode='closest',
-                                               margin=dict(b=20, l=20, r=20, t=40),
-                                               xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                                               yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                                               height=600
-                                           ))
+                        # ── Apply user filters to subgraph ────────────────────
+                        # Pick top-viz_top_k seeds by score
+                        seed_local_ids = np.where(is_seed)[0]
+                        if len(seed_local_ids) > viz_top_k:
+                            seed_scores_local = sub_scores[seed_local_ids]
+                            keep_seed_local = seed_local_ids[
+                                np.argsort(seed_scores_local)[-viz_top_k:]
+                            ]
+                        else:
+                            keep_seed_local = seed_local_ids
 
+                        keep_set = set(keep_seed_local.tolist())
+
+                        if viz_show_neighbors and sub_ei.shape[1] > 0:
+                            # Add 1-hop neighbours of kept seeds
+                            sub_src_arr, sub_dst_arr = sub_ei[0], sub_ei[1]
+                            neighbor_mask = np.isin(sub_src_arr, list(keep_set)) | \
+                                            np.isin(sub_dst_arr, list(keep_set))
+                            nbr_ids = set(sub_src_arr[neighbor_mask].tolist()) | \
+                                      set(sub_dst_arr[neighbor_mask].tolist())
+                            keep_set = keep_set | nbr_ids
+
+                        # Apply minimum score filter
+                        keep_set = {i for i in keep_set if sub_scores[i] >= viz_min_score}
+
+                        if not keep_set:
+                            st.warning("⚠️ Tidak ada node yang memenuhi filter. Coba turunkan skor minimum atau tambah jumlah seed.")
+                        else:
+                            # ── Build compact NetworkX graph ──────────────────
+                            # Re-remap to compact IDs for the filtered set
+                            keep_list = sorted(keep_set)
+                            local_remap = {old: new for new, old in enumerate(keep_list)}
+                            n_viz = len(keep_list)
+
+                            G_viz = nx.Graph()
+                            G_viz.add_nodes_from(range(n_viz))
+
+                            # Filter edges where both endpoints are in keep_set
+                            if sub_ei.shape[1] > 0:
+                                s_arr, d_arr = sub_ei[0], sub_ei[1]
+                                in_keep_src = np.isin(s_arr, keep_list)
+                                in_keep_dst = np.isin(d_arr, keep_list)
+                                valid_edges  = in_keep_src & in_keep_dst
+                                viz_src = np.array([local_remap[v] for v in s_arr[valid_edges]])
+                                viz_dst = np.array([local_remap[v] for v in d_arr[valid_edges]])
+                                viz_et  = sub_et[valid_edges] if sub_et is not None else None
+
+                                for u, v in zip(viz_src.tolist(), viz_dst.tolist()):
+                                    if u != v:
+                                        G_viz.add_edge(u, v)
+                            else:
+                                viz_et = None
+
+                            # ── Layout ─────────────────────────────────────────
+                            # kamada_kawai gives better cluster separation than
+                            # spring for small anomaly-focused graphs (< 300 nodes)
+                            try:
+                                if n_viz <= 150:
+                                    pos = nx.kamada_kawai_layout(G_viz)
+                                else:
+                                    pos = nx.spring_layout(G_viz, seed=42, k=0.5)
+                            except Exception:
+                                pos = nx.spring_layout(G_viz, seed=42)
+
+                            # ── Edge traces (heterogeneous relation colours) ───
+                            relation_colors = {
+                                0: ('Provider', '#2563eb'),
+                                1: ('Patient',  '#10b981'),
+                                2: ('Diagnosis','#f59e0b'),
+                            }
+                            edge_traces = []
+                            relation_groups: dict = {}
+
+                            if sub_ei.shape[1] > 0 and valid_edges.any():
+                                for idx_e, (u, v) in enumerate(zip(viz_src.tolist(), viz_dst.tolist())):
+                                    rel = int(viz_et[idx_e]) if viz_et is not None else None
+                                    relation_groups.setdefault(rel, []).append((u, v))
+
+                            for rel_id, rel_edges in relation_groups.items():
+                                ex, ey = [], []
+                                for u, v in rel_edges:
+                                    if u in pos and v in pos:
+                                        x0, y0 = pos[u]
+                                        x1, y1 = pos[v]
+                                        ex.extend([x0, x1, None])
+                                        ey.extend([y0, y1, None])
+                                lbl, clr = relation_colors.get(rel_id, ('Relasi', '#94a3b8'))
+                                edge_traces.append(go.Scatter(
+                                    x=ex, y=ey,
+                                    mode='lines',
+                                    line=dict(width=0.8, color=clr),
+                                    hoverinfo='none',
+                                    name=lbl,
+                                ))
+
+                            # ── Node traces — two layers: anomali & tetangga ───
+                            # Layer 1: tetangga (neighbour — bukan seed)
+                            # Layer 2: seed anomali di atas, lebih besar & border merah
+                            scores_viz  = sub_scores[keep_list]
+                            is_seed_viz = is_seed[keep_list]
+
+                            def _node_trace(mask, size, border_color, name_label):
+                                nx_list = [local_remap[keep_list[i]]
+                                           for i in range(n_viz) if mask[i]]
+                                if not nx_list:
+                                    return None
+                                xv = [pos[n][0] for n in nx_list]
+                                yv = [pos[n][1] for n in nx_list]
+                                cv = [float(scores_viz[i])
+                                      for i in range(n_viz) if mask[i]]
+                                orig_ids = [sub_node_ids[keep_list[i]]
+                                            for i in range(n_viz) if mask[i]]
+                                hover = [
+                                    f"Node asli: {oid}<br>"
+                                    f"GNN Score: {sc:.3f}<br>"
+                                    f"Tipe: {name_label}"
+                                    for oid, sc in zip(orig_ids, cv)
+                                ]
+                                return go.Scatter(
+                                    x=xv, y=yv,
+                                    mode='markers',
+                                    name=name_label,
+                                    hoverinfo='text',
+                                    text=hover,
+                                    marker=dict(
+                                        size=size,
+                                        color=cv,
+                                        colorscale='RdYlBu_r',
+                                        cmin=0.0, cmax=1.0,
+                                        showscale=(name_label == '🔴 Anomali (Seed)'),
+                                        colorbar=dict(
+                                            title="Skor GNN",
+                                            thickness=14,
+                                            len=0.6,
+                                        ) if name_label == '🔴 Anomali (Seed)' else None,
+                                        line=dict(width=1.5, color=border_color),
+                                        symbol='circle',
+                                    ),
+                                )
+
+                            neighbour_trace = _node_trace(
+                                ~is_seed_viz, size=7,
+                                border_color='#64748b',
+                                name_label='⚪ Tetangga',
+                            )
+                            seed_trace = _node_trace(
+                                is_seed_viz, size=13,
+                                border_color='#dc2626',
+                                name_label='🔴 Anomali (Seed)',
+                            )
+
+                            node_traces = [t for t in [neighbour_trace, seed_trace] if t is not None]
+
+                            # ── Assemble figure ────────────────────────────────
+                            n_seed_shown  = int(is_seed_viz.sum())
+                            n_nbr_shown   = n_viz - n_seed_shown
+                            n_edges_shown = G_viz.number_of_edges()
+
+                            fig = go.Figure(
+                                data=edge_traces + node_traces,
+                                layout=go.Layout(
+                                    title=dict(
+                                        text=(
+                                            f"Subgraf Anomali GNN — "
+                                            f"{n_seed_shown} node anomali & "
+                                            f"{n_nbr_shown} tetangga, "
+                                            f"{n_edges_shown} edge "
+                                            f"(dari {n_total_nodes:,} node total)"
+                                        ),
+                                        font=dict(size=13),
+                                    ),
+                                    showlegend=True,
+                                    legend=dict(
+                                        orientation='h',
+                                        yanchor='bottom', y=1.01,
+                                        xanchor='right',  x=1,
+                                    ),
+                                    hovermode='closest',
+                                    margin=dict(b=20, l=5, r=5, t=60),
+                                    xaxis=dict(showgrid=False, zeroline=False,
+                                               showticklabels=False),
+                                    yaxis=dict(showgrid=False, zeroline=False,
+                                               showticklabels=False),
+                                    height=620,
+                                    paper_bgcolor='#f8fafc',
+                                    plot_bgcolor='#f8fafc',
+                                )
+                            )
                             st.plotly_chart(fig, width='stretch')
-                            st.info(f"💡 Visualisasi menampilkan subset graph ({max_nodes} nodes) untuk performa. Graph asli memiliki {current_edge_index.shape[1]} edges. Warna node menunjukkan probabilitas anomali (merah = tinggi, biru = rendah).")
+
+                            # ── Insight summary below chart ────────────────────
+                            pct_anomaly = float(is_seed_viz.sum()) / max(n_viz, 1) * 100
+                            mean_seed_score = float(scores_viz[is_seed_viz].mean()) \
+                                if is_seed_viz.any() else 0.0
+                            st.info(
+                                f"📊 **Ringkasan subgraf**: "
+                                f"**{n_seed_shown}** node anomali (seed, skor rata-rata "
+                                f"**{mean_seed_score:.3f}**) + "
+                                f"**{n_nbr_shown}** tetangga langsung — "
+                                f"total **{n_viz}** node, **{n_edges_shown}** edge. "
+                                f"Subgraf ini dipilih dari **{n_total_nodes:,}** node "
+                                f"dataset training. "
+                                f"🔴 Node merah = klaim paling mencurigai; "
+                                f"⚪ node abu = koneksi 1-hop (provider/pasien/diagnosis yang sama)."
+                            )
 
                     except Exception as viz_error:
-                        st.warning(f"⚠️ Gagal memvisualisasikan graph: {str(viz_error)}")
-                        st.info("Visualisasi graph membutuhkan library networkx. Install dengan: pip install networkx")
+                        st.warning(f"⚠️ Gagal memvisualisasikan subgraf anomali: {viz_error}")
+                        logger.warning("GNN anomaly subgraph viz error: %s", viz_error, exc_info=True)
+
+                elif detector.gnn_weight > 0 and hasattr(detector, 'gnn_model') and detector.gnn_model is not None and _sub is None:
+                    # GNN trained but subgraph not pre-computed (e.g. model loaded from disk)
+                    st.markdown("---")
+                    st.subheader("🕸️ Visualisasi Jaringan Anomali GNN")
+                    st.info(
+                        "ℹ️ Subgraf anomali belum tersedia untuk sesi ini. "
+                        "Subgraf dibangun otomatis saat training — latih ulang model "
+                        "untuk menghasilkan visualisasi."
+                    )
                 
             except Exception as e:
                 st.error(f"❌ Error during training: {str(e)}")

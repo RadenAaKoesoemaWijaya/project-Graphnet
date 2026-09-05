@@ -187,10 +187,16 @@ python run.py
 
 ### 4.3 Training Model (`ui/pages/training.py`)
 - **Data Splitting**: Pembagian data latih (*train*) dan data uji (*test*) dengan metode *Stratified Split* (mempertahankan proporsi label fraud) atau *Random Split*.
-- **Visualisasi Topologi Graf (Post-Training)**: Setelah training selesai, ditampilkan visualisasi interaktif Graph Network (NetworkX + Plotly) dengan ketentuan:
-  - Node diwarnai berdasarkan **GNN anomaly probability** (skala `RdYlBu_r`: merah = tinggi, biru = rendah).
-  - Edge dibedakan warnanya per tipe relasi pada Heterogeneous Graph: Provider (biru `#2563eb`), Patient (hijau `#10b981`), Diagnosis (kuning `#f59e0b`).
-  - `node_features` dipersisten ke `st.session_state['graph_node_features']` agar tetap tersedia setelah `st.rerun()` — ini adalah fix kritis untuk mencegah semua node berwarna seragam.
+- **Visualisasi Anomaly-Focused Subgraph (Post-Training)**: Setelah training GNN selesai, sistem secara otomatis membangun subgraf terfokus anomali menggunakan fungsi `build_anomaly_subgraph()` (`model.py`) — **model di-score satu kali selagi masih warm**, hasilnya disimpan ke `st.session_state['gnn_anomaly_subgraph']`. UI tidak perlu memanggil ulang inferensi penuh saat render. Subgraf yang ditampilkan terdiri dari:
+  - **Top-K node seed anomali** — klaim dengan skor GNN tertinggi (default 50, dapat diatur via slider 5–200).
+  - **Tetangga 1-hop** dari node seed — memperlihatkan koneksi langsung (faskes / pasien / diagnosis yang sama), visualisasi sindikat kolusi.
+  - Ukuran subgraf dibatasi ≤ 300 node, sehingga tetap cepat meskipun dataset training berukuran jutaan baris.
+  - **Layout**: `kamada_kawai_layout` untuk ≤150 node (pemisahan klaster lebih baik), `spring_layout` untuk yang lebih besar.
+  - **Dua layer node berbeda**: 🔴 node anomali seed (ukuran besar, border merah) dan ⚪ node tetangga (ukuran kecil, border abu-abu) — keduanya diwarnai berdasarkan skor GNN pada skala `RdYlBu_r`.
+  - **Edge diwarnai per tipe relasi** pada Heterogeneous Graph: Provider (biru `#2563eb`), Patient (hijau `#10b981`), Diagnosis (kuning `#f59e0b`).
+  - **3 kontrol interaktif pengguna**: slider top-K seed, checkbox tampilkan tetangga, slider skor minimum filter.
+  - **4 metric cards** di atas grafik: total node dataset, total edge dataset, node anomali seed, node yang divisualisasikan.
+  - Jika model dimuat dari disk (bukan dari sesi training aktif), banner informasi ditampilkan dengan instruksi latih ulang.
 - **Peringatan PyTorch Tidak Tersedia**: Jika PyTorch gagal diimport (misalnya DLL error pada Windows atau versi tidak kompatibel), banner peringatan informatif otomatis ditampilkan di halaman Training. GNN dan Autoencoder akan di-skip secara *graceful*, sementara Isolation Forest dan XGBoost tetap berjalan normal.
 - **Smart Training Profiles & Complexity Estimator**:
   - ⚡ **Mode Cepat (*Tabular Fast*)**: Isolation Forest (50 tree) + XGBoost, tanpa Autoencoder/GNN/Optuna (~10–30 dtk). Sangat efisien untuk CPU lokal dan serverless Cloud Run.
@@ -199,7 +205,7 @@ python run.py
   - 🛠️ **Mode Kustom**: Kebebasan memilih algoritma, parameter epoch, learning rate, sampling neighbor, dan bobot ensemble.
 - **Hardware-Aware Telemetry**: Monitor beban komputasi *real-time* yang mendeteksi ketersediaan GPU NVIDIA CUDA dan memberikan rekomendasi hardware (*Badge*: 🟢 Ringan, 🟡 Sedang, 🔴 Berat).
 - **Asynchronous Training Worker**: Pelatihan berjalan di background thread dengan penulisan progres ke `cache/training_status.json`, mencegah UI Streamlit mengalami *freezing*.
-- **Visualisasi Topologi Graf**: Menampilkan visualisasi interaktif NetworkX + Plotly untuk relasi rujukan antar faskes, dokter, dan pasien.
+- **Visualisasi Topologi Graf**: Menampilkan visualisasi interaktif anomaly-focused subgraph (NetworkX + Plotly) — top-K node paling mencurigai beserta ego-graph tetangga 1-hop-nya. Lihat detail di bagian **Visualisasi Anomaly-Focused Subgraph** di atas.
 
 ### 4.4 Evaluation & Explainability (`ui/pages/evaluation.py`)
 - **Metrik Klasifikasi Supervised**: Evaluasi Accuracy, Precision, Recall, F1-Score, ROC-AUC, PR-AUC, dan Brier Score.
@@ -439,6 +445,35 @@ Model ensemble menggabungkan berbagai paradigma machine learning:
 - **Arsitektur**: Menggunakan `GATConv` (*Graph Attention Network*) dengan multi-head attention:
   $$\alpha_{ij} = \frac{\exp\left(\text{LeakyReLU}\left(\mathbf{a}^\top [\mathbf{W}\mathbf{h}_i \,\|\, \mathbf{W}\mathbf{h}_j]\right)\right)}{\sum_{k \in \mathcal{N}_i} \exp\left(\text{LeakyReLU}\left(\mathbf{a}^\top [\mathbf{W}\mathbf{h}_i \,\|\, \mathbf{W}\mathbf{h}_k]\right)\right)}$$
 - **Mini-Batch NeighborLoader**: Mendukung *neighborhood sampling* bertingkat untuk menangani graf besar berskala ratusan ribu transaksi tanpa kehabisan memori GPU/RAM.
+- **`get_node_embeddings()`**: Mengembalikan representasi vektor per-node (post-GAT, pre-classifier) yang dapat digunakan untuk analisis lanjutan.
+- **Mixed Precision Training (AMP)**: Training Autoencoder menggunakan `torch.amp.GradScaler('cuda')` dan `torch.amp.autocast('cuda')` (API PyTorch ≥ 2.0) untuk menghemat VRAM hingga ~40%.
+
+### 7.3 Anomaly-Focused Subgraph (`build_anomaly_subgraph`)
+
+Setelah training selesai, fungsi `build_anomaly_subgraph()` di `model.py` dijalankan sekali selagi model masih *warm* (skor segar dari epoch terakhir) untuk membangun subgraf kompak yang difokuskan pada klaim paling mencurigai:
+
+```
+Input: node_features (N, F), edge_index (2, E), gnn_scores (N,), [edge_type (E,)]
+  │
+  ├── Step 1: Pilih top-K seed nodes (skor GNN tertinggi + node di atas threshold)
+  ├── Step 2: Tambahkan tetangga 1-hop dari seed → ego-graph kolusi
+  ├── Step 3: Potong ke max_viz_nodes=300 (prioritas: seed > tetangga berdasar skor)
+  ├── Step 4: Remap node ID ke ruang kompak [0, N_sub)
+  └── Output: sub_node_ids, sub_edge_index, sub_edge_type, sub_scores, is_seed
+              n_total_nodes, n_total_edges, top_k_used
+```
+
+Hasil disimpan ke `self.gnn_anomaly_subgraph` pada detector, kemudian dipindahkan ke `st.session_state['gnn_anomaly_subgraph']` di `training.py` saat status training `"completed"`. Pendekatan ini memastikan visualisasi berjalan dalam milidetik di UI — tanpa perlu memanggil inferensi ulang pada seluruh dataset.
+
+**Keunggulan vs pendekatan lama (full-graph scoring di render time):**
+
+| Aspek | Pendekatan Lama | Anomaly Subgraph Baru |
+|---|---|---|
+| Scoring saat render | Ya — panggil `predict_anomaly_probability` ulang | Tidak — subgraf sudah dihitung saat training |
+| Ukuran graf di UI | Semua N node (bisa ribuan) | ≤ 300 node selalu |
+| Dataset besar | Lambat / crash | Cepat (O(K) bukan O(N)) |
+| Fokus investigasi | Semua node merata | Top-K anomali + koneksi sindikat |
+| Node anomali vs normal | Warna saja | Dua layer berbeda ukuran & border |
 
 ---
 
@@ -582,9 +617,9 @@ Modul `pii_masker.py` melindungi data sensitif sesuai regulasi UU Perlindungan D
 
 ---
 
-## 11. Pengujian Kualitas & Quality Gate (75 Test Cases)
+## 11. Pengujian Kualitas & Quality Gate (82 Test Cases)
 
-Seluruh komponen ASTINA diuji secara otomatis menggunakan suite Pytest yang mencakup **75 skenario uji terdaftar** (75 Passed, 100% Green), termasuk modul uji keamanan siber, autentikasi, dan resiliensi schema harmonizer:
+Seluruh komponen ASTINA diuji secara otomatis menggunakan suite Pytest yang mencakup **82 skenario uji terdaftar** (82 Passed, 100% Green), termasuk modul uji keamanan siber, autentikasi, resiliensi schema harmonizer, dan subgraf anomali GNN:
 
 ```powershell
 # Menjalankan seluruh test suite
@@ -592,6 +627,9 @@ Seluruh komponen ASTINA diuji secara otomatis menggunakan suite Pytest yang menc
 
 # Menjalankan hanya uji Schema Harmonizer & Circuit Breaker
 .\.venv\Scripts\python.exe -m pytest tests/test_schema_synthesis_and_resilience.py -v
+
+# Menjalankan uji GNN subgraf anomali
+.\.venv\Scripts\python.exe -m pytest tests/test_graph_scaling.py -v
 ```
 
 ### Rincian Modul Uji
@@ -599,19 +637,19 @@ Seluruh komponen ASTINA diuji secara otomatis menggunakan suite Pytest yang menc
 | Modul Test | Jumlah Uji | Cakupan Verifikasi |
 | :--- | :---: | :--- |
 | `test_agentic_copilot.py` | 9 | Uji pencarian semantik FAISS RAG (8 reg), retrieval outlier ML, inferensi Copilot, fallback zero-wipeout, Q&A heuristic, XAI/GNN context |
-| `test_cybersecurity_and_auth.py` | 6 | Uji bcrypt auth, RBAC 3-tier (admin/auditor/viewer), AI Guardrail (5 pola injeksi), blokir prompt injection di Copilot, cache lifecycle purge, rate-limit role resolution |
+| `test_cybersecurity_and_auth.py` | 6 | Uji SHA-256 auth, RBAC 4-role (admin/auditor/analyst/viewer), AI Guardrail (5 pola injeksi), blokir prompt injection di Copilot, cache lifecycle purge, rate-limit role resolution |
 | `test_app_startup.py` | 1 | Uji startup aplikasi dan validitas seluruh dependensi import utama |
 | `test_detection_modules.py` | 14 | Uji menyeluruh 9 modul business rules, edge cases, dan integrasi pipeline |
 | `test_feature_selection.py` | 6 | Uji SelectKBest (F-score & MI), Tree Importance, Filter Multikolinearitas, Low-Variance, PCA |
 | `test_gnn_minibatch.py` | 4 | Uji PyTorch GNN mini-batch NeighborLoader, forward pass, dan early stopping |
 | `test_gpu_and_pipeline_fixes.py` | 6 | Uji kebersihan memori GPU, parameter XGBoost hardware, fallback CUDA, fuzzy similarity parity, dan pseudo-label caching |
-| `test_graph_scaling.py` | 2 | Uji batasan node/edge graph builder dan pencegahan OOM pada graf besar |
+| `test_graph_scaling.py` | 9 | Uji batasan node/edge graph builder, pencegahan OOM pada graf besar, dan 7 skenario `build_anomaly_subgraph`: basic, seed inclusion, score shape, edge_type propagation, torch tensor input, single-node degenerate, all-low-scores fallback |
 | `test_large_file_ingestion.py` | 2 | Uji konversi streaming CSV-to-Parquet per chunk dengan alokasi buffer aman |
 | `test_optuna_ensemble_and_drift.py` | 5 | Uji optimasi hyperparameter Optuna dan deteksi Kolmogorov-Smirnov drift |
 | `test_pipeline_edge_cases.py` | 12 | Uji toleransi data null, data bertipe campuran, sanitasi string, dan extreme amounts |
 | `test_schema_synthesis_and_resilience.py` | 6 | Uji resiliensi SchemaHarmonizer: zero-crash dataset minimal, aliasing bahasa Indonesia, derivasi LOS deterministik, circuit breaker weight re-normalization, provenance tagging, dan empty DataFrame |
 | `test_streaming_preprocessing_memory.py` | 2 | Uji batasan pemakaian RAM (<100MB peak) pada pemrosesan streaming skala besar |
-| **Total Test Suite** | **75 (75 Passed)** | **100% Passed (Green)** |
+| **Total Test Suite** | **82 (82 Passed)** | **100% Passed (Green)** |
 
 ---
 
@@ -650,6 +688,14 @@ Library `lime>=0.2.0.0` telah ditambahkan ke `requirements.txt` (sebelumnya hany
 
 #### Fix `large_file_processor.py` — Temp Directory
 Direktori temp (`TEMP_DATA_DIR`) kini dibuat ulang (`os.makedirs(..., exist_ok=True)`) tepat sebelum `sink_parquet()` dipanggil. Ini mencegah `FileNotFoundError` yang terjadi ketika Windows membersihkan direktori temp antara dua sesi jalannya aplikasi.
+
+#### Fix `training.py` — `UnboundLocalError: node_features`
+Variabel `node_features` kini dideklarasikan di baris pertama `show_training_page()` (bersama `X_train = None` dan `edge_index = None`). Tanpa deklarasi ini, Python memperlakukan `node_features` sebagai *local variable* untuk seluruh fungsi sejak pertama kali terlihat di-assign, sehingga exception di blok mana pun sebelum assignment tersebut memicu `UnboundLocalError: cannot access local variable 'node_features' where it is not associated with a value`.
+
+#### Anomaly-Focused Subgraph — Session State Keys Baru
+Dua session state key baru ditambahkan untuk mendukung visualisasi subgraf anomali GNN:
+- `st.session_state['gnn_anomaly_subgraph']` — dict berisi subgraf kompak (≤300 node) hasil `build_anomaly_subgraph()`, di-set saat training selesai, di-clear saat training baru dimulai.
+- Key lama `graph_node_features` tetap dipertahankan untuk backward compatibility dengan kode lain yang mungkin merujuknya.
 
 ### 12.1 Localhost Environment
 ```powershell

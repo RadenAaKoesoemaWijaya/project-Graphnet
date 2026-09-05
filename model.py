@@ -3913,6 +3913,38 @@ class CombinedAnomalyDetector:
         self.gnn_use_soft_labels = use_soft_labels
         self.gnn_dev_prior = dev_prior
         self.gnn_soft_labels = soft_labels_np
+
+        # ── Pre-compute anomaly-focused subgraph for lightweight visualization ──
+        # Done once here (immediately after training, model still warm) so the
+        # UI never has to score the full N-node graph again at render time.
+        self.gnn_anomaly_subgraph = None
+        try:
+            self.gnn_model.eval()
+            with torch.no_grad():
+                out_full = self.gnn_model(x, edge_index_tensor, batch_tensor, edge_attr_device)
+                gnn_scores_full = torch.softmax(out_full, dim=1)[:, 1].cpu().numpy()
+            self.gnn_anomaly_subgraph = build_anomaly_subgraph(
+                node_features=node_features,
+                edge_index=edge_index_tensor,
+                gnn_scores=gnn_scores_full,
+                edge_type=edge_type if edge_type is not None else None,
+                top_k_anomalies=50,
+                hop=1,
+                max_viz_nodes=300,
+                anomaly_threshold=0.5,
+            )
+            logger.info(
+                "GNN anomaly subgraph built: %d nodes, %d edges (from %d total nodes, %d total edges)",
+                len(self.gnn_anomaly_subgraph['sub_node_ids']),
+                self.gnn_anomaly_subgraph['sub_edge_index'].shape[1]
+                    if self.gnn_anomaly_subgraph['sub_edge_index'].ndim == 2 else 0,
+                self.gnn_anomaly_subgraph['n_total_nodes'],
+                self.gnn_anomaly_subgraph['n_total_edges'],
+            )
+        except Exception as _sub_err:
+            logger.warning("Anomaly subgraph pre-computation failed: %s", _sub_err)
+            self.gnn_anomaly_subgraph = None
+
         logger.info("GNN training completed. Best val F1 = %.4f%s",
                     best_val_f1,
                     " (soft labels / DevNet)" if use_soft_labels else "")
@@ -4774,6 +4806,160 @@ def create_similarity_graph(node_features, similarity_threshold=0.8, max_edges=1
         else:
             edge_index = torch.LongTensor([[0], [0]]).t().contiguous()
         return node_features, edge_index
+
+def build_anomaly_subgraph(
+    node_features: np.ndarray,
+    edge_index,          # torch.LongTensor (2, E) atau numpy (2, E)
+    gnn_scores: np.ndarray,
+    edge_type=None,      # torch.LongTensor (E,) atau None
+    top_k_anomalies: int = 50,
+    hop: int = 1,
+    max_viz_nodes: int = 300,
+    anomaly_threshold: float = 0.5,
+) -> dict:
+    """Bangun subgraph kecil yang terfokus pada node paling mencurigai.
+
+    Strategi:
+    1. Pilih top-K node berdasarkan skor GNN tertinggi (anomali terkonfirmasi).
+    2. Tambahkan semua tetangga 1-hop dari node-node tersebut hingga batas
+       ``max_viz_nodes`` — ini adalah "ego-graph" kolusi.
+    3. Remap node ID ke ruang kompak [0, n_sub) agar NetworkX & Plotly
+       tidak memerlukan seluruh graf asli.
+
+    Keunggulan dibanding pendekatan lama:
+    - Tidak perlu memanggil ``predict_anomaly_probability`` ulang (skor sudah ada).
+    - Ukuran subgraph dibatasi, bukan semua N node.
+    - Tetangga anomali ikut ditampilkan → terlihat pola koneksi sindikat.
+
+    Returns
+    -------
+    dict dengan keys:
+        ``sub_node_ids``   : list[int]  — ID asli tiap node dalam subgraph
+        ``sub_edge_index`` : np.ndarray shape (2, E_sub) — edge dalam ruang ID baru
+        ``sub_edge_type``  : np.ndarray shape (E_sub,) atau None
+        ``sub_scores``     : np.ndarray shape (N_sub,) — skor GNN tiap node
+        ``is_seed``        : np.ndarray bool shape (N_sub,) — True jika node seed anomali
+        ``n_total_nodes``  : int — ukuran graf asli
+        ``n_total_edges``  : int — jumlah edge graf asli
+        ``top_k_used``     : int — berapa seed anomali yang benar-benar digunakan
+    """
+    # ── Normalise edge_index ke numpy int32 ──────────────────────────────────
+    if hasattr(edge_index, 'numpy'):
+        ei_np = edge_index.cpu().numpy()
+    else:
+        ei_np = np.asarray(edge_index)
+    if ei_np.shape[0] != 2:
+        ei_np = ei_np.T
+    ei_np = ei_np.astype(np.int64)
+
+    n_total_nodes = int(node_features.shape[0])
+    n_total_edges = int(ei_np.shape[1])
+
+    # ── Normalise edge_type ───────────────────────────────────────────────────
+    et_np = None
+    if edge_type is not None:
+        if hasattr(edge_type, 'numpy'):
+            et_np = edge_type.cpu().numpy().reshape(-1).astype(np.int64)
+        else:
+            et_np = np.asarray(edge_type).reshape(-1).astype(np.int64)
+        if et_np.shape[0] != n_total_edges:
+            et_np = None  # ukuran tidak cocok, abaikan
+
+    # ── Skor per node ─────────────────────────────────────────────────────────
+    scores = np.asarray(gnn_scores, dtype=np.float64)
+    if scores.shape[0] != n_total_nodes:
+        # Fallback: skor kosong
+        scores = np.zeros(n_total_nodes, dtype=np.float64)
+
+    # ── Step 1: pilih seed node (top-K anomali) ───────────────────────────────
+    effective_k = min(top_k_anomalies, n_total_nodes)
+    top_k_indices = np.argsort(scores)[-effective_k:]  # ascending → ambil ekor
+
+    # Jika threshold tersedia, beri preferensi ke node di atas threshold
+    above_thresh = np.where(scores >= anomaly_threshold)[0]
+    if len(above_thresh) >= 5:
+        # Gabungkan: seed = union(above_thresh[:effective_k], top_k_indices)
+        seed_nodes = set(above_thresh[np.argsort(scores[above_thresh])[-effective_k:]].tolist())
+        seed_nodes.update(top_k_indices.tolist())
+    else:
+        seed_nodes = set(top_k_indices.tolist())
+
+    # ── Bangun adjacency list (CSR sederhana) untuk 1-hop lookup cepat ────────
+    # Hanya buat untuk node yang relevan agar hemat memori pada graf besar
+    # Batasi ke edge yang melibatkan setidaknya satu seed node terlebih dahulu,
+    # lalu ambil tetangga uniknya.
+    seed_array = np.array(list(seed_nodes), dtype=np.int64)
+
+    # Mask baris edge_index yang salah satu ujungnya adalah seed
+    src, dst = ei_np[0], ei_np[1]
+    seed_set_broadcast = np.isin(src, seed_array) | np.isin(dst, seed_array)
+    relevant_edges_mask = seed_set_broadcast
+
+    relevant_src = src[relevant_edges_mask]
+    relevant_dst = dst[relevant_edges_mask]
+
+    # Kumpulkan semua node (seed + tetangga 1-hop)
+    neighbor_nodes = set(relevant_src.tolist()) | set(relevant_dst.tolist())
+
+    # Gabungkan seed + tetangga, kemudian potong ke max_viz_nodes
+    # Prioritaskan: (1) seed anomali, (2) tetangga dengan skor tinggi
+    all_candidate_nodes = list(seed_nodes | neighbor_nodes)
+    if len(all_candidate_nodes) > max_viz_nodes:
+        # Urutkan kandidat: seed dulu (skor tinggi), lalu tetangga berdasar skor
+        candidate_scores = scores[all_candidate_nodes]
+        is_seed_flag = np.array([n in seed_nodes for n in all_candidate_nodes])
+        # Prioritas: seed bernilai +1000 agar selalu masuk di top
+        priority = candidate_scores + 1000.0 * is_seed_flag.astype(float)
+        top_indices = np.argsort(priority)[-max_viz_nodes:]
+        all_candidate_nodes = [all_candidate_nodes[i] for i in top_indices]
+
+    sub_node_ids = sorted(all_candidate_nodes)  # urutkan agar remap deterministik
+    node_remap = {old: new for new, old in enumerate(sub_node_ids)}
+    n_sub = len(sub_node_ids)
+
+    # ── Filter & remap edge dalam subgraph ───────────────────────────────────
+    sub_node_set = set(sub_node_ids)
+    both_in_sub = np.isin(src, list(sub_node_set)) & np.isin(dst, list(sub_node_set))
+    sub_src_orig = src[both_in_sub]
+    sub_dst_orig = dst[both_in_sub]
+
+    # Remap menggunakan vectorized lookup
+    remap_keys = np.array(list(node_remap.keys()), dtype=np.int64)
+    remap_vals = np.array(list(node_remap.values()), dtype=np.int64)
+    # Pakai argsort + searchsorted untuk remap cepat
+    sort_order = np.argsort(remap_keys)
+    sorted_keys = remap_keys[sort_order]
+    sorted_vals = remap_vals[sort_order]
+
+    def _remap_vec(arr):
+        idx = np.searchsorted(sorted_keys, arr)
+        idx = np.clip(idx, 0, len(sorted_keys) - 1)
+        return sorted_vals[idx]
+
+    sub_src = _remap_vec(sub_src_orig)
+    sub_dst = _remap_vec(sub_dst_orig)
+    sub_edge_index = np.stack([sub_src, sub_dst], axis=0)  # (2, E_sub)
+
+    # Remap edge_type jika tersedia
+    sub_et = None
+    if et_np is not None:
+        sub_et = et_np[both_in_sub].astype(np.int64)
+
+    # ── Kumpulkan hasil ───────────────────────────────────────────────────────
+    sub_scores = scores[sub_node_ids]
+    is_seed = np.array([n in seed_nodes for n in sub_node_ids], dtype=bool)
+
+    return {
+        'sub_node_ids': sub_node_ids,          # ID asli
+        'sub_edge_index': sub_edge_index,       # (2, E_sub) dalam ID baru
+        'sub_edge_type': sub_et,                # (E_sub,) atau None
+        'sub_scores': sub_scores,               # skor GNN tiap node subgraph
+        'is_seed': is_seed,                     # mask node seed anomali
+        'n_total_nodes': n_total_nodes,
+        'n_total_edges': n_total_edges,
+        'top_k_used': len(seed_nodes),
+    }
+
 
 def analyze_anomaly_networks(df, fraud_predictions):
     """Analyze networks of anomaly transactions"""

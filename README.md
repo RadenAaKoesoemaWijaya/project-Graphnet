@@ -14,7 +14,7 @@ Aplikasi ini dilengkapi antarmuka interaktif berbasis **Streamlit**, mendukung p
 - **⚡ Resilient Multi-Format Data Ingestion**: Dukungan menyeluruh untuk file CSV, Excel (`.xlsx`, `.xls`), dan Parquet dengan normalisasi format otomatis, streaming disk buffering 8MB untuk efisiensi RAM, engine Polars untuk Parquet cepat, dan integrasi parser Excel tahan error.
 - **🎯 Intelligent Feature Selection & Redundancy Filtering**: Modul seleksi fitur multivariat adaptif di UI Praproses yang mencakup SelectKBest (ANOVA F-Score & Mutual Information), Tree-based Feature Importance (ExtraTrees/RandomForest/LightGBM), Filter Multikolinearitas Terbobot Skor, Filter Low-Variance Skala Invarian, serta Reduksi Dimensi PCA interaktif dengan *live explained variance preview*.
 - **⚡ Smart Training Profiles & Complexity Estimator**: Antarmuka pelatihan interaktif dengan preset adaptif (⚡ *Mode Cepat* ~10-30 dtk, ⚖️ *Mode Seimbang* ~1-2 mnt, 🧠 *Mode Lengkap* Deep Graph, 🛠️ *Kustom*) serta monitor estimasi beban komputasi & rekomendasi hardware (CPU vs GPU) *real-time*.
-- **🕸️ Graph Neural Network (GNN)**: Analisis relasional berbasis `GATConv` (Star Graph, Heterogeneous Graph, & k-NN Graph) untuk membongkar sindikat kolusi faskes, dokter, dan pasien (*fraud rings*) dengan evaluasi metrik periodik teroptimasi. Visualisasi interaktif Graph Network (NetworkX + Plotly) tersedia setelah training — node diwarnai berdasarkan GNN anomaly probability (merah = tinggi, biru = rendah). Jika PyTorch tidak tersedia, banner peringatan otomatis muncul di UI dan GNN/Autoencoder di-skip secara graceful.
+- **🕸️ Graph Neural Network (GNN)**: Analisis relasional berbasis `GATConv` (Star Graph, Heterogeneous Graph, & k-NN Graph) untuk membongkar sindikat kolusi faskes, dokter, dan pasien (*fraud rings*) dengan evaluasi metrik periodik teroptimasi. Setelah training selesai, visualisasi **Anomaly-Focused Subgraph** ditampilkan secara otomatis — hanya menampilkan top-K node paling mencurigai beserta tetangga 1-hop-nya (ego-graph kolusi) dalam subgraf kompak ≤300 node, sehingga tetap cepat meskipun dataset training berukuran jutaan baris. Node 🔴 anomali seed (skor tertinggi) dan ⚪ tetangga dibedakan secara visual. Jika PyTorch tidak tersedia, banner peringatan otomatis muncul di UI dan GNN/Autoencoder di-skip secara graceful.
 - **📑 5-Tab Detection & Investigation Workspace**:
   1. 📊 *Ringkasan & Visualisasi*: Distribusi prediksi anomali seimbang, histogram probabilitas multi-model ensemble, panel metrik eksekutif 11 kartu risiko, dan proporsi risiko per kategori.
   2. 🚨 *Business Risk & Rules*: Audit temuan Repeat Billing & Phantom Service beserta rincian 9 modul aturan fraud medis dan status eksekusi Circuit Breaker.
@@ -89,7 +89,7 @@ project-Graphnet/
 │       ├── detection.py             # Deteksi fraud batch, rule audit, review table & AI Copilot
 │       └── status.py                # Telemetri performa sistem & audit logging
 │
-├── tests/                           # Unit test & integrasi otomatis (Pytest) - 75 Test Cases
+├── tests/                           # Unit test & integrasi otomatis (Pytest) - 82 Test Cases
 │   ├── conftest.py                  # Pytest fixtures & setup lingkungan uji
 │   ├── test_agentic_copilot.py      # Uji Copilot, FAISS RAG, zero-wipeout fallback, & XAI/GNN context
 │   ├── test_app_startup.py          # Uji startup & integritas import modul utama
@@ -98,7 +98,7 @@ project-Graphnet/
 │   ├── test_feature_selection.py    # Uji metode seleksi fitur, multikolinearitas & varians
 │   ├── test_gnn_minibatch.py        # Uji mini-batch sampling & forward pass GNN
 │   ├── test_gpu_and_pipeline_fixes.py # Uji kebersihan VRAM, fallback CUDA/CPU, & fuzzy parity
-│   ├── test_graph_scaling.py        # Uji penskalaan graf & edge budget limit
+│   ├── test_graph_scaling.py        # Uji penskalaan graf, edge budget limit & build_anomaly_subgraph (7 skenario)
 │   ├── test_large_file_ingestion.py # Uji streaming CSV-to-Parquet chunk ingestion
 │   ├── test_optuna_ensemble_and_drift.py # Uji optimasi Optuna & deteksi pergeseran data
 │   ├── test_pipeline_edge_cases.py  # Uji edge cases & robustness data tak standar
@@ -598,7 +598,12 @@ flowchart TD
 
 ### 4. Analisis Jaringan Kolusi menggunakan GNN (Graph Attention Network)
 * **Proses:** Membangun topologi graf (Star Graph, Heterogeneous Graph, k-NN) menghubungkan klaim yang berbagi faskes, dokter, diagnosis, atau pasien yang sama.
-* **Peran Krusial:** `InsuranceAnomalyGNNModel` berbasis `GATConv` (Graph Attention Network) mendeteksi pola sindikat kolusi massal (*fraud rings*) dengan evaluasi metrik validasi periodik yang hemat memori dan ramah komputasi multi-device.
+* **Peran Krusial:** `InsuranceAnomalyGNNModel` berbasis `GATConv` mendeteksi pola sindikat kolusi massal (*fraud rings*). Segera setelah training selesai (model masih *warm*), fungsi `build_anomaly_subgraph()` dipanggil untuk mengekstrak subgraf terfokus anomali dan menyimpannya ke `st.session_state['gnn_anomaly_subgraph']` — sehingga UI tidak perlu scoring ulang seluruh graf saat render.
+* **Visualisasi Anomaly-Focused Subgraph:** Menampilkan subgraf kompak ≤300 node yang terdiri dari:
+  - 🔴 **Node seed** — top-K klaim dengan skor GNN tertinggi (paling mencurigai), ditampilkan lebih besar dengan border merah.
+  - ⚪ **Node tetangga 1-hop** — klaim yang terhubung langsung (provider / pasien / diagnosis sama), memperlihatkan pola koneksi sindikat.
+  - Edge diwarnai per tipe relasi pada Heterogeneous Graph (Provider biru, Patient hijau, Diagnosis kuning).
+  - Layout `kamada_kawai` untuk ≤150 node (klaster lebih jelas), `spring_layout` untuk yang lebih besar.
 
 ### 5. Audit Kepatuhan 9 Modul Business Rules dengan Circuit Breaker
 * **Proses:** Mengeksekusi `run_integrated_claim_risk_pipeline()` secara paralel untuk mengaudit 9 kategori fraud klaim medis, menghasilkan bendera biner, bukti penjelasan (*evidence*), dan `business_risk_score`.
@@ -659,7 +664,7 @@ Konfigurasi opsional dapat disetel melalui file `.env` di direktori utama:
 
 ## 🧪 Pengujian & Validasi Kualitas
 
-Aplikasi dilengkapi suite pengujian otomatis komprehensif (**75 Test Cases**) untuk memverifikasi keandalan seluruh komponen sistem secara end-to-end, termasuk pengujian keamanan siber (*cybersecurity*), autentikasi, dan resiliensi schema:
+Aplikasi dilengkapi suite pengujian otomatis komprehensif (**82 Test Cases**) untuk memverifikasi keandalan seluruh komponen sistem secara end-to-end, termasuk pengujian keamanan siber (*cybersecurity*), autentikasi, resiliensi schema, dan subgraf anomali GNN:
 
 ```powershell
 # Jalankan seluruh test suite dengan Pytest
@@ -676,7 +681,7 @@ python system_status.py
 ```
 
 Hasil verifikasi memastikan:
-- ✅ **75 Test Cases (75 Passed, 100% Green)** mencakup seluruh modul aplikasi.
+- ✅ **82 Test Cases (82 Passed, 100% Green)** mencakup seluruh modul aplikasi.
 - ✅ **Schema Harmonizer & Semantic Aliasing** — Penyelarasan transparan 13+ sinonim kolom bahasa Indonesia/industri ke nama kanonikal terverifikasi akurat.
 - ✅ **Circuit Breaker & Dynamic Weight Re-normalization** — Dataset minimal (hanya 2 kolom) tidak menyebabkan crash; bobot aturan aktif dinormalisasi ulang dengan benar.
 - ✅ **Derivasi Deterministik LOS** — `admission_date` dan `discharge_date` diturunkan otomatis dari `service_date` + `length_of_stay`; `detect_prolonged_stay_and_readmission()` berjalan tanpa error.
@@ -692,6 +697,7 @@ Hasil verifikasi memastikan:
 - ✅ Polars out-of-core streaming memory bounded (<100MB RAM peak) pada dataset besar.
 - ✅ Proteksi UI Guard aktif mencegah error kalkulasi SHAP/LIME pada model non-kompatibel.
 - ✅ Topologi graf GNN menghormati batas node/edge dan mempertahankan integritas ID node.
+- ✅ **`build_anomaly_subgraph()`** — subgraf anomali terfokus dibangun benar dari top-K seed + tetangga 1-hop; ID di-remap ke ruang kompak; edge_type dipropagasi; input torch.Tensor dan numpy keduanya didukung; single-node dan all-low-score tidak crash.
 - ✅ Concept Drift detector & automated retrain trigger terisolasi dan stabil.
 - ✅ Rantai hash SHA-256 pada audit trail terverifikasi valid dan anti-manipulasi.
 
@@ -711,7 +717,9 @@ Hasil verifikasi memastikan:
   New-Item -ItemType Directory -Force cache, models
   docker-compose up --build -d
   ```
-- **Dataset Besar Out of Memory**:
+- **GNN visualization tidak muncul / semua node berwarna seragam**:
+  Subgraf anomali dibangun otomatis saat training selesai dan disimpan ke `session_state['gnn_anomaly_subgraph']`. Jika tidak muncul setelah training, latih ulang model — subgraf hanya tersedia dari sesi training aktif (tidak dari model yang dimuat dari disk).
+
   Gunakan format Parquet. Ingestion CSV besar berjalan secara streaming per chunk, namun disarankan menyediakan RAM minimal 16 GB untuk graph sampling GNN berskala jutaan node.
 - **Warning `use_container_width` / `width=`**:
   Pada Streamlit >= 1.45, parameter `use_container_width` dihapus. Gunakan `width='stretch'` (setara `True`) atau `width='content'` (setara `False`). Seluruh kode ASTINA telah dimigrasikan.
