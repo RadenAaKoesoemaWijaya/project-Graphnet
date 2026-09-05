@@ -34,4 +34,9 @@ google-cloud-storage>=3.0.0
 faiss-cpu>=1.7.4
 psutil>=7.0.0
 shap>=0.48.0
-alibi-detect>=0.12.0
+lime>=0.2.0.0
+# alibi-detect is OPTIONAL — provides advanced concept drift detection.
+# Install separately with: pip install "alibi-detect[torch]>=0.12.0"
+# NOT included here: the default install pulls TensorFlow (~2GB) which
+# bloats the Docker image and significantly increases Cloud Run build time.
+# alibi-detect[torch]>=0.12.0

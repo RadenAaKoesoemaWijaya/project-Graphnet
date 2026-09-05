@@ -183,7 +183,7 @@ temp/
 *.tmp
 
 # Streamlit
-.streamlit/
+.streamlit/secrets.toml
 
 # Jupyter checkpoints
 .ipynb_checkpoints/

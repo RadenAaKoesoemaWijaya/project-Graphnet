@@ -93,7 +93,7 @@ project-Graphnet/
 │   ├── conftest.py                  # Pytest fixtures & setup lingkungan uji
 │   ├── test_agentic_copilot.py      # Uji Copilot, FAISS RAG, zero-wipeout fallback, & XAI/GNN context
 │   ├── test_app_startup.py          # Uji startup & integritas import modul utama
-│   ├── test_cybersecurity_and_auth.py # Uji autentikasi bcrypt, RBAC 3-tier, AI Guardrail, & lifecycle cache
+│   ├── test_cybersecurity_and_auth.py # Uji autentikasi SHA-256, RBAC 4-role, AI Guardrail, & lifecycle cache
 │   ├── test_detection_modules.py    # Test suite komprehensif 9 modul aturan & ML
 │   ├── test_feature_selection.py    # Uji metode seleksi fitur, multikolinearitas & varians
 │   ├── test_gnn_minibatch.py        # Uji mini-batch sampling & forward pass GNN
@@ -118,15 +118,17 @@ project-Graphnet/
 
 ## ⚙️ Persyaratan Sistem & Dependensi
 
-- **Python**: Versi `3.11` s/d `3.13` (Direkomendasikan Python 3.11 atau 3.13).
-- **Hardware Minimum**: 4 Core CPU, 8 GB RAM (16 GB RAM disarankan untuk dataset besar > 1 GB).
-- **Akselerasi Opsional**: GPU NVIDIA (CUDA 11.8 / 12.x) atau AMD GPU (ROCm) untuk akselerasi PyTorch/GNN.
+- **Python**: Versi `3.11` s/d `3.13` (Direkomendasikan Python 3.13 — diuji penuh di environment ini).
+- **Hardware Minimum**: 4 Core CPU, 8 GB RAM (16 GB RAM disarankan untuk dataset besar > 1 GB dan training GNN).
+- **Akselerasi Opsional**: GPU NVIDIA (CUDA 12.x) untuk akselerasi PyTorch/GNN. AMD ROCm didukung secara teoritis via PyTorch ROCm build.
 - **Docker**: Docker Desktop versi terbaru dengan Docker Compose v2.
 
 Semua dependensi inti dikunci pada [requirements.txt](file:///c:/project-Graphnet/requirements.txt):
-`streamlit==1.61.1`, `pandas`, `numpy`, `scikit-learn`, `scipy`, `joblib`, `torch>=2.4.0`, `torch-geometric>=2.6.0`, `imbalanced-learn`, `plotly>=6.0.0`, `xgboost`, `lightgbm`, `catboost`, `polars`, `pyarrow`, `optuna`, `hdbscan`, `faiss-cpu`, `psutil`, `shap`, `lime`, `alibi-detect>=0.12.0`, `google-cloud-storage`.
+`streamlit==1.61.1`, `pandas`, `numpy`, `scikit-learn`, `scipy`, `joblib`, `torch>=2.4.0`, `torch-geometric>=2.6.0`, `imbalanced-learn`, `plotly>=6.0.0`, `xgboost`, `lightgbm`, `catboost`, `polars`, `pyarrow`, `optuna`, `hdbscan`, `faiss-cpu`, `psutil`, `shap`, `lime`, `google-cloud-storage`.
 
 > **Catatan Streamlit API:** Sejak `streamlit>=1.45`, parameter `use_container_width` pada `st.plotly_chart`, `st.dataframe`, dan `st.button` telah dihapus dan digantikan oleh `width='stretch'` / `width='content'`. Seluruh komponen UI ASTINA sudah menggunakan API baru ini.
+
+> **`alibi-detect` (Opsional):** Library ini menyediakan deteksi drift lanjutan tetapi secara default menarik TensorFlow (~2GB). **Tidak disertakan** di `requirements.txt` utama agar Docker image tetap ringan. Untuk mengaktifkan, install terpisah: `pip install "alibi-detect[torch]>=0.12.0"`. Sistem berjalan normal tanpa library ini (fitur drift detection tetap tersedia via Kolmogorov-Smirnov dari `scipy`).
 
 ---
 
@@ -265,7 +267,7 @@ Aplikasi dilengkapi **Multi-stage Dockerfile** dan **Docker Compose** yang mengi
 
 ### Opsi 3: Deployment ke Google Cloud Run
 
-ASTINA mendukung continuous serverless deployment ke Cloud Run:
+ASTINA mendukung continuous serverless deployment ke Cloud Run via Artifact Registry:
 
 - **Windows (PowerShell)**:
   ```powershell
@@ -276,8 +278,16 @@ ASTINA mendukung continuous serverless deployment ke Cloud Run:
   chmod +x .cloudrun/deploy.sh
   ./.cloudrun/deploy.sh
   ```
+- **CI/CD via Cloud Build** (push ke main branch):
+  ```bash
+  gcloud builds submit --config=cloudbuild.yaml \
+      --substitutions=_REGION=asia-southeast2,_SERVICE=astina,_GCS_BUCKET=nama-bucket-anda
+  ```
 
-*Untuk persistensi model di Cloud Run, tetapkan `GOOGLE_CLOUD_BUCKET=nama-bucket-gcs-anda` dan gunakan Service Account yang memiliki role Storage Object Admin/Creator. Deployment default bersifat privat (`--no-allow-unauthenticated`).*
+*Catatan penting deployment:*
+- *Konfigurasi `.streamlit/config.toml` (memory, GC, minimal toolbar) sudah ter-include di Docker image dan aktif di Cloud Run.*
+- *Untuk persistensi model di Cloud Run, tetapkan `GOOGLE_CLOUD_BUCKET` di env vars dan gunakan Service Account dengan role Storage Object Admin.*
+- *Deployment default bersifat privat (`--no-allow-unauthenticated`). Tambahkan `_ALLOW_UNAUTH=true` di substitutions `cloudbuild.yaml` hanya untuk demo publik.*
 
 ---
 
@@ -366,7 +376,9 @@ Sistem menyediakan 4 akun uji coba terkonfigurasi dengan hash SHA-256 dan *crypt
 
 ### 🔑 Mengubah Kata Sandi Default (Kustomisasi Keamanan)
 
-Untuk keamanan lingkungan operasional riil, kata sandi bawaan dapat ditimpa (*override*) melalui environment variables tanpa mengubah kode sumber:
+> **Catatan Keamanan:** Password di ASTINA di-hash menggunakan **SHA-256 + cryptographic salt** (`hashlib.sha256`), bukan bcrypt. Untuk lingkungan produksi dengan kebutuhan keamanan tinggi, disarankan mengganti implementasi ke `bcrypt` atau `argon2` di `auth_manager.py`.
+
+Untuk lingkungan operasional riil, kata sandi bawaan dapat ditimpa (*override*) melalui environment variables:
 
 ```powershell
 # Windows PowerShell
@@ -518,9 +530,9 @@ flowchart LR
    - Pilih opsi **📤 Unggah File Baru (CSV / XLSX / XLS / Parquet)**.
    - Unggah berkas klaim baru yang ingin diperiksa (gunakan format standar sesuai template).
 4. **Atur Parameter Deteksi**:
-   - Tentukan **Ambang Batas Anomali ML** (default: `0.50`).
-   - Tentukan **Metode Agregasi Risiko** (*Weighted Hybrid*, *Conservative Max*, atau *Ensemble ML Only*).
-5. **Eksekusi Analisis**: Klik tombol **⚡ Eksekusi Deteksi Anomali**.
+   - Tentukan **Ambang Batas Anomali** (Anomaly Threshold, default: `0.50`) via slider.
+   - Aktifkan atau nonaktifkan **Analisis Graf Relasi (GNN)** jika model GNN tersedia.
+5. **Eksekusi Analisis**: Klik tombol **🚀 Jalankan Deteksi Anomali Multi-Algoritma**.
 6. **Evaluasi Diagnostik Penyelarasan**:
    - Sistem menampilkan banner status alignment:
      - 🟢 *Hijau*: Semua fitur ditemukan langsung atau berhasil diturunkan otomatis.
@@ -674,7 +686,7 @@ Hasil verifikasi memastikan:
 - ✅ Seleksi fitur (SelectKBest, Tree Importance, Filter Multikolinearitas, Low-Variance Filter, PCA) terverifikasi matematis.
 - ✅ Agentic Copilot, Zero-Wipeout Fallback, dan FAISS Knowledge RAG (8 dokumen regulasi) merespons analisis investigasi secara akurat.
 - ✅ **AI Security Guardrail** memblokir 5 jenis pola *prompt injection* dan jailbreak secara deterministik.
-- ✅ **RBAC Autentikasi** (Admin, Auditor, Viewer) dengan bcrypt hashing terverifikasi menghasilkan output deterministik.
+- ✅ **RBAC Autentikasi** (Admin, Auditor, Analyst, Viewer) dengan SHA-256 + cryptographic salt terverifikasi menghasilkan output deterministik.
 - ✅ **Data Governance Lifecycle** — purge otomatis cache expired (>24 jam) terverifikasi bersih tanpa kebocoran data.
 - ✅ Penanganan data kosong, missing values, dan format numerik tak standar berjalan aman tanpa crash.
 - ✅ Polars out-of-core streaming memory bounded (<100MB RAM peak) pada dataset besar.
@@ -694,7 +706,11 @@ Hasil verifikasi memastikan:
 - **Error PyTorch / CUDA di Local**:
   Pastikan versi PyTorch sesuai dengan versi driver CUDA Anda. Untuk mode CPU murni, instalasi standar dari `requirements.txt` langsung siap digunakan.
 - **Docker Desktop permission / volume mount**:
-  Pastikan folder `cache/` dan `models/` ada di root project sebelum menjalankan `docker-compose up`.
+  Pastikan folder `cache/` dan `models/` ada di root project sebelum menjalankan `docker-compose up`. Jika belum ada, buat terlebih dahulu:
+  ```powershell
+  New-Item -ItemType Directory -Force cache, models
+  docker-compose up --build -d
+  ```
 - **Dataset Besar Out of Memory**:
   Gunakan format Parquet. Ingestion CSV besar berjalan secara streaming per chunk, namun disarankan menyediakan RAM minimal 16 GB untuk graph sampling GNN berskala jutaan node.
 - **Warning `use_container_width` / `width=`**:

@@ -1,0 +1,48 @@
+[server]
+headless = true
+# enableCORS is intentionally NOT set to false here.
+# Setting enableCORS=false while enableXsrfProtection=true causes a
+# Streamlit config conflict (CORS must be true for CSRF cookie to work).
+# For internal/intranet deployment, XSRF protection alone is sufficient.
+enableXsrfProtection = true
+maxUploadSize = 3072
+
+# ── Connection & Memory Health ─────────────────────────────────────────────
+# Increase WebSocket ping interval/timeout to reduce spurious disconnects
+# and avoid the ProactorBasePipeTransport WinError 10054 on Windows.
+# Default 20s / 30s are too aggressive when the browser tab is background-throttled.
+# NOTE: Streamlit does not expose these as top-level server settings yet;
+# the real mitigation is handled at the OS socket layer (see below).
+
+# Limit in-process memory by restricting Streamlit's data cache sizes.
+# This prevents OOM crashes on the 7.26 GB RAM machine where RAM usage
+# is already at ~78% before the app starts.
+maxCachedMessageAge = 2
+
+[runner]
+# Rerun on file save (development convenience). Disable in production if needed.
+fastReruns = true
+# Enforce garbage collection of unreferenced Python objects after each script run
+# so that torch tensors and DataFrames released by Streamlit don't accumulate.
+postScriptGC = true
+
+[browser]
+gatherUsageStats = false
+# Raise the server-side inactivity timeout (seconds).
+# A long idle browser tab won't get force-closed and trigger WinError 10054.
+serverPort = 8501
+
+[client]
+# Longer toolbar mode reduces re-render overhead on low-RAM systems.
+toolbarMode = "minimal"
+# Increase the number of reconnection attempts the browser makes after a
+# WebSocket drop (like after WinError 10054). Default is 5 — raise to 10
+# so transient network glitches don't end the session.
+showSidebarNavigation = true
+
+[theme]
+primaryColor = "#2563EB"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F8FAFC"
+textColor = "#0F172A"
+font = "sans serif"

@@ -645,8 +645,8 @@ Konfigurasi ini terutama penting pada mesin dengan RAM ≤ 8 GB (seperti mesin d
 #### `ConnectionResetError: [WinError 10054]`
 Error ini muncul di log Windows ketika browser menutup tab/koneksi WebSocket saat server Streamlit masih aktif. Ini adalah perilaku normal asyncio ProactorEventLoop di Windows — **tidak menyebabkan crash aplikasi**, hanya log warning. Tidak perlu tindakan dari sisi kode aplikasi.
 
-#### Dependensi Baru: `alibi-detect`
-Library `alibi-detect>=0.12.0` telah ditambahkan ke `requirements.txt` untuk mengaktifkan fitur advanced concept drift detection (`ALIBI_DETECT_AVAILABLE`). Install otomatis via `pip install -r requirements.txt`.
+#### Dependensi Baru: `lime` & catatan `alibi-detect`
+Library `lime>=0.2.0.0` telah ditambahkan ke `requirements.txt` (sebelumnya hanya ada di venv tapi tidak terdokumentasi di requirements). Library `alibi-detect` **tidak dimasukkan** ke `requirements.txt` utama karena instalasinya menarik TensorFlow (~2GB) yang akan memperlamban Docker build secara signifikan. Sistem berjalan penuh tanpa `alibi-detect` — fitur drift detection menggunakan Kolmogorov-Smirnov via `scipy` yang sudah tersedia. Untuk mengaktifkan fitur drift lanjutan: `pip install "alibi-detect[torch]>=0.12.0"`.
 
 #### Fix `large_file_processor.py` — Temp Directory
 Direktori temp (`TEMP_DATA_DIR`) kini dibuat ulang (`os.makedirs(..., exist_ok=True)`) tepat sebelum `sink_parquet()` dipanggil. Ini mencegah `FileNotFoundError` yang terjadi ketika Windows membersihkan direktori temp antara dua sesi jalannya aplikasi.

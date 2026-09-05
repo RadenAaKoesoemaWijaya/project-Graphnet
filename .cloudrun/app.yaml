@@ -1,5 +1,11 @@
 # Cloud Run configuration for ASTINA
-# Deploy with: gcloud run deploy astina --source . --config app.yaml
+# Deploy with: gcloud run deploy astina --source . --config .cloudrun/app.yaml
+#
+# NOTE: Replace REGION, PROJECT_ID, and REPOSITORY with actual values before use.
+# Defaults match the cloudbuild.yaml substitutions:
+#   REGION      = asia-southeast2
+#   REPOSITORY  = astina-images
+#   SERVICE     = astina
 
 apiVersion: serving.knative.dev/v1
 kind: Service
@@ -10,11 +16,13 @@ spec:
   template:
     metadata:
       annotations:
-        autoscaling.knative.dev/min-scale: "0"
-        autoscaling.knative.dev/max-scale: "10"
+        autoscaling.knative.dev/min-scale: "1"
+        autoscaling.knative.dev/max-scale: "5"
     spec:
       containers:
-      - image: gcr.io/PROJECT_ID/astina:latest
+        # Use Artifact Registry (not deprecated gcr.io).
+        # Replace REGION / PROJECT_ID / REPOSITORY with actual values.
+      - image: REGION-docker.pkg.dev/PROJECT_ID/REPOSITORY/astina:latest
         ports:
         - containerPort: 8501
         env:
@@ -28,8 +36,14 @@ spec:
           value: "none"
         - name: STREAMLIT_BROWSER_GATHER_USAGE_STATS
           value: "false"
+        # ── CORS / XSRF ──────────────────────────────────────────────────────
+        # IMPORTANT: Do NOT set CORS=false while XSRF=true — Streamlit raises
+        # a config conflict. Keep both true (default) for Cloud Run behind IAP
+        # or use XSRF=false only in fully-trusted internal networks.
         - name: STREAMLIT_SERVER_ENABLE_CORS
-          value: "false"
+          value: "true"
+        - name: STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION
+          value: "true"
         - name: STREAMLIT_SERVER_MAX_UPLOAD_SIZE
           value: "3072"
         - name: ASTINA_LOG_FORMAT
