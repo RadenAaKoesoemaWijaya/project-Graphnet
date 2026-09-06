@@ -79,6 +79,10 @@ def render_sidebar():
         if st.sidebar.button("🖥️ Status Sistem", width='stretch', key="sidebar_status", disabled=sidebar_disabled):
             navigate_to_page('status')
     
+    if AuthManager.can_access_page('settings'):
+        if st.sidebar.button("⚙️ Pengaturan", width='stretch', key="sidebar_settings", disabled=sidebar_disabled):
+            navigate_to_page('settings')
+    
     st.sidebar.markdown("---")
     st.sidebar.markdown("---")
     st.sidebar.markdown("### 📊 Status Pipeline & Sistem")

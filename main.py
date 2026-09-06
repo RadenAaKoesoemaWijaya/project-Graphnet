@@ -43,6 +43,7 @@ from ui.pages.training import show_training_page
 from ui.pages.evaluation import show_evaluation_page
 from ui.pages.detection import show_detection_page
 from ui.pages.status import show_status_page
+from ui.pages.settings import show_settings_page
 
 from auth_manager import AuthManager
 
@@ -92,6 +93,8 @@ def main():
             show_detection_page()
         elif current_page == 'status':
             show_status_page()
+        elif current_page == 'settings':
+            show_settings_page()
     except Exception as e:
         # Log error and show recovery options
         import traceback

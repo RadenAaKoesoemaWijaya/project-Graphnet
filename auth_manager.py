@@ -110,9 +110,9 @@ def _build_default_users() -> Dict[str, Dict[str, Any]]:
 # =============================================================================
 
 ROLE_PERMISSIONS: Dict[str, List[str]] = {
-    'admin': ['home', 'collect', 'train', 'evaluate', 'detect', 'status'],
-    'auditor': ['home', 'detect', 'status'],
-    'analyst': ['home', 'collect', 'train', 'evaluate', 'detect'],
+    'admin': ['home', 'collect', 'train', 'evaluate', 'detect', 'status', 'settings'],
+    'auditor': ['home', 'detect', 'status', 'settings'],
+    'analyst': ['home', 'collect', 'train', 'evaluate', 'detect', 'settings'],
     'viewer': ['home', 'status']
 }
 
@@ -122,7 +122,8 @@ PAGE_NAMES: Dict[str, str] = {
     'train': 'Pelatihan Model',
     'evaluate': 'Evaluasi Model',
     'detect': 'Deteksi Anomali',
-    'status': 'Status Sistem'
+    'status': 'Status Sistem',
+    'settings': 'Pengaturan'
 }
 
 # =============================================================================

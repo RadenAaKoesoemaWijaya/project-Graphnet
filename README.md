@@ -23,6 +23,7 @@ Aplikasi ini dilengkapi antarmuka interaktif berbasis **Streamlit**, mendukung p
   5. 📈 *Concept Drift & Retraining*: Pemantauan pergeseran distribusi data (uji Kolmogorov-Smirnov) dan orkestrasi retrain model Champion-Challenger.
 - **🤖 Agentic AI Copilot & RAG**: Asisten investigasi cerdas multi-provider (Google Gemini, OpenAI, Local Ollama, Offline Heuristic Engine) bertenaga FAISS Knowledge Base (ICD-10, CPT, regulasi medis) yang dilengkapi sanitasi PII (HIPAA/UU PDP).
 - **🧭 Interactive Top Navbar & Pipeline Tracker**: Status bar modern *glassmorphic* di setiap halaman yang memuat *live telemetry pills* (status baris & fitur data, model aktif, akselerasi GPU/CPU, status Copilot) dan *5-stage visual breadcrumb tracker* (`Unggah Data` ➔ `Praproses & Fitur` ➔ `Pelatihan` ➔ `Evaluasi` ➔ `Deteksi`).
+- **⚙️ Comprehensive Settings Page**: Halaman konfigurasi terpusat untuk LLM provider, API key management, model registry, system configuration, dan security settings dengan UI yang intuitif dan mudah digunakan.
 - **📊 Real-Time Sidebar Status Dashboard**: Panel metrik samping dengan *progress bar* kesiapan pipeline (0%–100%), kartu spesifikasi dataset streaming, metrik model AI/ML, dan monitor kesehatan hardware.
 - **🛡️ Cryptographic Audit Trail**: Pencatatan riwayat audit forensik berantai hash SHA-256 anti-tamper untuk setiap aksi ingestion, preprocessing, training, deteksi, dan ekspor data.
 - **🔐 Enterprise Auth Gateway & RBAC (Role-Based Access Control)**: Gerbang autentikasi aman dengan pemisahan 4 peran pengguna (*Admin*, *Auditor*, *Analyst*, *Viewer*) yang mematuhi standar UU No. 27 Tahun 2022 (UU PDP) dan HIPAA Security Rule, dilengkapi pencatatan audit log login/logout otomatis.
@@ -87,7 +88,8 @@ project-Graphnet/
 │       ├── training.py              # Pelatihan model ML Ensemble & GNN
 │       ├── evaluation.py            # Evaluasi performa, metrik confusion matrix, & XAI
 │       ├── detection.py             # Deteksi fraud batch, rule audit, review table & AI Copilot
-│       └── status.py                # Telemetri performa sistem & audit logging
+│       ├── status.py                # Telemetri performa sistem & audit logging
+│       └── settings.py              # Konfigurasi LLM, Copilot, model registry & sistem
 │
 ├── tests/                           # Unit test & integrasi otomatis (Pytest) - 82 Test Cases
 │   ├── conftest.py                  # Pytest fixtures & setup lingkungan uji
@@ -344,9 +346,9 @@ Sistem menyediakan 4 akun uji coba terkonfigurasi dengan hash SHA-256 dan *crypt
 
 | Peran (Role) | Username | Password Default | Modul / Halaman yang Diizinkan | Deskripsi Peran & Tanggung Jawab |
 | :--- | :--- | :--- | :--- | :--- |
-| 🔴 **Admin** | `admin` | `AdminAstina2026!` | **Semua Halaman**:<br>• 🏠 *Beranda* (`home`)<br>• 📥 *Unggah Data* (`collect`)<br>• ⚙️ *Pelatihan Model* (`train`)<br>• 📊 *Evaluasi Model* (`evaluate`)<br>• 🚨 *Deteksi Anomali* (`detect`)<br>• 📈 *Status Sistem* (`status`) | Administrator sistem dengan izin penuh untuk konfigurasi parameter, telemetri, inspeksi rantai audit log, pelatihan model, dan deteksi fraud. |
-| 🔵 **Auditor** | `auditor` | `AuditorAstina2026!` | • 🏠 *Beranda* (`home`)<br>• 🚨 *Deteksi Anomali* (`detect`)<br>• 📈 *Status Sistem* (`status`) | Investigator/auditor klaim asuransi. Fokus pada audit anomali klaim, penelusuran graf sindikat (*fraud ring*), penggunaan AI Copilot RAG, dan pembuatan dokumen Berita Acara Pemeriksaan (BAP). |
-| 🟣 **Analyst** | `analyst` | `AnalystAstina2026!` | • 🏠 *Beranda* (`home`)<br>• 📥 *Unggah Data* (`collect`)<br>• ⚙️ *Pelatihan Model* (`train`)<br>• 📊 *Evaluasi Model* (`evaluate`)<br>• 🚨 *Deteksi Anomali* (`detect`) | Data scientist / AI engineer yang berwenang mengunggah dataset, menjalankan seleksi fitur & PCA, melatih model AI/GNN, serta mengevaluasi metrik AUC/F1-Score. |
+| 🔴 **Admin** | `admin` | `AdminAstina2026!` | **Semua Halaman**:<br>• 🏠 *Beranda* (`home`)<br>• 📥 *Unggah Data* (`collect`)<br>• ⚙️ *Pelatihan Model* (`train`)<br>• 📊 *Evaluasi Model* (`evaluate`)<br>• 🚨 *Deteksi Anomali* (`detect`)<br>• 📈 *Status Sistem* (`status`)<br>• ⚙️ *Pengaturan* (`settings`) | Administrator sistem dengan izin penuh untuk konfigurasi parameter, telemetri, inspeksi rantai audit log, pelatihan model, deteksi fraud, dan konfigurasi LLM/Copilot. |
+| 🔵 **Auditor** | `auditor` | `AuditorAstina2026!` | • 🏠 *Beranda* (`home`)<br>• 🚨 *Deteksi Anomali* (`detect`)<br>• 📈 *Status Sistem* (`status`)<br>• ⚙️ *Pengaturan* (`settings`) | Investigator/auditor klaim asuransi. Fokus pada audit anomali klaim, penelusuran graf sindikat (*fraud ring*), penggunaan AI Copilot RAG, pembuatan dokumen Berita Acara Pemeriksaan (BAP), dan konfigurasi LLM. |
+| 🟣 **Analyst** | `analyst` | `AnalystAstina2026!` | • 🏠 *Beranda* (`home`)<br>• 📥 *Unggah Data* (`collect`)<br>• ⚙️ *Pelatihan Model* (`train`)<br>• 📊 *Evaluasi Model* (`evaluate`)<br>• 🚨 *Deteksi Anomali* (`detect`)<br>• ⚙️ *Pengaturan* (`settings`) | Data scientist / AI engineer yang berwenang mengunggah dataset, menjalankan seleksi fitur & PCA, melatih model AI/GNN, mengevaluasi metrik AUC/F1-Score, dan konfigurasi sistem. |
 | ⚪ **Viewer** | `viewer` | `ViewerAstina2026!` | • 🏠 *Beranda* (`home`)<br>• 📈 *Status Sistem* (`status`) | Pihak manajemen atau eksekutif dengan hak akses baca (*read-only*). Memantau dashboard ringkasan eksekutif, status kesiapan pipeline, dan kesehatan resource server. |
 
 ---
@@ -659,6 +661,206 @@ Konfigurasi opsional dapat disetel melalui file `.env` di direktori utama:
 | `AUDIT_TRAIL_LOG_PATH` | `logs/audit_trail.jsonl` | Lokasi berkas penyimpanan chained audit trail |
 | `GEMINI_API_KEY` | *(Opsional)* | API Key Google Gemini untuk fitur Agentic Copilot |
 | `OPENAI_API_KEY` | *(Opsional)* | API Key OpenAI untuk fallback LLM Copilot |
+
+---
+
+## ⚙️ Konfigurasi LLM & Agentic Copilot
+
+ASTINA dilengkapi dengan **Agentic AI Copilot** yang berfungsi sebagai asisten investigasi cerdas untuk pembuatan Berita Acara Pemeriksaan (BAP) dan analisis klaim asuransi. Copilot mendukung berbagai provider LLM dan dapat dikonfigurasi melalui antarmuka pengguna atau environment variables.
+
+### 📍 Lokasi Konfigurasi
+
+Terdapat dua cara untuk mengkonfigurasi LLM dan Copilot:
+
+1. **Melalui Halaman Pengaturan (Recommended)**:
+   - Navigasi ke menu **⚙️ Pengaturan** di sidebar
+   - Pilih tab **🔌 LLM & Copilot**
+   - Konfigurasi provider, API key, dan parameter lainnya
+
+2. **Melalui Environment Variables (Production)**:
+   - Set environment variables sebelum menjalankan aplikasi
+   - Konfigurasi ini akan mengoverride pengaturan UI
+
+### 🔌 Provider LLM yang Didukung
+
+| Provider | Deskripsi | Kelebihan | Kekurangan |
+| :--- | :--- | :--- | :--- |
+| **🧠 Heuristic Engine (Offline)** | Mesin deterministik berbasis rule yang bekerja tanpa koneksi internet | Tidak memerlukan API key, offline, cepat, gratis | Kurang fleksibel untuk kasus kompleks |
+| **🔵 Google Gemini** | LLM cloud dari Google AI Studio | Cepat, akurat, mendukung bahasa Indonesia, harga kompetitif | Memerlukan API key dan koneksi internet |
+| **🟢 OpenAI / Compatible** | GPT models dari OpenAI atau API compatible | Sangat akurat, ekosistem luas, banyak pilihan model | Harga lebih tinggi, memerlukan API key |
+| **🟠 Local Ollama** | LLM lokal yang berjalan di komputer Anda | Offline, privasi data penuh, gratis | Memerlukan resource hardware tinggi |
+
+### 🔑 Cara Mendapatkan API Key
+
+#### Google Gemini API Key
+1. Kunjungi [Google AI Studio](https://aistudio.google.com/app/apikey)
+2. Login dengan akun Google Anda
+3. Klik "Create API Key"
+4. Pilih atau buat project Google Cloud
+5. Copy API key yang dihasilkan
+6. Gunakan di konfigurasi ASTINA
+
+**Biaya:** Gemini 1.5 Flash sangat terjangkau (~$0.075 per 1M tokens), Gemini 1.5 Pro lebih mahal (~$3.5 per 1M tokens).
+
+#### OpenAI API Key
+1. Kunjungi [OpenAI Platform](https://platform.openai.com/api-keys)
+2. Login atau sign up
+3. Klik "Create new secret key"
+4. Beri nama untuk key (misal: "ASTINA-Copilot")
+5. Copy API key (hanya muncul sekali!)
+6. Gunakan di konfigurasi ASTINA
+
+**Biaya:** GPT-4o-mini (~$0.15 per 1M input tokens, $0.60 per 1M output tokens), GPT-4o lebih mahal.
+
+#### Local Ollama (Gratis)
+1. Download dan install [Ollama](https://ollama.ai/)
+2. Jalankan Ollama di terminal: `ollama serve`
+3. Download model yang diinginkan: `ollama pull llama3`
+4. Ollama akan berjalan di `http://localhost:11434`
+5. Konfigurasi endpoint di ASTINA
+
+**Biaya:** Gratis, menggunakan resource komputer lokal.
+
+### 📝 Environment Variables LLM
+
+Untuk konfigurasi permanen di lingkungan production, gunakan environment variables berikut:
+
+| Variable | Default | Deskripsi |
+| :--- | :--- | :--- |
+| `LLM_PROVIDER` | `heuristic` | Provider default (`gemini`, `openai`, `ollama`, `heuristic`) |
+| `LLM_MODEL_NAME` | `gemini-1.5-flash` | Model name default |
+| `LLM_ENDPOINT_URL` | `http://localhost:11434/api/generate` | Custom endpoint URL (untuk Ollama/OpenAI compatible) |
+| `GEMINI_API_KEY` | *(kosong)* | Google Gemini API Key |
+| `OPENAI_API_KEY` | *(kosong)* | OpenAI API Key |
+| `LLM_TEMPERATURE` | `0.2` | Temperature untuk generation (0.0 - 1.0) |
+| `LLM_MAX_TOKENS` | `2048` | Maximum tokens untuk response |
+
+#### Contoh Pengaturan Environment Variables
+
+**Windows PowerShell:**
+```powershell
+# Set Google Gemini sebagai provider
+$env:LLM_PROVIDER="gemini"
+$env:GEMINI_API_KEY="your-gemini-api-key-here"
+$env:LLM_MODEL_NAME="gemini-1.5-flash"
+
+# Jalankan aplikasi
+python run.py
+```
+
+**Linux / macOS / Bash:**
+```bash
+# Set OpenAI sebagai provider
+export LLM_PROVIDER="openai"
+export OPENAI_API_KEY="your-openai-api-key-here"
+export LLM_MODEL_NAME="gpt-4o-mini"
+
+# Jalankan aplikasi
+python run.py
+```
+
+**Docker Compose:**
+```yaml
+services:
+  astina:
+    environment:
+      - LLM_PROVIDER=gemini
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - LLM_MODEL_NAME=gemini-1.5-flash
+```
+
+### 🎯 Panduan Konfigurasi UI
+
+#### Melalui Halaman Pengaturan
+1. Buka aplikasi ASTINA
+2. Login dengan akun yang memiliki akses (Admin, Auditor, atau Analyst)
+3. Klik menu **⚙️ Pengaturan** di sidebar
+4. Pilih tab **🔌 LLM & Copilot**
+5. Konfigurasi parameter berikut:
+
+**Langkah-langkah:**
+1. **Pilih Provider**: Pilih dari dropdown (Heuristic, Gemini, OpenAI, Ollama)
+2. **Masukkan API Key**: Untuk Gemini/OpenAI, masukkan API key di field password
+3. **Nama Auditor**: Masukkan nama yang akan muncul di BAP
+4. **Model Selection**: Pilih model sesuai provider
+5. **Endpoint Configuration**: Untuk Ollama/OpenAI compatible, atur endpoint URL
+6. **Test Koneksi**: Klik tombol "🔌 Test Koneksi" untuk verifikasi
+7. **Simpan Konfigurasi**: Klik "💾 Simpan Konfigurasi"
+
+#### Melalui Halaman Deteksi (Legacy)
+Konfigurasi juga tersedia di halaman **Deteksi Anomali** → Tab 4 (AI Investigator Copilot & BAP) → expander "🛠️ Konfigurasi Copilot & LLM Engine".
+
+### 🔐 Keamanan API Key
+
+**Best Practices untuk API Key Management:**
+
+1. **Jangan Hardcode di Kode**: Jangan pernah menaruh API key langsung di source code
+2. **Gunakan Environment Variables**: Simpan API key di environment variables atau secret manager
+3. **Rotasi Key Secara Berkala**: Ganti API key secara berkala untuk keamanan
+4. **Limit Access**: Batasi penggunaan API key dengan IP whitelisting jika tersedia
+5. **Monitor Usage**: Pantau penggunaan API key untuk mendeteksi anomaly
+6. **Jangan Share**: Jangan pernah share API key secara publik atau commit ke git
+
+**Docker/Production Environment:**
+```bash
+# Gunakan Docker secrets atau environment variables dari secret manager
+docker run -e GEMINI_API_KEY=$(cat /run/secrets/gemini_key) astina-app
+```
+
+### 🤖 RAG Knowledge Base
+
+ASTINA Copilot dilengkapi dengan **RAG (Retrieval-Augmented Generation)** Knowledge Base yang berisi:
+
+- **8 Dokumen Regulasi Medis**: Termasuk REG-007 (Audit Klaim Deviasi Biaya) dan REG-008 (Kesesuaian Klinis ICD-10 & CPT)
+- **ICD-10 Diagnosis Codes**: Database kode diagnosis internasional
+- **CPT Procedure Codes**: Database kode prosedur medis
+- **Regulasi JKN**: Aturan Jaminan Kesehatan Nasional
+- **Fraud Detection Guidelines**: Panduan deteksi kecurangan
+
+Knowledge base ini menggunakan **FAISS Vector Search** untuk mengambil konteks regulasi yang relevan secara real-time saat pembuatan BAP.
+
+### 🛡️ AI Security Guardrail
+
+ASTINA dilengkapi dengan **AI Security Guardrail** yang melindungi dari:
+
+- **Prompt Injection**: Mencegah manipulasi prompt oleh user
+- **System Prompt Leakage**: Mencegah kebocoran sistem prompt ke output
+- **Jailbreak Attempts**: Mendeteksi dan memblokir percobaan jailbreak
+- **Harmful Content**: Filter konten berbahaya atau tidak sesuai
+
+Jika LLM response terdeteksi melanggar guardrail, sistem otomatis fallback ke **Heuristic Engine** dengan konteks yang sama.
+
+### 🔧 Troubleshooting LLM
+
+**Masalah Umum:**
+
+1. **Connection Timeout**:
+   - Pastikan koneksi internet stabil
+   - Cek firewall dan proxy settings
+   - Verifikasi API key masih valid
+
+2. **API Key Invalid**:
+   - Verifikasi API key tidak expired
+   - Pastikan API key memiliki permission yang cukup
+   - Cek billing account aktif
+
+3. **Rate Limiting**:
+   - Tunggu beberapa saat sebelum mencoba lagi
+   - Pertimbangkan upgrade plan provider
+   - Gunakan model yang lebih hemat kuota
+
+4. **Ollama Connection Failed**:
+   - Pastikan Ollama berjalan: `ollama serve`
+   - Cek endpoint URL: `http://localhost:11434`
+   - Verifikasi model terinstall: `ollama list`
+
+5. **Fallback to Heuristic**:
+   - Jika LLM gagal, sistem otomatis menggunakan Heuristic Engine
+   - Ini adalah perilaku normal dan aman
+   - BAP tetap akan dibuat dengan konteks yang sama
+
+**Debug Mode:**
+Untuk troubleshooting, cek log di terminal atau halaman **Status Sistem** untuk melihat error detail dari LLM calls.
 
 ---
 
