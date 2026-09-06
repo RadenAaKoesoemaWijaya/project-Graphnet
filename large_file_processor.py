@@ -160,10 +160,17 @@ def stream_transform_to_parquet(input_parquet_path: str, output_parquet_path: st
         )
 
     if output_parquet_path is None:
+        # Ensure TEMP_DATA_DIR exists before attempting to write
+        os.makedirs(TEMP_DATA_DIR, exist_ok=True)
         output_parquet_path = os.path.join(
             TEMP_DATA_DIR,
             f"preprocessed_{uuid.uuid4().hex}.parquet"
         )
+    else:
+        # Ensure the parent directory of the output path exists
+        output_dir = os.path.dirname(output_parquet_path)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
 
     lf = pl.scan_parquet(input_parquet_path)
     transform_exprs = []
@@ -310,6 +317,8 @@ def preprocess_large_dataset(df_or_path, chunk_size=50000, progress_bar=True, en
     if isinstance(df_or_path, str) and os.path.exists(df_or_path):
         parquet_input_path = df_or_path
     else:
+        # Ensure TEMP_DATA_DIR exists before attempting to write
+        os.makedirs(TEMP_DATA_DIR, exist_ok=True)
         # Convert in-memory DataFrame to temporary Parquet to stream out-of-core
         parquet_input_path = os.path.join(TEMP_DATA_DIR, f"temp_input_{uuid.uuid4().hex}.parquet")
         if isinstance(df_or_path, pd.DataFrame):
@@ -327,6 +336,8 @@ def preprocess_large_dataset(df_or_path, chunk_size=50000, progress_bar=True, en
             enable_data_validation=enable_data_validation
         )
         
+        # Ensure TEMP_DATA_DIR exists before attempting to write
+        os.makedirs(TEMP_DATA_DIR, exist_ok=True)
         output_parquet_path = os.path.join(TEMP_DATA_DIR, f"preprocessed_{uuid.uuid4().hex}.parquet")
         out_path, final_features, metadata = stream_transform_to_parquet(
             parquet_input_path,

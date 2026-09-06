@@ -123,6 +123,34 @@ def show_evaluation_page():
             f"{'...' if len(alignment_summary['filled_zero_features']) > 5 else ''}"
         )
 
+    threshold_col1, threshold_col2 = st.columns([3, 1])
+    with threshold_col1:
+        eval_threshold = st.slider(
+            "🎚️ Threshold Klasifikasi Anomali",
+            min_value=0.10,
+            max_value=0.95,
+            value=float(st.session_state.get('eval_threshold', 0.5)),
+            step=0.05,
+            help="Untuk deteksi fraud, threshold rendah = recall tinggi (lebih banyak tertangkap tapi lebih banyak false positive). Threshold tinggi = precision tinggi."
+        )
+        st.session_state['eval_threshold'] = eval_threshold
+    with threshold_col2:
+        st.metric("Threshold Aktif", f"{eval_threshold:.2f}")
+        if st.button("🧠 Auto-Optimasi (ImbalanceHandler)", key="optimize_thr_btn", disabled=(training_mode != TRAINING_MODE_SUPERVISED or label_column not in eval_df.columns)):
+            try:
+                if hasattr(detector, 'imbalance_handler') and detector.imbalance_handler is not None:
+                    _X_temp = X_eval_df.values
+                    _y_temp = pd.Series(eval_df[label_column]).fillna(0).astype(int).values
+                    _prob_temp, _ = detector.predict_anomaly_probability(_X_temp, edge_index=None, edge_type=None, device=device)
+                    best_thr, _ = detector.imbalance_handler.optimize_threshold(_y_temp, _prob_temp)
+                    st.session_state['eval_threshold'] = float(best_thr)
+                    st.success(f"✅ Threshold optimal: {best_thr:.3f}")
+                    st.rerun()
+                else:
+                    st.warning("⚠️ ImbalanceHandler tidak tersedia pada detector.")
+            except Exception as _e:
+                st.error(f"⚠️ Gagal optimasi threshold: {str(_e)}")
+
     if st.button("🚀 Mulai Evaluasi Model", key="start_evaluation"):
         with st.spinner("Mengevaluasi model..."):
             edge_index = None
@@ -153,7 +181,8 @@ def show_evaluation_page():
                 edge_type=edge_type,
                 device=device
             )
-            predictions = (probabilities > 0.5).astype(int)
+            _active_thr = float(st.session_state.get('eval_threshold', 0.5))
+            predictions = (probabilities > _active_thr).astype(int)
 
             result_df = eval_df.copy()
             result_df['anomaly_probability'] = probabilities
@@ -181,6 +210,7 @@ def show_evaluation_page():
     test_probabilities = st.session_state['eval_probabilities']
     individual_probs = st.session_state['individual_probs']
     y_true = st.session_state.get('eval_y_true')
+    _active_thr = float(st.session_state.get('eval_threshold', 0.5))
     fraud_rate = float(np.mean(test_predictions))
 
     st.subheader("📊 Hasil Evaluasi")
@@ -196,7 +226,7 @@ def show_evaluation_page():
 
     fig = create_probability_distribution(result_df['anomaly_probability'],
                                         title="Distribusi Probabilitas Anomali",
-                                        threshold=0.5)
+                                        threshold=_active_thr)
     st.plotly_chart(fig, width='stretch')
 
     st.subheader("🔍 Performa Individual Algoritma")
@@ -206,7 +236,7 @@ def show_evaluation_page():
             'Algoritma': algorithm_name,
             'Rata-rata Probabilitas': float(np.mean(probs)),
             'Simpangan Baku': float(np.std(probs)),
-            'Tingkat Anomali @ 0.5': float(np.mean(np.array(probs) > 0.5))
+            f'Tingkat Anomali @ {_active_thr:.2f}': float(np.mean(np.array(probs) > _active_thr))
         })
     algo_df = pd.DataFrame(algorithm_rows)
     st.dataframe(algo_df, width='stretch')
@@ -234,10 +264,12 @@ def show_evaluation_page():
         with st.expander("📊 Distribusi Probabilitas GNN"):
             fig_gnn = create_probability_distribution(gnn_probs,
                                                       title="Distribusi Probabilitas GNN",
-                                                      threshold=0.5)
+                                                      threshold=_active_thr)
             st.plotly_chart(fig_gnn, width='stretch')
 
-    if y_true is not None and len(np.unique(y_true)) == 2:
+    _has_supervised_labels = (y_true is not None and len(np.unique(y_true)) == 2)
+
+    if _has_supervised_labels:
         st.subheader("✅ Metrik Supervised (Ground Truth Nyata)")
         try:
             metrics_col1, metrics_col2, metrics_col3, metrics_col4 = st.columns(4)
@@ -399,45 +431,52 @@ def show_evaluation_page():
     if 'adaptive_learning_manager' not in st.session_state:
         st.session_state['adaptive_learning_manager'] = AdaptiveLearningManager(detector=detector)
     
-    # Log current evaluation metrics
-    # Initialize metric variables with safe defaults so they are always bound,
-    # regardless of whether the supervised block above executed (unsupervised mode
-    # skips that block and would otherwise cause UnboundLocalError here).
-    accuracy = float(np.mean(test_predictions == test_predictions))  # 1.0 placeholder
-    precision = 0.0
-    recall = 0.0
-    f1 = 0.0
-    roc_auc_value = 0.0
-    if y_true is not None and len(np.unique(y_true)) == 2:
+    # Compute supervised metrics under consistent guard. Sentinel None means
+    # "metric unavailable" — prevents logging misleading placeholders (e.g.
+    # accuracy=1.0 from a tautology or precision=0.0 when no labels exist).
+    _m_accuracy = None
+    _m_precision = None
+    _m_recall = None
+    _m_f1 = None
+    _m_roc_auc = None
+
+    if _has_supervised_labels:
         try:
-            accuracy = float((test_predictions == y_true).mean())
             from sklearn.metrics import precision_score as _ps, recall_score as _rs, f1_score as _f1, roc_auc_score as _roc
-            precision = float(_ps(y_true, test_predictions, zero_division=0))
-            recall = float(_rs(y_true, test_predictions, zero_division=0))
-            f1 = float(_f1(y_true, test_predictions, zero_division=0))
+            _m_accuracy = float((test_predictions == y_true).mean())
+            _m_precision = float(_ps(y_true, test_predictions, zero_division=0))
+            _m_recall = float(_rs(y_true, test_predictions, zero_division=0))
+            _m_f1 = float(_f1(y_true, test_predictions, zero_division=0))
             try:
-                roc_auc_value = float(_roc(y_true, test_probabilities))
+                _m_roc_auc = float(_roc(y_true, test_probabilities))
             except Exception:
-                roc_auc_value = 0.0
+                _m_roc_auc = 0.0
         except Exception:
             pass
 
-    if st.session_state['eval_y_true'] is not None:
+    _supervised_metrics_valid = (
+        _m_accuracy is not None
+        and _m_precision is not None
+        and _m_recall is not None
+        and _m_f1 is not None
+    )
+
+    if _supervised_metrics_valid:
         current_metrics = {
-            'accuracy': accuracy,
-            'precision': precision,
-            'recall': recall,
-            'f1_score': f1,
-            'roc_auc': roc_auc_value,
+            'accuracy': _m_accuracy,
+            'precision': _m_precision,
+            'recall': _m_recall,
+            'f1_score': _m_f1,
+            'roc_auc': _m_roc_auc if _m_roc_auc is not None else 0.0,
         }
         st.session_state['performance_monitor'].log_performance(current_metrics)
         
         # Show current metrics
         col_perf1, col_perf2, col_perf3 = st.columns(3)
         with col_perf1:
-            st.metric("Akurasi Saat Ini", f"{accuracy:.4f}")
+            st.metric("Akurasi Saat Ini", f"{_m_accuracy:.4f}")
         with col_perf2:
-            st.metric("F1 Score Saat Ini", f"{f1:.4f}")
+            st.metric("F1 Score Saat Ini", f"{_m_f1:.4f}")
         with col_perf3:
             trend = st.session_state['performance_monitor'].get_performance_trend('f1_score')
             trend_emoji = {'improving': '📈', 'degrading': '📉', 'stable': '➡️', 'insufficient_data': '❓'}.get(trend, '❓')
@@ -459,7 +498,7 @@ def show_evaluation_page():
         else:
             st.success(f"✅ {retrain_reason}")
     else:
-        st.info("Monitoring performa tersedia untuk mode supervised dengan label valid")
+        st.info("Monitoring performa tersedia untuk mode supervised dengan label valid (2 kelas unik).")
     
     # Adaptive Learning Section
     st.markdown("---")

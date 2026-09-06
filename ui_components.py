@@ -1,4 +1,5 @@
 import streamlit as st
+import time
 
 def apply_custom_css():
     """Apply custom CSS styling to the Streamlit app with optimized selectors"""
@@ -569,6 +570,78 @@ def custom_container(content, container_type="highlight"):
         st.markdown(f'<div class="highlight-container">{content}</div>', unsafe_allow_html=True)
     elif container_type == "results":
         st.markdown(f'<div class="results-container">{content}</div>', unsafe_allow_html=True)
+
+
+SESSION_LRU_MAX_SIZE = 20
+SESSION_LRU_NAMESPACES = ("bap", "rag_results", "qa_history")
+
+def _lru_tracker_key(namespace: str) -> str:
+    return f"__lru_tracker_{namespace}__"
+
+def lru_session_put(namespace: str, key: str, value: object) -> None:
+    """
+    Store `value` at `key` inside st.session_state subject to a per-namespace
+    LRU eviction cap of SESSION_LRU_MAX_SIZE entries. When the cap is exceeded,
+    the oldest (least-recently-written-or-accessed) entry is deleted to free
+    memory, preventing unbounded growth (e.g. 1000 generated BAP per session).
+
+    The `key` argument must be the SAME string used to store the item in
+    session_state (e.g. "generated_bap_CLM-001").
+    """
+    if namespace not in SESSION_LRU_NAMESPACES:
+        raise ValueError(f"Unknown LRU namespace '{namespace}'. Allowed: {SESSION_LRU_NAMESPACES}")
+    tracker_key = _lru_tracker_key(namespace)
+    tracker = st.session_state.get(tracker_key)
+    if tracker is None:
+        tracker = []
+        st.session_state[tracker_key] = tracker
+    # 1) Promotion: if key already tracked, move it to the end (most-recent)
+    if key in tracker:
+        tracker.remove(key)
+    tracker.append(key)
+    # 2) Eviction loop: evict oldest (index 0) until within cap
+    while len(tracker) > SESSION_LRU_MAX_SIZE:
+        evicted_key = tracker.pop(0)
+        if evicted_key in st.session_state:
+            try:
+                del st.session_state[evicted_key]
+            except Exception:
+                pass
+    # 3) Actually store the value
+    st.session_state[key] = value
+
+def lru_session_touch(namespace: str, key: str) -> None:
+    """Mark `key` as recently accessed (promote to MRU tail). No-op if missing."""
+    if namespace not in SESSION_LRU_NAMESPACES:
+        return
+    tracker_key = _lru_tracker_key(namespace)
+    tracker = st.session_state.get(tracker_key)
+    if tracker is None or key not in tracker:
+        return
+    tracker.remove(key)
+    tracker.append(key)
+
+def lru_session_get(namespace: str, key: str, default=None):
+    """Read a value AND promote its recency. Safe default if absent."""
+    if key in st.session_state:
+        lru_session_touch(namespace, key)
+        return st.session_state[key]
+    return default
+
+def rate_limit_check(action_key: str, cooldown_seconds: float = 2.0) -> tuple[bool, float]:
+    """
+    Client-side (per-session) rate limiter for expensive actions (LLM calls,
+    dossier generation). Returns (allowed, remaining_wait_seconds).
+    When `remaining_wait_seconds` > 0 the call should be blocked by the UI.
+    """
+    now = time.time()
+    last_key = f"__ratelimit_last_{action_key}__"
+    last = st.session_state.get(last_key, 0.0)
+    elapsed = now - last
+    if elapsed < cooldown_seconds:
+        return False, float(cooldown_seconds - elapsed)
+    st.session_state[last_key] = now
+    return True, 0.0
 
 def render_top_navbar_status():
     """

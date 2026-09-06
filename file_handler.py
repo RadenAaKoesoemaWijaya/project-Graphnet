@@ -24,10 +24,17 @@ def stream_csv_to_parquet(file_path, output_path=None, chunk_size=50000, progres
     file_size = os.path.getsize(file_path)
     check_file_size(file_size)
     if output_path is None:
+        # Ensure TEMP_DATA_DIR exists before attempting to write
+        os.makedirs(TEMP_DATA_DIR, exist_ok=True)
         output_path = os.path.join(
             TEMP_DATA_DIR,
             f"raw_{uuid.uuid4().hex}.parquet",
         )
+    else:
+        # Ensure the parent directory of the output path exists
+        output_dir = os.path.dirname(output_path)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
 
     writer = None
     total_rows = 0
@@ -331,6 +338,9 @@ def ingest_file_to_raw_parquet(uploaded_file, file_type='csv'):
     file_size = uploaded_file.size
     check_file_size(file_size)
     
+    # Ensure TEMP_DATA_DIR exists before attempting to write
+    os.makedirs(TEMP_DATA_DIR, exist_ok=True)
+    
     unique_id = uuid.uuid4().hex
     raw_parquet_path = os.path.join(TEMP_DATA_DIR, f"raw_{unique_id}.parquet")
     
@@ -396,6 +406,9 @@ def save_processed_data(df, prefix="processed"):
     """
     if isinstance(df, str) and os.path.exists(df):
         return df
+
+    # Ensure TEMP_DATA_DIR exists before attempting to write
+    os.makedirs(TEMP_DATA_DIR, exist_ok=True)
 
     # Apply Arrow compatibility fix before saving
     df_copy = fix_arrow_compatibility(df.copy())

@@ -18,6 +18,11 @@ from ui.utils import (
 )
 from agentic_copilot import AgenticInvestigatorCopilot, ClaimContextBuilder
 from rag_engine import get_rag_knowledge_base
+from ui_components import (
+    lru_session_put,
+    lru_session_get,
+    rate_limit_check,
+)
 import shutil
 
 
@@ -1016,32 +1021,42 @@ def show_detection_page():
                     rag_key = f"rag_results_{selected_claim}"
 
                     if btn_gen_bap:
-                        _engine_label = provider_choice
-                        with st.spinner(f"🤖 Menyusun BAP menggunakan **{_engine_label}**... (maks. ~30 detik untuk cloud LLM)"):
-                            dossier_res = copilot_engine.generate_investigation_dossier(
-                                context=claim_ctx,
-                                investigator_name=auditor_name
-                            )
-                            st.session_state[dossier_key] = dossier_res
+                        # ── P1-3: Rate limit BAP generation (cooldown 2s) ──
+                        _allowed, _remain = rate_limit_check(f"bap_gen_{selected_claim}", cooldown_seconds=2.0)
+                        if not _allowed:
+                            st.warning(f"⏳ Tunggu {_remain:.1f} detik sebelum generate BAP ulang (rate limit anti-spam).")
+                        else:
+                            _engine_label = provider_choice
+                            with st.spinner(f"🤖 Menyusun BAP menggunakan **{_engine_label}**... (maks. ~30 detik untuk cloud LLM)"):
+                                dossier_res = copilot_engine.generate_investigation_dossier(
+                                    context=claim_ctx,
+                                    investigator_name=auditor_name
+                                )
+                                # ── P1-2: LRU-capped session storage (max 20 klaim aktif) ──
+                                lru_session_put("bap", dossier_key, dossier_res)
 
                     if btn_view_rag:
-                        with st.spinner("🔍 Mencari pasal regulasi terkait di RAG Knowledge Base..."):
-                            rag_kb = get_rag_knowledge_base()
-                            # ── FIX #4: build a richer query including claim-specific codes ──
-                            _active = claim_ctx.get("active_rules", [])
-                            _svc    = claim_ctx.get("service_code", "")
-                            _diag   = claim_ctx.get("diagnosis_code", "")
-                            _rag_query = (
-                                " ".join(_active) + f" {_svc} {_diag}"
-                                if _active
-                                else f"deviasi biaya outlier statistik kewajaran tarif {_svc} {_diag}"
-                            )
-                            matched_docs = rag_kb.retrieve(query=_rag_query.strip(), top_k=3)
-                            st.session_state[rag_key] = matched_docs
+                        _allowed, _remain = rate_limit_check(f"rag_lookup_{selected_claim}", cooldown_seconds=1.0)
+                        if not _allowed:
+                            st.warning(f"⏳ Tunggu {_remain:.1f} detik sebelum cek regulasi ulang.")
+                        else:
+                            with st.spinner("🔍 Mencari pasal regulasi terkait di RAG Knowledge Base..."):
+                                rag_kb = get_rag_knowledge_base()
+                                # ── FIX #4: build a richer query including claim-specific codes ──
+                                _active = claim_ctx.get("active_rules", [])
+                                _svc    = claim_ctx.get("service_code", "")
+                                _diag   = claim_ctx.get("diagnosis_code", "")
+                                _rag_query = (
+                                    " ".join(_active) + f" {_svc} {_diag}"
+                                    if _active
+                                    else f"deviasi biaya outlier statistik kewajaran tarif {_svc} {_diag}"
+                                )
+                                matched_docs = rag_kb.retrieve(query=_rag_query.strip(), top_k=3)
+                                lru_session_put("rag_results", rag_key, matched_docs)
 
                     # ── RAG RESULTS PANEL ──
-                    if rag_key in st.session_state:
-                        matched_docs = st.session_state[rag_key]
+                    matched_docs = lru_session_get("rag_results", rag_key, None)
+                    if matched_docs is not None:
                         st.markdown("---")
                         st.markdown("#### 📚 Referensi Regulasi Terkait (RAG Knowledge Base)")
                         if matched_docs:
@@ -1059,8 +1074,8 @@ def show_detection_page():
                             st.info("Tidak ditemukan regulasi yang relevan untuk aturan dan kode tindakan klaim ini.")
 
                     # ── DOSSIER / BAP REPORT PANEL ──
-                    if dossier_key in st.session_state:
-                        dossier_data = st.session_state[dossier_key]
+                    dossier_data = lru_session_get("bap", dossier_key, None)
+                    if dossier_data is not None:
                         st.markdown("---")
 
                         # ── FIX #3: Clear LLM vs Heuristic visual indicator ────
@@ -1116,30 +1131,37 @@ def show_detection_page():
                     st.markdown("##### 💬 Tanya Copilot tentang Klaim Ini:")
 
                     qa_history_key = f"copilot_qa_history_{selected_claim}"
-                    if qa_history_key not in st.session_state:
-                        st.session_state[qa_history_key] = []
+                    # ── P1-2: LRU-capped storage ──
+                    _qa_hist = lru_session_get("qa_history", qa_history_key, None)
+                    if _qa_hist is None:
+                        _qa_hist = []
+                        lru_session_put("qa_history", qa_history_key, _qa_hist)
 
                     # ── FIX #5: Q&A history controls — limit + clear button ──
                     QA_MAX = 10
-                    _qa_hist = st.session_state[qa_history_key]
                     if _qa_hist:
                         _qa_hdr_col, _qa_clr_col = st.columns([5, 1])
                         with _qa_hdr_col:
                             st.caption(f"Riwayat percakapan: **{len(_qa_hist)}** pertanyaan (maks. {QA_MAX})")
                         with _qa_clr_col:
                             if st.button("🗑️ Hapus", key=f"clear_qa_{selected_claim}", help="Hapus seluruh riwayat percakapan untuk klaim ini"):
-                                st.session_state[qa_history_key] = []
+                                lru_session_put("qa_history", qa_history_key, [])
                                 st.rerun()
 
                         # Show only last QA_MAX exchanges; oldest are silently dropped
                         visible_hist = _qa_hist[-QA_MAX:]
                         for q_item in visible_hist:
+                            _q_provider = str(q_item.get('provider_used', '')).upper()
+                            _prov_badge = (
+                                f"&nbsp;<span style='background:#eef2ff;color:#3730a3;font-size:0.65rem;padding:1px 6px;border-radius:8px;font-weight:700;'>{_q_provider}</span>"
+                                if _q_provider else ""
+                            )
                             st.markdown(
                                 f"<div style='background:#f1f5f9;border-radius:8px;padding:8px 12px;margin-bottom:6px;font-size:0.85rem;'><b>👤 Auditor:</b> {q_item['question']}</div>",
                                 unsafe_allow_html=True
                             )
                             st.markdown(
-                                f"<div style='background:#f0f9ff;border:1px solid #bae6fd;border-left:4px solid #0284c7;border-radius:0 8px 8px 0;padding:12px 16px;margin-bottom:12px;font-size:0.87rem;'>{q_item['answer']}</div>",
+                                f"<div style='background:#f0f9ff;border:1px solid #bae6fd;border-left:4px solid #0284c7;border-radius:0 8px 8px 0;padding:12px 16px;margin-bottom:12px;font-size:0.87rem;'>{_prov_badge}&nbsp;&nbsp;{q_item['answer']}</div>",
                                 unsafe_allow_html=True
                             )
 
@@ -1155,14 +1177,25 @@ def show_detection_page():
                         ask_clicked = st.button("Tanyakan", key=f"q_btn_{selected_claim}")
 
                     if ask_clicked and user_question and user_question.strip():
-                        with st.spinner("🤖 Menganalisis respon audit..."):
-                            ans = copilot_engine.answer_investigator_query(context=claim_ctx, user_question=user_question.strip())
-                            _qa_list = st.session_state[qa_history_key]
-                            _qa_list.append({"question": user_question.strip(), "answer": ans})
-                            # Trim to QA_MAX so session state doesn't grow unbounded
-                            if len(_qa_list) > QA_MAX:
-                                st.session_state[qa_history_key] = _qa_list[-QA_MAX:]
-                            st.rerun()
+                        # ── P1-3: Rate limit Q&A (cooldown 2s) ──
+                        _allowed, _remain = rate_limit_check(f"qa_{selected_claim}", cooldown_seconds=2.0)
+                        if not _allowed:
+                            st.warning(f"⏳ Tunggu {_remain:.1f} detik sebelum bertanya lagi (anti-spam).")
+                        else:
+                            with st.spinner("🤖 Menganalisis respon audit..."):
+                                ans = copilot_engine.answer_investigator_query(context=claim_ctx, user_question=user_question.strip())
+                                _qa_hist = lru_session_get("qa_history", qa_history_key, [])
+                                # ── QA item sekarang menyertakan provider_used ──
+                                _qa_hist.append({
+                                    "question": user_question.strip(),
+                                    "answer": ans,
+                                    "provider_used": str(copilot_engine.provider if hasattr(copilot_engine, 'provider') else provider_choice).lower()
+                                })
+                                # Trim to QA_MAX so session state doesn't grow unbounded
+                                if len(_qa_hist) > QA_MAX:
+                                    _qa_hist = _qa_hist[-QA_MAX:]
+                                lru_session_put("qa_history", qa_history_key, _qa_hist)
+                                st.rerun()
 
         # ── TAB 5: Concept Drift ──
         with tab_drift:

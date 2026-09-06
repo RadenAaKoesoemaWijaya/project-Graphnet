@@ -12,16 +12,106 @@ import os
 import re
 import json
 import logging
+import time
 import urllib.request
 import urllib.error
 from typing import Dict, Any, List, Optional, Tuple
 import pandas as pd
 import numpy as np
 
+try:
+    import requests as _requests
+    _has_requests_lib = True
+except ImportError:  # pragma: no cover - requests is almost always available in env with streamlit
+    _has_requests_lib = False
+    _requests = None  # type: ignore[assignment]
+
 from pii_masker import PIIMasker
 from rag_engine import get_rag_knowledge_base
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# LLM API RUNTIME CONSTANTS
+# =============================================================================
+
+DEFAULT_CLOUD_LLM_TIMEOUT: float = 30.0
+DEFAULT_OLLAMA_TIMEOUT: float = 60.0
+LLM_RETRY_MAX_ATTEMPTS: int = 3
+LLM_RETRY_MULTIPLIER: float = 1.5
+LLM_RETRY_MIN_WAIT: float = 1.0
+LLM_RETRY_MAX_WAIT: float = 10.0
+
+
+def _llm_exponential_backoff(attempt: int) -> float:
+    """Return backoff seconds (clamped) for 0-based retry attempt."""
+    wait = LLM_RETRY_MIN_WAIT * (LLM_RETRY_MULTIPLIER ** max(0, attempt))
+    return float(min(LLM_RETRY_MAX_WAIT, wait))
+
+
+def _perform_http_json_request(
+    method: str,
+    url: str,
+    payload: Optional[Dict[str, Any]] = None,
+    headers: Optional[Dict[str, str]] = None,
+    timeout: float = DEFAULT_CLOUD_LLM_TIMEOUT,
+) -> Tuple[Optional[Dict[str, Any]], Optional[Exception]]:
+    """
+    Unified JSON HTTP client with transparent `requests` → `urllib` fallback.
+    Returns (parsed_json_dict or None, last_exception_or_None).
+    Transient exceptions are bubbled up so the caller can retry.
+    """
+    data_bytes = json.dumps(payload or {}).encode("utf-8")
+    hdrs = {"Content-Type": "application/json", **(headers or {})}
+    method = method.upper()
+
+    if _has_requests_lib and _requests is not None:
+        try:
+            resp = _requests.request(
+                method=method,
+                url=url,
+                data=data_bytes,
+                headers=hdrs,
+                timeout=timeout,
+            )
+            resp.raise_for_status()
+            return resp.json(), None
+        except Exception as _e:
+            # 4xx errors (invalid key, bad payload) are not transient → let caller decide
+            if isinstance(_e, _requests.HTTPError):
+                status = getattr(_e.response, "status_code", 0)
+                if 400 <= status < 500 and status not in (408, 429):
+                    return None, _e  # non-transient → do not retry upstack
+            return None, _e  # 5xx, timeout, connection, 408/429 → retry eligible
+
+    # ── Fallback: urllib ──
+    try:
+        req = urllib.request.Request(url, data=data_bytes, headers=hdrs, method=method)
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = resp.read().decode("utf-8")
+            return json.loads(body), None
+    except urllib.error.HTTPError as _he:
+        status = getattr(_he, "code", 0)
+        if 400 <= status < 500 and status not in (408, 429):
+            return None, _he  # non-transient
+        return None, _he
+    except Exception as _e:
+        return None, _e
+
+
+def _is_transient_llm_error(exc: Optional[Exception]) -> bool:
+    """Decide whether a given exception should trigger an LLM retry."""
+    if exc is None:
+        return False
+    msg = str(exc).lower()
+    transient_markers = (
+        "timeout", "timed out", "timed_out", "connection error", "connectionreset",
+        "connection refused", "service unavailable", "bad gateway", "502", "503", "504",
+        "408", "429", "rate limit", "too many requests", "temporarily unavailable",
+        "dns", "network is unreachable", "read timed", "write timed", "broken pipe",
+    )
+    return any(m in msg for m in transient_markers)
 
 
 # =============================================================================
@@ -32,12 +122,28 @@ class AIGuardrail:
     """Security filter to detect and prevent prompt injections, jailbreaks, and sensitive leaks."""
 
     INJECTION_PATTERNS = [
+        # ── English / framework patterns (original) ──
         r'(?i)(ignore|bypass|override)\s+(all\s+)?(previous|prior|system)\s+(instructions|prompts|rules)',
-        r'(?i)(reveal|show|leak|print|output|dump)\s+(your\s+)?(system\s+prompt|initial\s+prompt|developer\s+instructions)',
-        r'(?i)(you\s+are\s+now|act\s+as|pretend\s+to\s+be)\s+(dan|unrestricted|jailbreak|developer\s+mode|root)',
-        r'(?i)(<\|im_start\|>|<\|im_end\|>|\[SYSTEM\]|\[INST\])',
-        r'(?i)(drop\s+database|drop\s+table|delete\s+from\s+claims)',
+        r'(?i)(reveal|show|leak|print|output|dump)\s+(your\s+)?(system\s+prompt|initial\s+prompt|developer\s+instructions|hidden\s+instructions)',
+        r'(?i)(you\s+are\s+now|act\s+as|pretend\s+to\s+be)\s+(dan|unrestricted|jailbreak|developer\s+mode|root|sudo|admin\s+mode)',
+        r'(?i)(<\|im_start\|>|<\|im_end\|>|\[SYSTEM\]|\[INST\]|\<\<SYS\>\>)',
+        r'(?i)(drop\s+database|drop\s+table|delete\s+from\s+claims|update\s+.*\s+set\s+.*\s*=|insert\s+into\s+.*\s*values)',
+        r'(?i)\b(rm\s+-rf|chmod\s+777|curl\s+\|sh|wget\s+-qO-.*\|\s*bash|exec\s*\(|eval\s*\(|os\.system|subprocess\.call)\b',
+        # ── Bahasa Indonesia jailbreak / prompt injection patterns ──
+        r'(?i)(abaikan|lewatkan|batalkan|sampingi)\s+(semua\s+)?(petunjuk|instruksi|aturan|perintah)\s+(sebelumnya|sebelum|awal|sistem)',
+        r'(?i)(tunjukkan|beberkan|keluarkan|cetak|bocorkan|tuliskan)\s+(prompt\s+sistem|perintah\s+awal|instruksi\s+developer|petunjuk\s+tersembunyi|prompt\s+asli)',
+        r'(?i)(sekarang\s+kamu\s+adalah|berperan\s+sebagai|pura-pura\s+menjadi|anda\s+sekarang\s+menjadi)\s+(mode\s+developer|tanpa\s+batasan|jailbreak|root|admin|bebas\s+aturan|tanpa\s+filter|DAN|AI\s+terbuka)',
+        r'(?i)(hapus\s+aturan|matikan\s+filter|nonaktifkan\s+keamanan|buka\s+semua\s+pembatasan|hilangkan\s+guardrail|abaikan\s+etika)',
+        r'(?i)(bagaimana\s+cara\s+kamu\s+dibuat|apa\s+kode\s+program\s+kamu|berikan\s+sumber\s+instruksi|detailkan\s+konfigurasi\s+prompt\s+kamu|apa\s+yang\s+ada\s+dalam\s+sistem\s+prompt\s+kamu)',
+        r'(?i)(jangan\s+patuhi|tidak\s+usah\s+ikuti|melanggar\s+saja\s+aturan|abaikan\s+hukum|abaikan\s+kebijakan|aturan\s+tidak\s+berlaku\s+bagimu)',
+        r'(?i)(beritahu\s+rahasia\s+sistem|apa\s+kata\s+sandi\s+kamu|siapa\s+admin\s+kamu|bagaimana\s+cara\s+mengakses\s+database|download\s+seluruh\s+data)',
+        r'(?i)(skenario\s+ini\s+hanya\s+fiksi|ini\s+cuma\s+permainan\s+peran|roleplay\s+sebagai\s+penjahat|anggap\s+saja\s+aturan\s+tidak\s+ada|dalam\s+dunia\s+paralel\s+kamu\s+bisa)',
+        r'(?i)(ulangi\s+persis\s+apa\s+yang\s+di\s+atas|salin\s+semua\s+petunjuk|copy\s+paste\s+seluruh\s+prompt|ulang\s+instruksi\s+awal\s+sampai\s+akhir)',
+        r'(?i)(untuk\s+tujuan\s+penelitian|saya\s+peneliti\s+AI|demi\s+keamanan\s+sistem|CEO\s+memerintahkan|bos\s+anda\s+mengatakan|developer\s+mengizinkan\s+agar)',
     ]
+
+    # Max length of system prompt snippet we consider a "leak" if it appears verbatim in output
+    _PROMPT_LEAK_MIN_WINDOW = 60
 
     @classmethod
     def validate_query(cls, user_question: str) -> Tuple[bool, str]:
@@ -50,9 +156,66 @@ class AIGuardrail:
 
         for pattern in cls.INJECTION_PATTERNS:
             if re.search(pattern, user_question):
-                return False, f"Pola instruksi mencurigakan terdeteksi ({pattern})."
+                return False, f"Pola instruksi mencurigakan terdeteksi (guardrail)."
 
         return True, user_question.strip()
+
+    @classmethod
+    def _snippets_from_prompt(cls, prompt: str, window: int = _PROMPT_LEAK_MIN_WINDOW) -> set:
+        """Extract rolling character snippets of `window` length from a prompt string."""
+        s = re.sub(r'\s+', ' ', prompt).strip()
+        snips: set = set()
+        if len(s) <= window:
+            snips.add(s)
+        else:
+            for i in range(0, len(s) - window + 1, max(1, window // 4)):
+                snips.add(s[i:i+window])
+        return snips
+
+    @classmethod
+    def validate_output(
+        cls,
+        llm_output: str,
+        *system_prompts: str,
+        replacement: str = "[REDACTED: bagian instruksi internal tidak boleh ditampilkan.]"
+    ) -> Tuple[bool, str]:
+        """
+        Post-process an LLM output to prevent prompt/system-instruction leakage.
+        Returns (is_safe: bool, sanitized_output: str).
+        - is_safe=False only when leakage is unambiguous (in which case sanitized_output
+          is the full replacement string); otherwise suspicious snippets are elided
+          and is_safe is still True.
+        """
+        if not llm_output:
+            return True, ""
+
+        leak_snips: set = set()
+        for sp in system_prompts:
+            if sp:
+                leak_snips.update(cls._snippets_from_prompt(sp))
+
+        sanitized = llm_output
+        leak_hit = False
+        if leak_snips:
+            normalized_out = re.sub(r'\s+', ' ', sanitized).strip()
+            for snip in leak_snips:
+                if snip and snip in normalized_out:
+                    # Replace longest-matching literal occurrences; use regex-insensitive match with whitespace-tolerant pattern
+                    pattern = r'\s*'.join(re.escape(ch) for ch in snip)
+                    new_san, n_subs = re.subn(pattern, replacement, sanitized, flags=re.IGNORECASE)
+                    if n_subs > 0:
+                        sanitized = new_san
+                        leak_hit = True
+
+        if leak_hit and len(sanitized) < max(60, 0.4 * len(llm_output)):
+            # Most of the original response was redacted → likely an outright prompt dump
+            return False, replacement
+        return True, sanitized
+
+
+# Shared cache of the last system-prompts so output guarding works from anywhere.
+_LAST_DOSSIER_PROMPT: str = ""
+_LAST_QUERY_PROMPT: str = ""
 
 
 # =============================================================================
@@ -178,6 +341,7 @@ class AgenticInvestigatorCopilot:
     ) -> Dict[str, Any]:
         """
         Generate a complete official Case Dossier (BAP) with regulatory citations.
+        Output is post-filtered by AIGuardrail to prevent system prompt leakage.
         """
         # Retrieve relevant regulatory context from RAG
         rag_context = self.rag.get_regulation_context(
@@ -197,11 +361,23 @@ class AgenticInvestigatorCopilot:
             response_text = self._call_ollama_raw(prompt)
 
         # If LLM API returned empty or failed, gracefully fall back to heuristic with full context
+        heuristic_used = False
         if not response_text:
             if self.provider != "heuristic":
                 logger.info(f"LLM provider '{self.provider}' unavailable or failed; using deterministic heuristic fallback.")
                 actual_provider_used = f"{self.provider} (Fallback: Heuristic)"
             response_text = self._generate_heuristic_dossier(context, rag_context, investigator_name)
+            heuristic_used = True
+
+        # ── P2-2: Prompt/System-Leak Output Guardrail ──
+        if not heuristic_used and response_text:
+            _safe, _san = AIGuardrail.validate_output(response_text, prompt)
+            if not _safe:
+                logger.warning("AIGuardrail detected prompt leakage in dossier LLM response — falling back to heuristic.")
+                response_text = self._generate_heuristic_dossier(context, rag_context, investigator_name)
+                actual_provider_used = f"{self.provider} (Fallback: Heuristic) [Leak Guard]"
+            else:
+                response_text = _san
 
         # Build clean cryptographic audit hash mockup for integrity
         import hashlib
@@ -230,8 +406,9 @@ class AgenticInvestigatorCopilot:
     ) -> str:
         """
         Answer an ad-hoc investigative question regarding a specific claim context.
+        Applies input guardrail (prompt injection) AND output guardrail (prompt leakage).
         """
-        # Cybersecurity Guardrail Check
+        # Cybersecurity Guardrail Check (input)
         is_safe, guard_detail = AIGuardrail.validate_query(user_question)
         if not is_safe:
             logger.warning(f"AI Guardrail blocked query: '{user_question}' - Reason: {guard_detail}")
@@ -273,6 +450,7 @@ class AgenticInvestigatorCopilot:
         )
 
         raw_answer = None
+        heuristic_used = False
         if self.provider == "gemini" and self.api_key:
             raw_answer = self._call_gemini_raw(prompt)
         elif self.provider in ("openai", "azure") and self.api_key:
@@ -280,9 +458,19 @@ class AgenticInvestigatorCopilot:
         elif self.provider == "ollama":
             raw_answer = self._call_ollama_raw(prompt)
 
-        if raw_answer:
-            return raw_answer
+        if not raw_answer:
+            heuristic_used = True
 
+        if not heuristic_used and raw_answer:
+            # ── P2-2: Prompt/System-Leak Output Guardrail ──
+            _safe, _san = AIGuardrail.validate_output(raw_answer, prompt)
+            if not _safe:
+                logger.warning("AIGuardrail detected prompt leakage in Q&A LLM response — falling back to heuristic.")
+                heuristic_used = True
+            else:
+                return _san
+
+        # Reachable when heuristic_used is True (LLM unavailable OR output-guard rejected LLM output)
         return self._generate_heuristic_query_answer(context, user_question, rag_context)
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -345,76 +533,115 @@ Sajikan dokumen dalam Markdown resmi yang rapi, ringkas, dan to-the-point menggu
 """
 
     # ─────────────────────────────────────────────────────────────────────────
-    # LLM API CALLERS (RAW & FALLBACK-SAFE)
+    # LLM API CALLERS (RAW & FALLBACK-SAFE, WITH RETRY)
     # ─────────────────────────────────────────────────────────────────────────
 
     def _call_gemini_raw(self, prompt: str) -> Optional[str]:
-        """Execute Gemini REST API call; returns None on any failure."""
-        try:
-            model = self.model_name if "gemini" in (self.model_name or "") else "gemini-1.5-flash"
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={self.api_key}"
-            payload = {
-                "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {"temperature": 0.2, "maxOutputTokens": 2048}
-            }
-            req = urllib.request.Request(
-                url,
-                data=json.dumps(payload).encode("utf-8"),
-                headers={"Content-Type": "application/json"}
-            )
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                return data["candidates"][0]["content"]["parts"][0]["text"]
-        except Exception as e:
-            logger.warning(f"Gemini API call failed: {e}")
-            return None
+        """Execute Gemini REST API call with retry + exponential backoff."""
+        model = self.model_name if "gemini" in (self.model_name or "") else "gemini-1.5-flash"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={self.api_key}"
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"temperature": 0.2, "maxOutputTokens": 2048}
+        }
+        last_exc: Optional[Exception] = None
+        for attempt in range(LLM_RETRY_MAX_ATTEMPTS):
+            try:
+                data, exc = _perform_http_json_request(
+                    "POST", url, payload=payload,
+                    headers={"Content-Type": "application/json"},
+                    timeout=DEFAULT_CLOUD_LLM_TIMEOUT,
+                )
+                if data is not None and "candidates" in data and data["candidates"]:
+                    return data["candidates"][0]["content"]["parts"][0]["text"]
+                if not _is_transient_llm_error(exc):
+                    logger.warning(f"Gemini API non-transient failure (attempt {attempt+1}): {exc}")
+                    return None
+                last_exc = exc
+            except Exception as _e:
+                if not _is_transient_llm_error(_e):
+                    logger.warning(f"Gemini API non-transient exception: {_e}")
+                    return None
+                last_exc = _e
+            if attempt + 1 < LLM_RETRY_MAX_ATTEMPTS:
+                wait = _llm_exponential_backoff(attempt)
+                logger.info(f"Gemini attempt {attempt+1} failed; retrying in {wait:.1f}s...")
+                time.sleep(wait)
+        logger.warning(f"Gemini API call failed after {LLM_RETRY_MAX_ATTEMPTS} attempts: {last_exc}")
+        return None
 
     def _call_openai_raw(self, prompt: str) -> Optional[str]:
-        """Execute OpenAI / Azure-compatible REST API call; returns None on any failure."""
-        try:
-            url = self.endpoint_url if (self.endpoint_url and "api.openai.com" not in self.endpoint_url and "11434" not in self.endpoint_url) else "https://api.openai.com/v1/chat/completions"
-            model = self.model_name if (self.model_name and "gemini" not in self.model_name and "llama" not in self.model_name) else "gpt-4o-mini"
-            payload = {
-                "model": model,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.2
-            }
-            req = urllib.request.Request(
-                url,
-                data=json.dumps(payload).encode("utf-8"),
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {self.api_key}"
-                }
-            )
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                return data["choices"][0]["message"]["content"]
-        except Exception as e:
-            logger.warning(f"OpenAI/Azure API call failed: {e}")
-            return None
+        """Execute OpenAI / Azure-compatible REST API call with retry + exponential backoff."""
+        url = self.endpoint_url if (self.endpoint_url and "api.openai.com" not in self.endpoint_url and "11434" not in self.endpoint_url) else "https://api.openai.com/v1/chat/completions"
+        model = self.model_name if (self.model_name and "gemini" not in self.model_name and "llama" not in self.model_name) else "gpt-4o-mini"
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.2
+        }
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}"
+        }
+        last_exc: Optional[Exception] = None
+        for attempt in range(LLM_RETRY_MAX_ATTEMPTS):
+            try:
+                data, exc = _perform_http_json_request(
+                    "POST", url, payload=payload, headers=headers,
+                    timeout=DEFAULT_CLOUD_LLM_TIMEOUT,
+                )
+                if data is not None and "choices" in data and data["choices"]:
+                    return data["choices"][0]["message"]["content"]
+                if not _is_transient_llm_error(exc):
+                    logger.warning(f"OpenAI/Azure non-transient failure (attempt {attempt+1}): {exc}")
+                    return None
+                last_exc = exc
+            except Exception as _e:
+                if not _is_transient_llm_error(_e):
+                    logger.warning(f"OpenAI/Azure non-transient exception: {_e}")
+                    return None
+                last_exc = _e
+            if attempt + 1 < LLM_RETRY_MAX_ATTEMPTS:
+                wait = _llm_exponential_backoff(attempt)
+                logger.info(f"OpenAI attempt {attempt+1} failed; retrying in {wait:.1f}s...")
+                time.sleep(wait)
+        logger.warning(f"OpenAI/Azure API call failed after {LLM_RETRY_MAX_ATTEMPTS} attempts: {last_exc}")
+        return None
 
     def _call_ollama_raw(self, prompt: str) -> Optional[str]:
-        """Execute Local Ollama call; returns None on any failure."""
-        try:
-            endpoint = self.endpoint_url or "http://localhost:11434/api/generate"
-            model = self.model_name if (self.model_name and "gemini" not in self.model_name and "gpt" not in self.model_name) else "llama3"
-            payload = {
-                "model": model,
-                "prompt": prompt,
-                "stream": False
-            }
-            req = urllib.request.Request(
-                endpoint,
-                data=json.dumps(payload).encode("utf-8"),
-                headers={"Content-Type": "application/json"}
-            )
-            with urllib.request.urlopen(req, timeout=45) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                return data.get("response", None)
-        except Exception as e:
-            logger.warning(f"Ollama call failed: {e}")
-            return None
+        """Execute Local Ollama call with retry + exponential backoff."""
+        endpoint = self.endpoint_url or "http://localhost:11434/api/generate"
+        model = self.model_name if (self.model_name and "gemini" not in self.model_name and "gpt" not in self.model_name) else "llama3"
+        payload = {
+            "model": model,
+            "prompt": prompt,
+            "stream": False
+        }
+        last_exc: Optional[Exception] = None
+        for attempt in range(LLM_RETRY_MAX_ATTEMPTS):
+            try:
+                data, exc = _perform_http_json_request(
+                    "POST", endpoint, payload=payload,
+                    headers={"Content-Type": "application/json"},
+                    timeout=DEFAULT_OLLAMA_TIMEOUT,
+                )
+                if data is not None and data.get("response"):
+                    return data.get("response")
+                if not _is_transient_llm_error(exc):
+                    logger.warning(f"Ollama non-transient failure (attempt {attempt+1}): {exc}")
+                    return None
+                last_exc = exc
+            except Exception as _e:
+                if not _is_transient_llm_error(_e):
+                    logger.warning(f"Ollama non-transient exception: {_e}")
+                    return None
+                last_exc = _e
+            if attempt + 1 < LLM_RETRY_MAX_ATTEMPTS:
+                wait = _llm_exponential_backoff(attempt)
+                logger.info(f"Ollama attempt {attempt+1} failed; retrying in {wait:.1f}s...")
+                time.sleep(wait)
+        logger.warning(f"Ollama call failed after {LLM_RETRY_MAX_ATTEMPTS} attempts: {last_exc}")
+        return None
 
     def test_connection(self) -> dict:
         """

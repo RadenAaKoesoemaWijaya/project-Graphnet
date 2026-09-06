@@ -320,6 +320,7 @@ def cleanup_large_session_state(threshold_mb=100):
                                 import tempfile
                                 import uuid
                                 temp_dir = tempfile.gettempdir()
+                                os.makedirs(temp_dir, exist_ok=True)
                                 temp_path = os.path.join(temp_dir, f"astina_{key}_{uuid.uuid4()}.parquet")
                                 data.to_parquet(temp_path, index=False, compression='snappy')
                                 st.session_state[temp_key] = temp_path

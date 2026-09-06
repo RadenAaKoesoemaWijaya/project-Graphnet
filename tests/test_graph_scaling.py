@@ -38,8 +38,14 @@ def test_star_graph_resets_index_and_enforces_edge_limit():
 
 # ── Tests for build_anomaly_subgraph ─────────────────────────────────────────
 
-import torch
-from model import build_anomaly_subgraph
+import pytest
+from model import build_anomaly_subgraph, TORCH_AVAILABLE
+
+# Import real torch only when available (TORCH_AVAILABLE is set by model.py after
+# trying to import the genuine package). Otherwise the sys.modules entry is the
+# model.py dummy shim which does not expose LongTensor / nn etc.
+if TORCH_AVAILABLE:
+    import torch  # noqa: WPS433 — conditional import protected by TORCH_AVAILABLE guard
 
 
 def _make_star_graph(n: int = 100):
@@ -137,6 +143,8 @@ def test_build_anomaly_subgraph_with_edge_type():
 
 def test_build_anomaly_subgraph_torch_tensor_input():
     """Accepts torch.LongTensor edge_index (common in-memory format)."""
+    if not TORCH_AVAILABLE:
+        pytest.skip("PyTorch not installed (TORCH_AVAILABLE=False); cannot test torch.LongTensor inputs.")
     node_features, ei_np, scores = _make_star_graph(50)
     ei_torch = torch.LongTensor(ei_np)
     result = build_anomaly_subgraph(

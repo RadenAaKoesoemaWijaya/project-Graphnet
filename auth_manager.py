@@ -15,6 +15,96 @@ import streamlit as st
 
 logger = logging.getLogger(__name__)
 
+_AUTH_PASSWORD_ENV_MAP = {
+    'admin': 'ASTINA_ADMIN_PASSWORD',
+    'auditor': 'ASTINA_AUDITOR_PASSWORD',
+    'analyst': 'ASTINA_ANALYST_PASSWORD',
+    'viewer': 'ASTINA_VIEWER_PASSWORD',
+}
+
+
+_DEV_DEFAULT_PASSWORDS: Dict[str, str] = {
+    'admin': 'AdminAstina2026!',
+    'auditor': 'AuditorAstina2026!',
+    'analyst': 'AnalystAstina2026!',
+    'viewer': 'ViewerAstina2026!',
+}
+
+
+def _build_default_users() -> Dict[str, Dict[str, Any]]:
+    """
+    Build DEFAULT_USERS at import-time from environment variables.
+
+    PRODUCTION MODE (AUTH_ENABLED=true):
+      Passwords MUST be provided via the corresponding env var:
+        ASTINA_ADMIN_PASSWORD, ASTINA_AUDITOR_PASSWORD,
+        ASTINA_ANALYST_PASSWORD, ASTINA_VIEWER_PASSWORD.
+      No hardcoded fallback passwords are used. If any required env var is
+      missing, a WARNING is emitted and the affected account hash is set to
+      a deliberately non-matching sentinel value so login cannot succeed
+      until the operator configures credentials.
+
+    DEVELOPMENT MODE (AUTH_ENABLED=false, default):
+      If the password env var is NOT set, the well-known dev default
+      password is used as a convenience fallback so engineers can log in
+      immediately. If the env var IS set, it takes precedence (allows
+      testing custom credentials even without enforcing the auth gate).
+    """
+    base_users: Dict[str, Dict[str, Any]] = {
+        'admin': {
+            'name': 'System Administrator',
+            'role': 'admin',
+            'email': 'admin@astina.ai',
+        },
+        'auditor': {
+            'name': 'Investigator Senior ASTINA',
+            'role': 'auditor',
+            'email': 'auditor@astina.ai',
+        },
+        'analyst': {
+            'name': 'Lead Data Scientist',
+            'role': 'analyst',
+            'email': 'analyst@astina.ai',
+        },
+        'viewer': {
+            'name': 'Executive Reviewer',
+            'role': 'viewer',
+            'email': 'viewer@astina.ai',
+        },
+    }
+
+    auth_enabled = os.getenv('AUTH_ENABLED', 'false').lower().strip() in ('true', '1', 'yes', 'on')
+    missing: List[str] = []
+
+    for username, env_key in _AUTH_PASSWORD_ENV_MAP.items():
+        raw = os.getenv(env_key)
+        if raw and raw.strip():
+            base_users[username]['hash'] = hash_password(raw.strip())
+        elif not auth_enabled:
+            fallback = _DEV_DEFAULT_PASSWORDS.get(username)
+            if fallback:
+                base_users[username]['hash'] = hash_password(fallback)
+                logger.info(
+                    "[DEV MODE] Using default password for user '%s' because %s is unset. "
+                    "Set AUTH_ENABLED=true + %s for production hardening.",
+                    username, env_key, env_key,
+                )
+            else:
+                missing.append(f"{username} ({env_key})")
+                base_users[username]['hash'] = '__NOT_SET__' + hash_password(f"__disabled__:{username}")
+        else:
+            missing.append(f"{username} ({env_key})")
+            base_users[username]['hash'] = '__NOT_SET__' + hash_password(f"__disabled__:{username}")
+
+    if auth_enabled and missing:
+        logger.warning(
+            "AUTH_ENABLED=true tetapi password env var berikut TIDAK DISET: %s. "
+            "Akun terkait DINONAKTIFKAN sampai env var disediakan.",
+            ', '.join(missing),
+        )
+    return base_users
+
+
 # =============================================================================
 # DEFAULT ROLES & PERMISSIONS
 # =============================================================================
@@ -43,34 +133,8 @@ def hash_password(password: str, salt: str = "ASTINA_SECURE_SALT_v1") -> str:
     """Hash password using SHA-256 with cryptographic salt."""
     return hashlib.sha256(f"{salt}:{password}:{salt}".encode('utf-8')).hexdigest()
 
-# Initial pre-configured accounts (passwords can be overridden via environment variables)
-# Default dev passwords: admin -> AdminAstina2026!, auditor -> AuditorAstina2026!, analyst -> AnalystAstina2026!, viewer -> ViewerAstina2026!
-DEFAULT_USERS: Dict[str, Dict[str, Any]] = {
-    'admin': {
-        'name': 'System Administrator',
-        'role': 'admin',
-        'hash': hash_password(os.getenv('ASTINA_ADMIN_PASSWORD', 'AdminAstina2026!')),
-        'email': 'admin@astina.ai'
-    },
-    'auditor': {
-        'name': 'Investigator Senior ASTINA',
-        'role': 'auditor',
-        'hash': hash_password(os.getenv('ASTINA_AUDITOR_PASSWORD', 'AuditorAstina2026!')),
-        'email': 'auditor@astina.ai'
-    },
-    'analyst': {
-        'name': 'Lead Data Scientist',
-        'role': 'analyst',
-        'hash': hash_password(os.getenv('ASTINA_ANALYST_PASSWORD', 'AnalystAstina2026!')),
-        'email': 'analyst@astina.ai'
-    },
-    'viewer': {
-        'name': 'Executive Reviewer',
-        'role': 'viewer',
-        'hash': hash_password(os.getenv('ASTINA_VIEWER_PASSWORD', 'ViewerAstina2026!')),
-        'email': 'viewer@astina.ai'
-    }
-}
+
+DEFAULT_USERS: Dict[str, Dict[str, Any]] = _build_default_users()
 
 
 class AuthManager:
@@ -219,12 +283,35 @@ class AuthManager:
 
                 st.markdown("</div>", unsafe_allow_html=True)
 
-                with st.expander("ℹ️ Bantuan Akses & Kredensial Default Uji Coba"):
-                    st.markdown("""
-                    | Role | Username | Password Default | Hak Akses |
-                    | :--- | :--- | :--- | :--- |
-                    | **Admin** | `admin` | `AdminAstina2026!` | Akses Penuh Seluruh Modul |
-                    | **Auditor** | `auditor` | `AuditorAstina2026!` | Deteksi, Review Klaim & Copilot BAP |
-                    | **Analyst** | `analyst` | `AnalystAstina2026!` | Upload, Training & Evaluasi Model |
-                    | **Viewer** | `viewer` | `ViewerAstina2026!` | Akses Baca & Status Sistem |
-                    """)
+                auth_enforced = AuthManager.is_auth_enforced()
+                if auth_enforced:
+                    with st.expander("ℹ️ Panduan Konfigurasi Kredensial"):
+                        st.markdown("""
+                        **Mode Produksi Aktif (AUTH_ENABLED=true)**
+
+                        Kredensial diatur secara eksklusif melalui environment variables berikut:
+
+                        | Role | Username | Env Variable Password |
+                        | :--- | :--- | :--- |
+                        | Admin | `admin` | `ASTINA_ADMIN_PASSWORD` |
+                        | Auditor | `auditor` | `ASTINA_AUDITOR_PASSWORD` |
+                        | Analyst | `analyst` | `ASTINA_ANALYST_PASSWORD` |
+                        | Viewer | `viewer` | `ASTINA_VIEWER_PASSWORD` |
+
+                        > ⚠️ Password default dinonaktifkan demi keamanan.
+                        > Silakan hubungi administrator untuk mendapatkan kredensial, atau set env var terkait sebelum menjalankan aplikasi.
+                        """)
+                else:
+                    with st.expander("ℹ️ Kredensial Mode Pengembangan (Dev)"):
+                        st.markdown("""
+                        **⚠️ MODE PENGEMBANGAN — GUNAKAN HANYA DI LINGKUNGAN TERPERCAYA**
+
+                        | Role | Username | Password | Hak Akses |
+                        | :--- | :--- | :--- | :--- |
+                        | Admin | `admin` | `AdminAstina2026!` | Akses Penuh Seluruh Modul |
+                        | Auditor | `auditor` | `AuditorAstina2026!` | Deteksi, Review Klaim & Copilot BAP |
+                        | Analyst | `analyst` | `AnalystAstina2026!` | Upload, Training & Evaluasi Model |
+                        | Viewer | `viewer` | `ViewerAstina2026!` | Akses Baca & Status Sistem |
+
+                        > 🔐 **Untuk Produksi**: Set `AUTH_ENABLED=true` dan berikan password **unik** melalui `ASTINA_*_PASSWORD` environment variables. Jangan pernah gunakan password default di atas untuk deployment publik.
+                        """)

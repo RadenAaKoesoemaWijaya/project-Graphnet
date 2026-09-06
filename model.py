@@ -2641,14 +2641,30 @@ class CombinedAnomalyDetector:
             if device_type == 'cpu':
                 epochs = self.autoencoder_params.get('epochs', 50)  # Reduced epochs for CPU
                 # Ensure epochs is at least 1, if 0 use default
+                try:
+                    epochs = int(epochs) if epochs is not None else 50
+                except (TypeError, ValueError):
+                    epochs = 50
                 epochs = max(1, epochs) if epochs > 0 else 50
                 patience = self.autoencoder_params.get('early_stopping_patience', 8)  # More aggressive early stopping
+                try:
+                    patience = int(patience) if patience is not None else 8
+                except (TypeError, ValueError):
+                    patience = 8
                 patience = max(1, patience) if patience > 0 else 8
             else:
                 epochs = self.autoencoder_params.get('epochs', 100)
                 # Ensure epochs is at least 1, if 0 use default
+                try:
+                    epochs = int(epochs) if epochs is not None else 100
+                except (TypeError, ValueError):
+                    epochs = 100
                 epochs = max(1, epochs) if epochs > 0 else 100
                 patience = self.autoencoder_params.get('early_stopping_patience', 10)
+                try:
+                    patience = int(patience) if patience is not None else 10
+                except (TypeError, ValueError):
+                    patience = 10
                 patience = max(1, patience) if patience > 0 else 10
 
             min_delta = self.autoencoder_params.get('early_stopping_min_delta', 1e-4)
@@ -2835,16 +2851,29 @@ class CombinedAnomalyDetector:
             if HDBSCAN_AVAILABLE:
                 logger.info("Using HDBSCAN for faster big data clustering")
                 self.dbscan = hdbscan.HDBSCAN(
-                    min_cluster_size=int(self.dbscan_params.get('min_samples', 5)),
-                    min_samples=int(self.dbscan_params.get('min_samples', 5))
+                    min_cluster_size=int(self.dbscan_params.get('min_cluster_size', self.dbscan_params.get('min_samples', 5))),
+                    min_samples=int(self.dbscan_params.get('min_samples', 5)),
+                    core_dist_n_jobs=-1,
+                    algorithm='boruvka_kdtree',
                 )
             else:
                 logger.warning("HDBSCAN not available, falling back to DBSCAN")
                 self.dbscan = DBSCAN(
                     eps=float(self.dbscan_params.get('eps', 0.5)),
-                    min_samples=int(self.dbscan_params.get('min_samples', 5))
+                    min_samples=int(self.dbscan_params.get('min_samples', 5)),
                 )
             self.dbscan.fit(features_scaled)
+
+            try:
+                labels_arr = np.asarray(self.dbscan.labels_)
+                core_mask = labels_arr != -1
+                if core_mask.sum() > 0:
+                    self._dbscan_core_samples = features_scaled[core_mask].copy()
+                else:
+                    self._dbscan_core_samples = None
+            except Exception as _core_exc:
+                logger.warning("Failed to cache HDBSCAN/DBSCAN core samples: %s", _core_exc)
+                self._dbscan_core_samples = None
 
         # Progressive model training: Skip GNN for small datasets
         if len(features) < 1000 and 'gnn' in self.algorithms:
@@ -2916,40 +2945,63 @@ class CombinedAnomalyDetector:
             logger.info("Supervised training with model type: %s",
                         self.xgboost_model.model_type)
 
-            # Optimize hyperparameters if requested
-            if optimize_hyperparams and self.xgboost_model.model_type in ['xgboost', 'lightgbm', 'catboost']:
-                try:
-                    logger.info(f"Starting hyperparameter optimization for {self.xgboost_model.model_type}")
-                    optuna_n_trials_supervised = self.xgboost_params.get('optuna_n_trials', optuna_n_trials)
-                    optuna_timeout_supervised = self.xgboost_params.get('optuna_timeout', optuna_timeout)
-                    
-                    # Adaptive CV folds based on dataset size for faster training
-                    n_samples = len(features_scaled)
-                    if n_samples > 100000:
-                        cv_folds_adaptive = 3  # Reduced for large datasets
-                        logger.info(f"Using {cv_folds_adaptive} CV folds for large dataset ({n_samples:,} samples)")
-                    elif n_samples > 50000:
-                        cv_folds_adaptive = 4
-                        logger.info(f"Using {cv_folds_adaptive} CV folds for medium dataset ({n_samples:,} samples)")
-                    else:
-                        cv_folds_adaptive = 5  # Default for smaller datasets
-                        logger.info(f"Using {cv_folds_adaptive} CV folds for small dataset ({n_samples:,} samples)")
-                    
-                    best_params = self.xgboost_model.optimize_hyperparameters(
-                        features_scaled, 
-                        pseudo_labels,
-                        n_trials=optuna_n_trials_supervised,
-                        timeout=optuna_timeout_supervised,
-                        cv_folds=cv_folds_adaptive,
-                        random_state=42,
-                        imbalance_handler=self.imbalance_handler
-                    )
-                    logger.info(f"Supervised hyperparameter optimization completed")
-                except Exception as e:
-                    logger.warning(f"Supervised hyperparameter optimization failed: {e}. Using default parameters.")
+            # Defensive guard: pseudo-labels MUST contain at least 2 distinct
+            # classes. If they don't (e.g. tiny dataset, extreme consensus
+            # thresholds, pure-noise features), skip supervised training
+            # rather than crashing the entire fit() call.
+            try:
+                _pl_arr = np.asarray(pseudo_labels).astype(int)
+                _n_unique = len(np.unique(_pl_arr))
+            except Exception:
+                _pl_arr = None
+                _n_unique = 0
+            if _pl_arr is not None and _n_unique < 2:
+                logger.warning(
+                    "Pseudo-labels for supervised training only contain %d distinct "
+                    "class(es) — XGBoost/LightGBM cannot train. Disabling supervised "
+                    "algorithm and continuing with unsupervised components.",
+                    _n_unique,
+                )
+                if 'xgboost' in self.algorithms:
+                    self.algorithms = [a for a in self.algorithms if a != 'xgboost']
+                self.xgboost_model = None
+                self.xgboost_weight = 0.0
+                pseudo_labels = None
+            else:
+                # Optimize hyperparameters if requested
+                if optimize_hyperparams and self.xgboost_model.model_type in ['xgboost', 'lightgbm', 'catboost']:
+                    try:
+                        logger.info(f"Starting hyperparameter optimization for {self.xgboost_model.model_type}")
+                        optuna_n_trials_supervised = self.xgboost_params.get('optuna_n_trials', optuna_n_trials)
+                        optuna_timeout_supervised = self.xgboost_params.get('optuna_timeout', optuna_timeout)
+                        
+                        # Adaptive CV folds based on dataset size for faster training
+                        n_samples = len(features_scaled)
+                        if n_samples > 100000:
+                            cv_folds_adaptive = 3  # Reduced for large datasets
+                            logger.info(f"Using {cv_folds_adaptive} CV folds for large dataset ({n_samples:,} samples)")
+                        elif n_samples > 50000:
+                            cv_folds_adaptive = 4
+                            logger.info(f"Using {cv_folds_adaptive} CV folds for medium dataset ({n_samples:,} samples)")
+                        else:
+                            cv_folds_adaptive = 5  # Default for smaller datasets
+                            logger.info(f"Using {cv_folds_adaptive} CV folds for small dataset ({n_samples:,} samples)")
+                        
+                        best_params = self.xgboost_model.optimize_hyperparameters(
+                            features_scaled, 
+                            pseudo_labels,
+                            n_trials=optuna_n_trials_supervised,
+                            timeout=optuna_timeout_supervised,
+                            cv_folds=cv_folds_adaptive,
+                            random_state=42,
+                            imbalance_handler=self.imbalance_handler
+                        )
+                        logger.info(f"Supervised hyperparameter optimization completed")
+                    except Exception as e:
+                        logger.warning(f"Supervised hyperparameter optimization failed: {e}. Using default parameters.")
 
-            self.xgboost_model.fit(features_scaled, pseudo_labels)
-            logger.info("Supervised training completed successfully")
+                self.xgboost_model.fit(features_scaled, pseudo_labels)
+                logger.info("Supervised training completed successfully")
 
         # GNN training (if graph is available and GNN is enabled)
         # Need pseudo-labels for the graph nodes; reuse supervised labels if available
@@ -3083,6 +3135,8 @@ class CombinedAnomalyDetector:
         if self.gnn_model is not None and 'gnn' in self.algorithms and edge_index is not None:
             try:
                 self.gnn_model.eval()
+                gnn_expected = features_scaled.shape[0]
+                gnn_scores_raw = None
                 with torch.no_grad():
                     num_nodes = features_scaled.shape[0]
                     adaptive_threshold = get_adaptive_gnn_threshold(device, features_scaled.shape[1], num_nodes)
@@ -3101,7 +3155,7 @@ class CombinedAnomalyDetector:
                                 b = b.to(device)
                                 b_out = self.gnn_model(b.x, b.edge_index, None, getattr(b, 'edge_attr', None))
                                 gnn_scores_list.append(torch.softmax(b_out[:b.batch_size], dim=1)[:, 1].cpu().numpy())
-                            individual_scores['gnn'] = np.concatenate(gnn_scores_list)
+                            gnn_scores_raw = np.concatenate(gnn_scores_list)
                         except Exception as n_err:
                             logger.warning(f"NeighborLoader scoring failed in weight optimization: {n_err}. Fallback chunking.")
                             chunk_sz = min(2048, max(256, num_nodes // 10))
@@ -3113,13 +3167,27 @@ class CombinedAnomalyDetector:
                                 sub_ei = torch.arange(cur_len, device=device).repeat(2, 1)
                                 b_out = self.gnn_model(sub_x, sub_ei, None, None)
                                 gnn_scores_list.append(torch.softmax(b_out, dim=1)[:, 1].cpu().numpy())
-                            individual_scores['gnn'] = np.concatenate(gnn_scores_list)
+                            gnn_scores_raw = np.concatenate(gnn_scores_list)
                     else:
                         ei = ei_tensor.to(device)
                         feat_t = torch.FloatTensor(features_scaled).to(device)
                         batch_t = torch.zeros(num_nodes, dtype=torch.long, device=device)
                         out = self.gnn_model(feat_t, ei, batch_t, edge_type)
-                        individual_scores['gnn'] = torch.softmax(out, dim=1)[:, 1].cpu().numpy()
+                        gnn_scores_raw = torch.softmax(out, dim=1)[:, 1].cpu().numpy()
+
+                # GNN SHAPE GUARD (weight optimization scoring)
+                try:
+                    gnn_scores_raw = np.asarray(gnn_scores_raw, dtype=float)
+                except Exception:
+                    gnn_scores_raw = None
+                if gnn_scores_raw is None or gnn_scores_raw.shape != (gnn_expected,):
+                    logger.warning(
+                        "GNN weight-opt scoring shape %s != (%d,). Skipping GNN in weight opt.",
+                        str(getattr(gnn_scores_raw, 'shape', None)),
+                        gnn_expected,
+                    )
+                else:
+                    individual_scores['gnn'] = gnn_scores_raw
             except Exception as e:
                 logger.warning("Error getting GNN scores for weight optimization: %s", e)
 
@@ -3993,13 +4061,22 @@ class CombinedAnomalyDetector:
         # Autoencoder predictions
         if self.autoencoder is not None and self.autoencoder_threshold is not None and 'autoencoder' in self.algorithms:
             self.autoencoder.eval()
+            # Detect the device the autoencoder weights actually live on so we
+            # never hit "CUDA tensor / CPU tensor" mismatch regardless of the
+            # explicit device argument.
+            try:
+                first_param = next(self.autoencoder.parameters())
+                ae_device = first_param.device
+            except (StopIteration, Exception):
+                ae_device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
             # Use dynamic batch size for inference
-            default_batch = 4096 if str(device) == 'cpu' else 1024
+            ae_device_str = str(ae_device).split(':')[0]
+            default_batch = 4096 if ae_device_str == 'cpu' else 1024
             batch_size = get_optimal_batch_size(
-                device, 
-                len(features_scaled), 
-                features_scaled.shape[1], 
-                default_batch=default_batch
+                ae_device,
+                len(features_scaled),
+                features_scaled.shape[1],
+                default_batch=default_batch,
             )
             # Allow user override if specified
             user_batch_size = self.autoencoder_params.get('batch_size')
@@ -4011,7 +4088,7 @@ class CombinedAnomalyDetector:
             with torch.no_grad():
                 # Process in batches to avoid OOM
                 for i in range(0, len(features_scaled), batch_size):
-                    batch_features = torch.FloatTensor(features_scaled[i:i+batch_size]).to(device)
+                    batch_features = torch.FloatTensor(features_scaled[i:i+batch_size]).to(ae_device)
                     out = self.autoencoder(batch_features)
                     # QW4: VAE forward returns a (recon, mu, logvar) tuple
                     if self.autoencoder.vae:
@@ -4037,25 +4114,43 @@ class CombinedAnomalyDetector:
         # DBSCAN/HDBSCAN predictions
         if self.dbscan is not None and 'dbscan' in self.algorithms:
             try:
-                # For HDBSCAN: use stored outlier_scores_ from training (no re-fit)
-                if HDBSCAN_AVAILABLE and hasattr(self.dbscan, 'outlier_scores_') and self.dbscan.outlier_scores_ is not None:
-                    dbscan_probabilities = np.clip(self.dbscan.outlier_scores_, 0, 1)
+                n_expected = len(features_scaled)
+                _use_hdbscan_scores = (
+                    HDBSCAN_AVAILABLE
+                    and hasattr(self.dbscan, 'outlier_scores_')
+                    and self.dbscan.outlier_scores_ is not None
+                    and len(self.dbscan.outlier_scores_) == n_expected
+                )
+                if _use_hdbscan_scores:
+                    dbscan_probabilities = np.clip(np.asarray(self.dbscan.outlier_scores_, dtype=float), 0, 1)
                 elif hasattr(self.dbscan, 'labels_') and self.dbscan.labels_ is not None:
-                    # Use distance-to-nearest-core-sample as continuous score (DBSCAN)
-                    from sklearn.neighbors import NearestNeighbors
                     labels_arr = np.asarray(self.dbscan.labels_)
-                    core_mask = labels_arr != -1
-                    if core_mask.sum() > 1:
-                        # Distance to nearest core sample (in scaled space)
-                        nbrs = NearestNeighbors(n_neighbors=1).fit(features_scaled[core_mask])
+                    labels_shape_match = (len(labels_arr) == n_expected)
+                    from sklearn.neighbors import NearestNeighbors
+                    core_samples = None
+                    if hasattr(self, '_dbscan_core_samples') and getattr(self, '_dbscan_core_samples', None) is not None:
+                        core_samples = self._dbscan_core_samples
+                    elif labels_shape_match:
+                        core_mask = labels_arr != -1
+                        if core_mask.sum() > 0:
+                            core_samples = features_scaled[core_mask]
+                    if core_samples is not None and core_samples.shape[0] > 1:
+                        nbrs = NearestNeighbors(n_neighbors=1).fit(core_samples)
                         dists, _ = nbrs.kneighbors(features_scaled)
-                        d = dists[:, 0]
-                        d_min, d_max = d.min(), d.max()
+                        d = dists[:, 0].astype(float)
+                        d_min, d_max = float(d.min()), float(d.max())
                         dbscan_probabilities = (d - d_min) / (d_max - d_min + 1e-8)
-                    else:
+                    elif labels_shape_match:
                         dbscan_probabilities = (labels_arr == -1).astype(float)
+                    else:
+                        dbscan_probabilities = np.zeros(n_expected)
                 else:
-                    dbscan_probabilities = np.zeros(len(features))
+                    dbscan_probabilities = np.zeros(n_expected)
+                dbscan_probabilities = np.asarray(dbscan_probabilities, dtype=float)
+                if dbscan_probabilities.shape != (n_expected,):
+                    raise ValueError(
+                        f"DBSCAN/HDBSCAN output shape {dbscan_probabilities.shape} != ({n_expected},)"
+                    )
             except Exception as e:
                 logger.warning("DBSCAN/HDBSCAN prediction error: %s", e)
                 dbscan_probabilities = np.zeros(len(features))
@@ -4142,6 +4237,29 @@ class CombinedAnomalyDetector:
                             # Direct forward for smaller graphs (use real batch_tensor)
                             out = self.gnn_model(features_tensor, ei, batch_tensor, edge_attr)
                             gnn_probabilities = torch.softmax(out, dim=1)[:, 1].cpu().numpy()
+
+                        # ===== GNN SHAPE GUARD (BUG-1 FIX) =======================================
+                        # Without a trusted node->claim mapping we CANNOT safely aggregate extra nodes
+                        # via reshape+mean (that would average unrelated predictions). Instead, if the
+                        # produced array does not match the number of input claims we emit a CRITICAL
+                        # log and fall back to zero contribution so the ensemble is never fed a
+                        # length-mismatched array that would crash downstream.
+                        gnn_expected = len(features)
+                        try:
+                            gnn_probabilities = np.asarray(gnn_probabilities, dtype=float)
+                        except Exception:
+                            gnn_probabilities = np.zeros(gnn_expected)
+                        if gnn_probabilities.shape != (gnn_expected,):
+                            logger.critical(
+                                "GNN output shape %s does NOT match claim count (%d). Node-to-claim "
+                                "mapping unavailable — falling back to zero GNN contribution. "
+                                "Install pyg-lib/torch-sparse for correct NeighborLoader behavior, "
+                                "or verify graph construction matches input row count.",
+                                str(gnn_probabilities.shape),
+                                gnn_expected,
+                            )
+                            gnn_probabilities = np.zeros(gnn_expected)
+                        # =========================================================================
                     else:
                         gnn_probabilities = np.zeros(len(features))
                 except Exception as e:

@@ -17,12 +17,40 @@ import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 try:
-    import faiss
-    FAISS_AVAILABLE = True
+    import faiss as _faiss
+    _faiss_available = True
 except ImportError:
-    FAISS_AVAILABLE = False
+    _faiss_available = False
+    _faiss = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
+
+# =============================================================================
+# SHARED CONSTANTS
+# =============================================================================
+
+INDONESIAN_STOPWORDS = sorted({
+    "adalah","akan","akhir","akhirnya","aku","antara","apa","apakah","atau",
+    "bahwa","banyak","bapak","beberapa","belum","berada","berbagai","berikan","berikut","bersama",
+    "besar","bisa","bukan","buat","cukup","dan","dapat","dari","datang","dengan",
+    "demikian","dia","diri","dokter","dua","dulu","empat","hal","hanya","hari",
+    "hingga","ia","ibu","jadi","jika","jika","juga","jumlah","kalau","kami",
+    "kamu","kasus","kecil","ke","keluar","kena","kepada","kini","kita","kota",
+    "kurang","lagi","lain","lalu","lama","lebih","luar","maka","malam","masih",
+    "mau","melalui","memiliki","menjadi","menurut","menyatakan","merupakan","meskipun","milik","mereka",
+    "min","mungkin","mulai","nah","naik","namun","new","niat","no","nomor",
+    "nyata","oleh","orang","pada","paling","para","pasti","pedoman","per","perlu",
+    "pertama","perusahaan","pihak","program","pukul","saja","salah","sama","sampai","sangat",
+    "satu","sedang","sedikit","see","sejak","sekarang","selalu","selama","seluruh","sementara",
+    "sendiri","seorang","seperti","sering","sesuai","setelah","setiap","sisi","soal","sudah",
+    "supaya","tahu","tak","tanpa","tanya","telah","tempat","tentang","terhadap","termasuk",
+    "tersebut","terus","tetap","tiap","tidak","tidaklah","tiga","tinggal","tuju","turun",
+    "untuk","usah","waduh","wah","walau","waktu","wanita","yaitu","yang",
+    "dalam","oleh","karena","itu","ini","jika","apabila","maka","yaitu","adapun",
+    "tersebut","suatu","bagi","ia","siap","manakah","bagaimanakah","bilamana","dimanakah","sedapat",
+})
+
+MIN_RAG_SIMILARITY_THRESHOLD = 0.06
 
 # =============================================================================
 # DEFAULT REGULATORY & CLINICAL KNOWLEDGE BASE
@@ -139,18 +167,81 @@ class LocalRAGKnowledgeBase:
     """
 
     def __init__(self, documents: Optional[List[Dict[str, Any]]] = None):
-        self.documents = documents or DEFAULT_KNOWLEDGE_DOCUMENTS
+        self.documents = documents or list(DEFAULT_KNOWLEDGE_DOCUMENTS)
         self.vectorizer = TfidfVectorizer(
             lowercase=True,
-            stop_words=None,
+            stop_words=INDONESIAN_STOPWORDS,
             ngram_range=(1, 2),
-            max_features=2000
+            max_features=2500,
+            sublinear_tf=True,
         )
         self.doc_texts = [
             f"{doc['title']} {doc['category']} {doc['content']} {' '.join(doc.get('tags', []))}"
             for doc in self.documents
         ]
         self._build_index()
+
+    def rebuild_index(self) -> None:
+        """Rebuild TF-IDF vectors and FAISS index after documents are mutated."""
+        self.doc_texts = [
+            f"{doc['title']} {doc['category']} {doc['content']} {' '.join(doc.get('tags', []))}"
+            for doc in self.documents
+        ]
+        self._build_index()
+
+    def add_document(self, doc: Dict[str, Any]) -> None:
+        """
+        Append a new regulatory/clinical document to the knowledge base and
+        rebuild the vector index. Document must contain keys: id, title,
+        category, content, tags (list).
+        """
+        if not isinstance(doc, dict):
+            raise TypeError("doc must be a dict with keys: id,title,category,content,tags")
+        for _req in ("id", "title", "category", "content"):
+            if _req not in doc:
+                raise ValueError(f"Document is missing required key '{_req}'")
+        doc.setdefault("tags", [])
+        if any(existing.get("id") == doc.get("id") for existing in self.documents):
+            logger.warning(f"Document id={doc['id']} already exists — overwriting.")
+            self.documents = [d for d in self.documents if d.get("id") != doc["id"]]
+        self.documents.append(doc)
+        self.rebuild_index()
+
+    def add_documents_from_json(self, json_path: str, overwrite: bool = False) -> int:
+        """
+        Load additional documents from a JSON file. The file should contain a
+        JSON array of document dicts. Returns the number of documents added.
+        If `overwrite=True` the existing knowledge base is replaced first.
+        """
+        if not os.path.isfile(json_path):
+            raise FileNotFoundError(f"Knowledge JSON not found: {json_path}")
+        with open(json_path, "r", encoding="utf-8") as _f:
+            data = json.load(_f)
+        if not isinstance(data, list):
+            raise ValueError("JSON knowledge base root must be a list of documents.")
+        if overwrite:
+            self.documents = []
+        _count_before = len(self.documents)
+        for doc in data:
+            self.add_document(doc)
+        return len(self.documents) - _count_before
+
+    def save_knowledge_base(self, json_path: str) -> None:
+        """Persist current documents to a JSON file (so additions survive restarts)."""
+        _dir = os.path.dirname(os.path.abspath(json_path))
+        if _dir and not os.path.isdir(_dir):
+            os.makedirs(_dir, exist_ok=True)
+        with open(json_path, "w", encoding="utf-8") as _f:
+            json.dump(self.documents, _f, ensure_ascii=False, indent=2)
+
+    @classmethod
+    def load_knowledge_base(cls, json_path: str) -> "LocalRAGKnowledgeBase":
+        """Instantiate a LocalRAGKnowledgeBase from a persisted JSON file."""
+        if not os.path.isfile(json_path):
+            raise FileNotFoundError(json_path)
+        with open(json_path, "r", encoding="utf-8") as _f:
+            docs = json.load(_f)
+        return cls(documents=docs)
 
     def _build_index(self):
         """Build TF-IDF matrix and FAISS index."""
@@ -174,41 +265,86 @@ class LocalRAGKnowledgeBase:
             self.matrix = np.zeros((len(self.documents), 10), dtype=np.float32)
             self.index = None
 
-    def retrieve(self, query: str, top_k: int = 2) -> List[Dict[str, Any]]:
+    def retrieve(self, query: str, top_k: int = 2, min_similarity: float = MIN_RAG_SIMILARITY_THRESHOLD) -> List[Dict[str, Any]]:
         """
         Retrieve top_k most relevant regulatory documents for a given query string.
+        Documents whose similarity score falls below `min_similarity` are dropped
+        so low-confidence matches never mislead the downstream LLM or auditor.
+
+        As a safety fallback for small knowledge bases or short/ambiguous queries,
+        if *no* document survives the threshold filter, the single highest-scoring
+        document is returned regardless of score — this prevents the downstream
+        ``get_regulation_context`` from ever returning an empty string on KB that
+        only has a handful of seeded documents.
         """
         if not query or not query.strip():
-            return self.documents[:top_k]
+            return list(self.documents[:top_k])
 
         try:
             query_vec = self.vectorizer.transform([query]).toarray().astype(np.float32)
             norm = np.linalg.norm(query_vec) + 1e-10
             query_vec = query_vec / norm
 
+            raw_scores: Optional[np.ndarray] = None
+            best_idx: int = -1
+            best_score: float = -1.0
+
             if FAISS_AVAILABLE and self.index is not None:
-                scores, indices = self.index.search(query_vec, min(top_k, len(self.documents)))
-                retrieved_docs = []
+                scores, indices = self.index.search(query_vec, min(top_k * 2, len(self.documents)))
+                retrieved_docs: List[Dict[str, Any]] = []
                 for score, idx in zip(scores[0], indices[0]):
-                    if idx >= 0 and idx < len(self.documents):
-                        doc = dict(self.documents[idx])
-                        doc["similarity_score"] = float(score)
-                        retrieved_docs.append(doc)
-                return retrieved_docs
+                    if idx < 0 or idx >= len(self.documents):
+                        continue
+                    score_f = float(score)
+                    if score_f > best_score:
+                        best_score = score_f
+                        best_idx = int(idx)
+                    if score_f < min_similarity:
+                        continue
+                    doc = dict(self.documents[idx])
+                    doc["similarity_score"] = score_f
+                    retrieved_docs.append(doc)
+                    if len(retrieved_docs) >= top_k:
+                        break
             else:
                 # Cosine similarity fallback
                 sims = np.dot(self.matrix, query_vec.T).flatten()
-                top_indices = np.argsort(-sims)[:top_k]
+                raw_scores = sims
+                # argsort descending, then filter by threshold and cap to top_k
+                sorted_idx = list(np.argsort(-sims))
                 retrieved_docs = []
-                for idx in top_indices:
-                    doc = dict(self.documents[idx])
-                    doc["similarity_score"] = float(sims[idx])
+                for idx in sorted_idx:
+                    score_f = float(sims[idx])
+                    if score_f < min_similarity:
+                        break
+                    doc = dict(self.documents[int(idx)])
+                    doc["similarity_score"] = score_f
                     retrieved_docs.append(doc)
-                return retrieved_docs
+                    if len(retrieved_docs) >= top_k:
+                        break
+
+            # ── Fallback: Nothing passed threshold → return the single best doc ──
+            if not retrieved_docs and len(self.documents) > 0:
+                best_idx_arr: int = 0
+                best_score_out: float = 0.0
+                if raw_scores is not None:
+                    best_idx_arr = int(np.argmax(raw_scores))
+                    best_score_out = float(raw_scores[best_idx_arr])
+                elif best_idx >= 0:
+                    best_idx_arr = best_idx
+                    best_score_out = best_score if best_score >= 0 else 0.0
+                else:
+                    best_idx_arr = 0
+                    best_score_out = 0.0
+                doc = dict(self.documents[best_idx_arr])
+                doc["similarity_score"] = float(best_score_out)
+                retrieved_docs.append(doc)
+
+            return retrieved_docs
 
         except Exception as e:
             logger.error(f"Error in RAG retrieval: {e}", exc_info=True)
-            return self.documents[:top_k]
+            return list(self.documents[:top_k])
 
     def get_regulation_context(self, active_flags: List[str], query_extra: str = "") -> str:
         """
@@ -217,15 +353,11 @@ class LocalRAGKnowledgeBase:
         if active_flags:
             search_terms = " ".join(active_flags) + " " + query_extra
         else:
-            # When no deterministic rule triggered, use the claim's own service_code
-            # and diagnosis_code (passed via query_extra) so that the RAG result is
-            # specific to the actual clinical context rather than always returning
-            # the same generic outlier/deviasi document.
-            search_terms = (
-                f"deviasi biaya anomali statistik outlier multivariat kewajaran tarif {query_extra}"
-                if not query_extra.strip()
-                else query_extra
-            )
+            # When no deterministic rule triggered, combine the generic ML-outlier
+            # keywords (to pull statistical/clinical-audit documents) with the
+            # claim's own service_code + diagnosis_code for clinical specificity.
+            base_outlier_terms = "deviasi biaya anomali statistik outlier multivariat kewajaran tarif kesesuaian klinis"
+            search_terms = f"{base_outlier_terms} {query_extra}".strip()
         
         matched_docs = self.retrieve(search_terms, top_k=2)
 

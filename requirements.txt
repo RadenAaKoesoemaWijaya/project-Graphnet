@@ -1,4 +1,4 @@
-# Verified / Python 3.13 compatible stack for ASTINA
+# Verified / Python 3.12 compatible stack for ASTINA
 # This set matches the working environment used in this project.
 streamlit==1.61.1
 pytest>=8.0
