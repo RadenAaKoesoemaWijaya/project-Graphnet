@@ -249,7 +249,7 @@ function Deploy-CloudRun {
         "--no-allow-unauthenticated",
         "--max-request-body-size", "3Gi",
         "--project", $Config.ProjectId,
-        "--set-env-vars", "GOOGLE_CLOUD_BUCKET=$($Config.BucketName),ASTINA_LOG_FORMAT=json,STREAMLIT_SERVER_MAX_UPLOAD_SIZE=3072",
+        "--set-env-vars", "GOOGLE_CLOUD_BUCKET=$($Config.BucketName),ASTINA_LOG_FORMAT=json,STREAMLIT_SERVER_MAX_UPLOAD_SIZE=3072,LLM_PROVIDER=heuristic,LLM_MODEL_NAME=gemini-1.5-flash,AUTH_ENABLED=false",
         "--min-instances", "1",
         "--max-instances", "5"
     )

@@ -1,25 +1,103 @@
-**/*.pyc
-**/*.pyo
-**/__pycache__
-.venv
-venv
-.env
+# =============================================================================
+# ASTINA Docker Build Ignore File
+# =============================================================================
+# Files and directories to exclude from Docker build context
+# This optimizes build time and reduces image size
+
+# Git
 .git
 .gitignore
-.vscode
-.idea
+.gitattributes
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+.conda/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Development Files
+*.md
+docs/
+tests/
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.mypy_cache/
+
+# Cache and Temporary Files
 cache/
-data/
-*.db
+models/
+logs/
 *.log
-.streamlit/secrets.toml
+*.tmp
+*.temp
+temp/
+tmp/
+
+# OS Files
+Thumbs.db
+.DS_Store
+.Trash-*
+
+# Environment Files
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+*.crt
+
+# Cloud Run Specific
+.cloudrun/
+cloudbuild.yaml
+
+# Streamlit
+.streamlit/
+
+# Model Artifacts (Large files that should be built in container)
+models/*.pt
+models/*.pkl
+models/*.h5
+models/*.pth
+models/checkpoints/
+
+# Data Files (Should not be in image)
+*.csv
+*.xlsx
+*.xls
+*.parquet
+*.json
+data/
+raw_data/
+sample_data/
+
+# Testing
+.pytest_cache/
+test_results/
+coverage.xml
+
+# Documentation
 README.md
 LICENSE
-setup.py
-setup_venv.ps1
-docker-compose.yml
-Dockerfile
-.dockerignore
-test_*.py
-test_logs/
-logs/
+CHANGELOG.md

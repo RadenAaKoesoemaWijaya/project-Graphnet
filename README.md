@@ -307,7 +307,21 @@ python training_cli.py --data cache/processed_data.parquet --model-type gnn --ep
 
 ---
 
-## 🔐 Autentikasi Pengguna, Manajemen Akun & Hak Akses (RBAC)
+## � Dokumentasi Deployment Lengkap
+
+Untuk panduan deployment yang lebih mendetail termasuk:
+- Konfigurasi environment variables lengkap
+- Security best practices untuk production
+- Monitoring dan logging setup
+- CI/CD integration
+- Troubleshooting deployment issues
+- Performance optimization
+
+Silakan lihat [DEPLOYMENT.md](file:///c:/project-Graphnet/DEPLOYMENT.md)
+
+---
+
+## �🔐 Autentikasi Pengguna, Manajemen Akun & Hak Akses (RBAC)
 
 Sistem ASTINA dilengkapi gerbang keamanan berlapis (*Enterprise Security Gateway*) berbasis **Role-Based Access Control (RBAC)** yang mematuhi ketentuan regulasi perlindungan data medis:
 - **UU No. 27 Tahun 2022** tentang Perlindungan Data Pribadi (UU PDP).

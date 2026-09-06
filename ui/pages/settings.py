@@ -47,28 +47,34 @@ def show_settings_page():
             if 'settings_provider_sel' not in st.session_state:
                 st.session_state['settings_provider_sel'] = "🧠 Heuristic Engine (Offline)"
             
+            def update_provider():
+                st.session_state['settings_provider_sel'] = st.session_state['settings_provider_widget']
+            
             provider_choice = st.selectbox(
                 "LLM Engine Provider:",
                 list(provider_options.keys()),
                 index=list(provider_options.keys()).index(st.session_state['settings_provider_sel']),
-                key="settings_provider",
+                key="settings_provider_widget",
+                on_change=update_provider,
                 help="Pilih provider LLM untuk Agentic Copilot. Heuristic Engine bekerja offline tanpa API key."
             )
-            st.session_state['settings_provider_sel'] = provider_choice
         
         with col2:
             if "Gemini" in provider_choice or "OpenAI" in provider_choice:
                 if 'settings_api_key_val' not in st.session_state:
                     st.session_state['settings_api_key_val'] = ""
                 
+                def update_api_key():
+                    st.session_state['settings_api_key_val'] = st.session_state['settings_apikey_widget']
+                
                 api_key_input = st.text_input(
                     "API Key:",
                     value=st.session_state['settings_api_key_val'],
                     type="password",
-                    key="settings_apikey",
+                    key="settings_apikey_widget",
+                    on_change=update_api_key,
                     help="Masukkan API key dari provider. Key akan disimpan di session state."
                 )
-                st.session_state['settings_api_key_val'] = api_key_input
                 
                 # API Key help text
                 if "Gemini" in provider_choice:
@@ -100,13 +106,16 @@ def show_settings_page():
             if 'settings_auditor_val' not in st.session_state:
                 st.session_state['settings_auditor_val'] = "Investigator Senior ASTINA"
             
+            def update_auditor_name():
+                st.session_state['settings_auditor_val'] = st.session_state['settings_auditor_widget']
+            
             auditor_name = st.text_input(
                 "Nama Auditor:",
                 value=st.session_state['settings_auditor_val'],
-                key="settings_auditor",
+                key="settings_auditor_widget",
+                on_change=update_auditor_name,
                 help="Nama yang akan muncul di Berita Acara Pemeriksaan (BAP)"
             )
-            st.session_state['settings_auditor_val'] = auditor_name
         
         # Advanced Configuration
         st.markdown("---")
@@ -119,66 +128,81 @@ def show_settings_page():
                 if 'settings_gemini_model' not in st.session_state:
                     st.session_state['settings_gemini_model'] = "gemini-1.5-flash"
                 
+                def update_gemini_model():
+                    st.session_state['settings_gemini_model'] = st.session_state['settings_gemini_model_widget']
+                
                 model_choice = st.selectbox(
                     "Model Gemini:",
                     ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash"],
                     index=["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash"].index(
                         st.session_state['settings_gemini_model']
                     ),
-                    key="settings_gemini_model",
+                    key="settings_gemini_model_widget",
+                    on_change=update_gemini_model,
                     help="Pilih model Gemini. Flash lebih cepat, Pro lebih akurat."
                 )
-                st.session_state['settings_gemini_model'] = model_choice
                 
             elif "OpenAI" in provider_choice:
                 if 'settings_openai_model' not in st.session_state:
                     st.session_state['settings_openai_model'] = "gpt-4o-mini"
                 
+                def update_openai_model():
+                    st.session_state['settings_openai_model'] = st.session_state['settings_openai_model_widget']
+                
                 model_choice = st.text_input(
                     "Model Name:",
                     value=st.session_state['settings_openai_model'],
-                    key="settings_openai_model",
+                    key="settings_openai_model_widget",
+                    on_change=update_openai_model,
                     help="Contoh: gpt-4o-mini, gpt-4o, gpt-3.5-turbo"
                 )
-                st.session_state['settings_openai_model'] = model_choice
                 
             elif "Ollama" in provider_choice:
                 if 'settings_ollama_model' not in st.session_state:
                     st.session_state['settings_ollama_model'] = "llama3"
                 
+                def update_ollama_model():
+                    st.session_state['settings_ollama_model'] = st.session_state['settings_ollama_model_widget']
+                
                 model_choice = st.text_input(
                     "Ollama Model Name:",
                     value=st.session_state['settings_ollama_model'],
-                    key="settings_ollama_model",
+                    key="settings_ollama_model_widget",
+                    on_change=update_ollama_model,
                     help="Model yang tersedia di Ollama lokal (contoh: llama3, mistral, codellama)"
                 )
-                st.session_state['settings_ollama_model'] = model_choice
         
         with col_adv2:
             if "Ollama" in provider_choice:
                 if 'settings_ollama_endpoint' not in st.session_state:
                     st.session_state['settings_ollama_endpoint'] = "http://localhost:11434/api/generate"
                 
+                def update_ollama_endpoint():
+                    st.session_state['settings_ollama_endpoint'] = st.session_state['settings_ollama_endpoint_widget']
+                
                 endpoint_choice = st.text_input(
                     "Ollama Endpoint URL:",
                     value=st.session_state['settings_ollama_endpoint'],
-                    key="settings_ollama_endpoint",
+                    key="settings_ollama_endpoint_widget",
+                    on_change=update_ollama_endpoint,
                     help="URL endpoint Ollama lokal (default: http://localhost:11434/api/generate)"
                 )
-                st.session_state['settings_ollama_endpoint'] = endpoint_choice
                 
             elif "OpenAI" in provider_choice:
                 if 'settings_openai_endpoint' not in st.session_state:
                     st.session_state['settings_openai_endpoint'] = ""
                 
+                def update_openai_endpoint():
+                    st.session_state['settings_openai_endpoint'] = st.session_state['settings_openai_endpoint_widget']
+                
                 endpoint_choice = st.text_input(
                     "Base URL / Custom Endpoint (Opsional):",
                     value=st.session_state['settings_openai_endpoint'],
                     placeholder="https://api.openai.com/v1/chat/completions",
-                    key="settings_openai_endpoint",
+                    key="settings_openai_endpoint_widget",
+                    on_change=update_openai_endpoint,
                     help="Untuk OpenAI-compatible API atau custom endpoint"
                 )
-                st.session_state['settings_openai_endpoint'] = endpoint_choice
         
         # Connection Test
         st.markdown("---")
@@ -285,7 +309,7 @@ def show_settings_page():
                 selected_version = st.selectbox(
                     "Pilih Versi Model untuk Dimuat:",
                     ["-- Pilih Versi --"] + version_names,
-                    key="settings_load_model"
+                    key="settings_load_model_widget"
                 )
                 
                 if selected_version != "-- Pilih Versi --":

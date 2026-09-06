@@ -8,6 +8,7 @@ services:
     volumes:
       - ./cache:/app/cache
       - ./models:/app/models
+      - ./logs:/app/logs
     environment:
       PORT: "8501"
       STREAMLIT_SERVER_MAX_UPLOAD_SIZE: "3072"
@@ -15,6 +16,20 @@ services:
       GOOGLE_CLOUD_BUCKET: ${GOOGLE_CLOUD_BUCKET:-}
       OPTUNA_N_JOBS: "4"
       CV_N_JOBS: "4"
+      # LLM Configuration (Optional - override via .env or docker-compose.override.yml)
+      LLM_PROVIDER: ${LLM_PROVIDER:-heuristic}
+      LLM_MODEL_NAME: ${LLM_MODEL_NAME:-gemini-1.5-flash}
+      LLM_ENDPOINT_URL: ${LLM_ENDPOINT_URL:-http://localhost:11434/api/generate}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      LLM_TEMPERATURE: "0.2"
+      LLM_MAX_TOKENS: "2048"
+      # Authentication Configuration
+      AUTH_ENABLED: ${AUTH_ENABLED:-false}
+      ASTINA_ADMIN_PASSWORD: ${ASTINA_ADMIN_PASSWORD:-}
+      ASTINA_AUDITOR_PASSWORD: ${ASTINA_AUDITOR_PASSWORD:-}
+      ASTINA_ANALYST_PASSWORD: ${ASTINA_ANALYST_PASSWORD:-}
+      ASTINA_VIEWER_PASSWORD: ${ASTINA_VIEWER_PASSWORD:-}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8501/_stcore/health"]
