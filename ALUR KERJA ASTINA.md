@@ -137,7 +137,7 @@ python run.py
 ### 3.2 Daftar Halaman Aplikasi
 
 ```text
-[Home] ──> [Data Collection] ──> [Training] ──> [Evaluation] ──> [Detection] ──> [Status]
+[Home] ──> [Data Collection] ──> [Training] ──> [Evaluation] ──> [Detection] ──> [Status] ──> [Settings]
 ```
 
 1. `home`: Dashboard ikhtisar sistem, status ringkas, dan shortcut alur kerja.
@@ -146,6 +146,7 @@ python run.py
 4. `evaluate`: Evaluasi performa test set, Confusion Matrix, ROC/PR Curves, SHAP/LIME, dan analisis GNN.
 5. `detect`: Deteksi batch klaim baru, eksekusi 9 aturan bisnis, tabel review fraud, XAI, dan AI Copilot.
 6. `status`: Telemetri beban perangkat, pemantauan cache, log sistem, dan verifikasi Cryptographic Audit Trail.
+7. `settings`: Konfigurasi LLM & Copilot, Model Registry, System Configuration, dan Security & Privacy.
 
 ---
 
@@ -307,6 +308,43 @@ Setelah eksekusi deteksi dijalankan, halaman menyajikan diagnostik transparansi 
 - Memonitor utilisasi CPU, RAM, Disk, dan GPU *real-time*.
 - Menyediakan statistik ukuran cache Parquet dan tombol *clear cache*.
 - Menampilkan ringkasan rantai log *Cryptographic Audit Trail* dan memvalidasi keutuhan hash SHA-256.
+
+### 4.7 Settings & Configuration (`ui/pages/settings.py`)
+Halaman Pengaturan menyediakan konfigurasi terpusat untuk seluruh sistem ASTINA dengan 4 tab utama:
+
+#### Tab 1: 🔌 LLM & Copilot Configuration
+- **Provider Selection**: Memilih LLM engine (Heuristic Engine Offline, Google Gemini, OpenAI/Compatible, Local Ollama)
+- **API Key Management**: Input dan management API key untuk cloud providers dengan password field
+- **Auditor Configuration**: Set nama auditor yang akan muncul di Berita Acara Pemeriksaan (BAP)
+- **Model Selection**: Pilihan model spesifik per provider (Gemini models, OpenAI models, Ollama models)
+- **Endpoint Configuration**: URL endpoint untuk Local Ollama atau OpenAI-compatible APIs
+- **Connection Testing**: Tombol test koneksi untuk verifikasi ketersediaan LLM provider
+- **Environment Variables Reference**: Dokumentasi lengkap environment variables untuk konfigurasi production
+
+#### Tab 2: 🗄️ Model Registry
+- **Version Management**: Daftar semua versi model yang tersimpan dengan metadata (tanggal, algoritma, jumlah fitur)
+- **Model Loading**: Interface untuk memuat versi model spesifik ke sesi aktif
+- **Model Information**: Detail path file dan status ketersediaan artefak model
+- **Registry Operations**: Fungsi untuk manajemen siklus hidup model (load, delete, info)
+
+#### Tab 3: 📊 System Configuration
+- **Hardware Status**: Monitoring status PyTorch, GPU/CPU availability, dan spesifikasi device
+- **Memory Configuration**: Informasi limit memori, chunk size, dan max file size
+- **System Information**: Platform details, Python version, dan uptime sistem
+- **File Upload Settings**: Konfigurasi format file yang didukung dan batas ukuran
+
+#### Tab 4: 🔐 Security & Privacy
+- **Authentication Status**: Mode autentikasi (Development/Production) dan role pengguna saat ini
+- **PII Masking Status**: Status perlindungan data pribadi dan kepatuhan regulasi
+- **Audit Trail Status**: Status aktifnya sistem audit trail kriptografis
+- **Recent Audit Events**: Tabel event audit terbaru untuk monitoring aktivitas
+- **Security Recommendations**: Panduan best practices untuk lingkungan production
+
+**Integrasi dengan Workflow:**
+- Konfigurasi LLM/Copilot dari halaman Settings disinkronkan ke halaman Deteksi
+- Model yang dimuat dari Registry otomatis tersedia untuk deteksi
+- Konfigurasi sistem bersifat session-based dan persisten selama sesi aktif
+- Role-based access control membatasi akses ke tab settings sesuai permissions
 
 ---
 
@@ -575,9 +613,170 @@ Modul `agentic_copilot.py` dan `rag_engine.py` bertindak sebagai asisten investi
 
 ---
 
-## 10. Cryptographic Audit Trail & Privasi Data (PII)
+## 10. Halaman Pengaturan & Konfigurasi Sistem
 
-### 10.1 Chained Hash Audit Logging
+### 10.1 Overview Halaman Settings
+
+Halaman **Pengaturan** (`ui/pages/settings.py`) menyediakan antarmuka terpusat untuk konfigurasi seluruh sistem ASTINA. Halaman ini dapat diakses melalui menu **⚙️ Pengaturan** di sidebar dan memiliki akses berbasis role (Admin, Auditor, Analyst).
+
+### 10.2 Struktur Tab Settings
+
+#### Tab 1: 🔌 LLM & Copilot Configuration
+
+Tab ini menyediakan konfigurasi lengkap untuk Agentic AI Copilot dan multi-provider LLM:
+
+**Komponen Utama:**
+- **Provider Selection**: Dropdown dengan 4 opsi provider:
+  - 🧠 Heuristic Engine (Offline) - Mode deterministik tanpa koneksi internet
+  - 🔵 Google Gemini - LLM cloud dari Google AI Studio
+  - 🟢 OpenAI / Compatible - GPT models dari OpenAI atau API compatible
+  - 🟠 Local Ollama - LLM lokal yang berjalan di komputer
+
+- **API Key Management**: 
+  - Input field dengan password masking untuk cloud providers
+  - Validasi format API key secara real-time
+  - Help text cara mendapatkan API key untuk masing-masing provider
+
+- **Auditor Configuration**:
+  - Input nama auditor yang akan muncul di Berita Acara Pemeriksaan (BAP)
+  - Persistensi nama auditor di session state
+
+- **Model Selection**:
+  - Gemini: Dropdown (gemini-1.5-flash, gemini-1.5-pro, gemini-2.0-flash)
+  - OpenAI: Text input untuk custom model name (default: gpt-4o-mini)
+  - Ollama: Text input untuk model yang tersedia di lokal (default: llama3)
+
+- **Endpoint Configuration**:
+  - Ollama: URL endpoint (default: http://localhost:11434/api/generate)
+  - OpenAI: Base URL custom untuk OpenAI-compatible APIs
+
+- **Connection Testing**:
+  - Tombol "🔌 Test Koneksi" untuk verifikasi ketersediaan LLM
+  - Feedback status connection success/failure
+  - Otomatis fallback ke Heuristic Engine jika koneksi gagal
+
+- **Environment Variables Reference**:
+  - Dokumentasi lengkap environment variables untuk production
+  - Contoh penggunaan untuk Windows, Linux, dan Docker
+
+#### Tab 2: 🗄️ Model Registry
+
+Tab ini menyediakan manajemen siklus hidup model yang tersimpan:
+
+**Fitur Utama:**
+- **Version List**: Tabel semua versi model dengan metadata:
+  - Versi model (timestamp-based)
+  - Tanggal pembuatan
+  - Algoritma yang digunakan
+  - Jumlah fitur
+  - Path file
+
+- **Model Loading**:
+  - Dropdown untuk memilih versi model
+  - Tombol load model ke sesi aktif
+  - Feedback status loading (success/failure)
+  - Auto-update session state setelah loading
+
+- **Model Information**:
+  - Detail path file artefak model
+  - Status ketersediaan (complete/incomplete)
+  - Metadata training parameters
+
+#### Tab 3: 📊 System Configuration
+
+Tab ini menyediakan monitoring dan konfigurasi parameter sistem:
+
+**Komponen Monitoring:**
+- **Hardware Status**:
+  - PyTorch version dan availability
+  - Device name (CPU/GPU)
+  - GPU status (Active/Inactive)
+  - Total memory GPU jika tersedia
+
+- **Memory Configuration**:
+  - Memory limit (default: 4GB)
+  - Chunk size untuk processing
+  - Max file size untuk upload (default: 3GB)
+
+- **System Information**:
+  - Platform OS dan version
+  - Python version
+  - System uptime
+
+- **File Upload Settings**:
+  - Format file yang didukung (CSV, Excel, Parquet)
+  - Ukuran maksimal file
+  - Konfigurasi chunk processing
+
+#### Tab 4: 🔐 Security & Privacy
+
+Tab ini menyediakan monitoring status keamanan dan privasi:
+
+**Komponen Keamanan:**
+- **Authentication Status**:
+  - Mode autentikasi (Development/Production)
+  - Role pengguna saat ini
+  - Username yang sedang login
+
+- **PII Masking Status**:
+  - Status aktifnya perlindungan data pribadi
+  - Kepatuhan regulasi (UU PDP/HIPAA)
+  - Metode masking yang digunakan
+
+- **Audit Trail Status**:
+  - Status aktifnya sistem audit trail kriptografis
+  - Jumlah event yang tercatat
+  - Recent audit events table
+
+- **Security Recommendations**:
+  - Best practices untuk lingkungan production
+  - Panduan konfigurasi environment variables
+  - Rekomendasi untuk API key management
+
+### 10.3 Integrasi dengan Workflow
+
+**Synchronization dengan Halaman Deteksi:**
+- Konfigurasi LLM/Copilot dari Settings disinkronkan ke halaman Deteksi
+- API key dan model selection otomatis tersedia di Copilot UI
+- Perubahan konfigurasi langsung berlaku untuk sesi aktif
+
+**Model Registry Integration:**
+- Model yang dimuat dari Registry otomatis tersedia untuk deteksi
+- Status model terlatih di-update di session state
+- Fallback handling jika model tidak tersedia
+
+**Session Persistence:**
+- Konfigurasi bersifat session-based
+- Data tersimpan selama sesi aktif
+- Reset ke default tersedia jika diperlukan
+
+### 10.4 Role-Based Access Control
+
+Hak akses ke halaman Settings:
+- **Admin**: Akses penuh ke semua tab
+- **Auditor**: Akses ke LLM & Copilot, Security & Privacy
+- **Analyst**: Akses ke LLM & Copilot, System Configuration
+- **Viewer**: Tidak memiliki akses (read-only)
+
+### 10.5 Security Best Practices
+
+**API Key Management:**
+- API key disimpan di session state (tidak persisten di disk)
+- Password field dengan masking untuk keamanan
+- Environment variables recommended untuk production
+- Tidak ada hardcoding API key di source code
+
+**Configuration Validation:**
+- Validasi format API key sebelum penggunaan
+- Connection testing sebelum menyimpan konfigurasi
+- Error handling yang graceful untuk provider failure
+- Automatic fallback ke Heuristic Engine jika cloud LLM gagal
+
+---
+
+## 11. Cryptographic Audit Trail & Privasi Data (PII)
+
+### 11.1 Chained Hash Audit Logging
 
 Setiap aksi kritis dalam sistem (upload dataset, eksekusi preprocessing, training model, inferensi deteksi, ekspor laporan, dan deteksi ancaman keamanan AI) dicatat ke dalam `logs/audit_trail.jsonl`.
 
@@ -617,7 +816,7 @@ Modul `pii_masker.py` melindungi data sensitif sesuai regulasi UU Perlindungan D
 
 ---
 
-## 11. Pengujian Kualitas & Quality Gate (82 Test Cases)
+## 12. Pengujian Kualitas & Quality Gate (82 Test Cases)
 
 Seluruh komponen ASTINA diuji secara otomatis menggunakan suite Pytest yang mencakup **82 skenario uji terdaftar** (82 Passed, 100% Green), termasuk modul uji keamanan siber, autentikasi, resiliensi schema harmonizer, dan subgraf anomali GNN:
 
@@ -653,7 +852,7 @@ Seluruh komponen ASTINA diuji secara otomatis menggunakan suite Pytest yang menc
 
 ---
 
-## 12. Panduan Deployment Multi-Environment
+## 13. Panduan Deployment Multi-Environment
 
 ### 12.0 Catatan Kompatibilitas & Konfigurasi Penting
 
