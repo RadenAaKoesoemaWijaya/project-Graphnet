@@ -17,7 +17,7 @@ maxUploadSize = 3072
 # Limit in-process memory by restricting Streamlit's data cache sizes.
 # This prevents OOM crashes on the 7.26 GB RAM machine where RAM usage
 # is already at ~78% before the app starts.
-maxCachedMessageAge = 2
+# Note: maxCachedMessageAge is no longer supported in newer Streamlit versions
 
 [runner]
 # Rerun on file save (development convenience). Disable in production if needed.

@@ -145,7 +145,13 @@ def fix_arrow_compatibility(df):
     """
     for col in df.columns:
         if df[col].dtype == 'object':
-            df[col] = df[col].astype('str')
+            # Try to convert object columns to string to avoid Arrow serialization issues
+            # This handles mixed-type columns that can cause ArrowInvalid errors
+            try:
+                df[col] = df[col].astype('str')
+            except Exception:
+                # If conversion fails, try converting to nullable string dtype
+                df[col] = df[col].astype('string')
     return df
 
 def read_file_with_optimization(uploaded_file, file_type='csv'):

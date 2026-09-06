@@ -253,9 +253,9 @@ class LocalRAGKnowledgeBase:
 
             self.matrix = normalized_matrix
 
-            if FAISS_AVAILABLE:
+            if _faiss_available:
                 dim = normalized_matrix.shape[1]
-                self.index = faiss.IndexFlatIP(dim)
+                self.index = _faiss.IndexFlatIP(dim)
                 self.index.add(normalized_matrix)
             else:
                 self.index = None
@@ -289,7 +289,7 @@ class LocalRAGKnowledgeBase:
             best_idx: int = -1
             best_score: float = -1.0
 
-            if FAISS_AVAILABLE and self.index is not None:
+            if _faiss_available and self.index is not None:
                 scores, indices = self.index.search(query_vec, min(top_k * 2, len(self.documents)))
                 retrieved_docs: List[Dict[str, Any]] = []
                 for score, idx in zip(scores[0], indices[0]):
