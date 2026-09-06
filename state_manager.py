@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 TRAINING_MODE_UNSUPERVISED = "unsupervised"
 TRAINING_MODE_SUPERVISED = "supervised"
-VALID_PAGES = {"home", "collect", "train", "evaluate", "detect", "status"}
+VALID_PAGES = {"home", "collect", "train", "evaluate", "detect", "status", "settings"}
 
 
 def navigate_to_page(page_name, *, rerun=True):
