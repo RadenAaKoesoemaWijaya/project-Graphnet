@@ -114,8 +114,8 @@ def create_probability_distribution(probabilities, title="Distribusi Probabilita
     fig.add_vline(x=threshold, line_dash="dash", line_color="red", annotation_text=f"Ambang = {threshold}")
     return fig
 
-def get_df_processed():
-    """Helper function to get df_processed from session state path"""
+def get_df_processed(load_full=True):
+    """Load the processed dataset, optionally returning only its metadata."""
     if 'df_processed_path' not in st.session_state:
         return None
     try:
@@ -123,7 +123,8 @@ def get_df_processed():
         # Handle lazy loading dict response
         if isinstance(result, dict):
             if result.get('lazy'):
-                # Load full data if lazy loaded
+                if not load_full:
+                    return result
                 return pd.read_parquet(result['path'])
             return result
         return result

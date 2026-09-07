@@ -524,7 +524,9 @@ def show_data_collection_page():
             if 'df_processed_path' in st.session_state:
                 preprocessing_metadata = st.session_state.get('preprocessing_metadata', {})
                 feature_columns = st.session_state.get('feature_columns', [])
-                df_processed = get_df_processed()
+                # Use a bounded sample for the page summary; expensive selectors
+                # load the full dataset only when the user starts the operation.
+                df_processed = get_processed_sample(n=5000)
                 if df_processed is not None and feature_columns:
                     # Tampilkan fitur yang tersedia dan allow selection
                     st.markdown("---")
@@ -787,10 +789,11 @@ def show_data_collection_page():
                     
                         if st.button("🔧 Terapkan Select K-Best", type="primary"):
                             try:
-                                if len(df_processed) > 5:
+                                selection_df = get_df_processed()
+                                if selection_df is not None and len(selection_df) > 5:
                                     with st.spinner("Menghitung skor Select K-Best..."):
                                         selected_features, feature_scores = apply_select_k_best(
-                                            df_processed, feature_columns, k=k_value, score_func_name=score_function
+                                            selection_df, feature_columns, k=k_value, score_func_name=score_function
                                         )
                                 
                                         st.success(f"✅ Select K-Best ({score_function}) berhasil! Memilih {len(selected_features)} fitur terbaik")
@@ -802,14 +805,14 @@ def show_data_collection_page():
                                         # Apply advanced filtering if selected
                                         if remove_correlated:
                                             final_features, to_remove = filter_correlated_features(
-                                                df_processed, final_features, correlation_threshold=0.9, feature_scores_df=feature_scores
+                                                selection_df, final_features, correlation_threshold=0.9, feature_scores_df=feature_scores
                                             )
                                             if len(to_remove) > 0:
                                                 st.warning(f"🗑️ Dihapus {len(to_remove)} fitur karena korelasi tinggi: {', '.join(to_remove)}")
                                 
                                         if variance_threshold > 0:
                                             final_features, low_var_features = filter_low_variance_features(
-                                                df_processed, final_features, variance_threshold=variance_threshold
+                                                selection_df, final_features, variance_threshold=variance_threshold
                                             )
                                             if len(low_var_features) > 0:
                                                 st.warning(f"🗑️ Dihapus {len(low_var_features)} fitur karena variansi rendah: {', '.join(low_var_features)}")
@@ -833,7 +836,11 @@ def show_data_collection_page():
                     
                         if st.button("🔧 Terapkan Mutual Information", type="primary"):
                             with st.spinner("Menghitung Mutual Information..."):
-                                selected_features, feature_scores = apply_mutual_info_selection(df_processed, feature_columns, k=k_mi)
+                                selection_df = get_df_processed()
+                                if selection_df is None:
+                                    st.error("Data hasil preprocessing tidak dapat dimuat.")
+                                    return
+                                selected_features, feature_scores = apply_mutual_info_selection(selection_df, feature_columns, k=k_mi)
                                 st.success(f"✅ Berhasil memilih {len(selected_features)} fitur!")
                                 st.write("**📊 Skor Fitur Teratas:**")
                                 st.dataframe(feature_scores.head(k_mi), width='stretch')
@@ -846,7 +853,11 @@ def show_data_collection_page():
                     
                         if st.button("🔧 Terapkan Tree-based Selection", type="primary"):
                             with st.spinner("Melatih model untuk menghitung importance..."):
-                                selected_features, feature_importances, model_name = apply_tree_based_selection(df_processed, feature_columns, k=k_tree)
+                                selection_df = get_df_processed()
+                                if selection_df is None:
+                                    st.error("Data hasil preprocessing tidak dapat dimuat.")
+                                    return
+                                selected_features, feature_importances, model_name = apply_tree_based_selection(selection_df, feature_columns, k=k_tree)
                                 st.success(f"✅ Berhasil memilih {len(selected_features)} fitur menggunakan {model_name}!")
                                 st.write(f"**📊 Importance Fitur ({model_name}):**")
                                 st.dataframe(feature_importances.head(k_tree), width='stretch')

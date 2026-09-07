@@ -37,9 +37,10 @@ def stream_csv_to_parquet(file_path, output_path=None, chunk_size=50000, progres
             os.makedirs(output_dir, exist_ok=True)
 
     writer = None
+    writer_closed = False
     total_rows = 0
     try:
-        for chunk in pd.read_csv(file_path, chunksize=chunk_size):
+        for chunk_number, chunk in enumerate(pd.read_csv(file_path, chunksize=chunk_size), start=1):
             chunk = optimize_memory_usage(chunk)
             chunk = fix_arrow_compatibility(chunk)
             for column in chunk.select_dtypes(include=["category"]).columns:
@@ -50,13 +51,18 @@ def stream_csv_to_parquet(file_path, output_path=None, chunk_size=50000, progres
             writer.write_table(table)
             total_rows += len(chunk)
             del table, chunk
-            gc.collect()
+            # Frequent full GC pauses dominate ingestion time for large files.
+            if chunk_number % 10 == 0:
+                gc.collect()
     except Exception:
+        if writer is not None:
+            writer.close()
+            writer_closed = True
         if os.path.exists(output_path):
             os.unlink(output_path)
         raise
     finally:
-        if writer is not None:
+        if writer is not None and not writer_closed:
             writer.close()
 
     return output_path, total_rows
