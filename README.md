@@ -178,11 +178,7 @@ Semua dependensi inti dikunci pada [requirements.txt](requirements.txt):
    *Output yang diharapkan jika berhasil: `CUDA Available: True` beserta nama GPU Anda.*
 
 5. **Jalankan aplikasi**:
-   - Menggunakan Streamlit langsung:
-     ```bash
-     streamlit run main.py
-     ```
-   - Atau menggunakan launcher otomatis:
+    - Jalankan melalui launcher resmi (mengatur virtual environment dan Windows event loop):
      ```bash
      python run.py
      ```

@@ -121,12 +121,18 @@ def main():
 
     try:
         # Run streamlit app using the resolved Python interpreter
+        runtime_env = os.environ.copy()
+        project_root = os.path.dirname(os.path.abspath(__file__))
+        existing_pythonpath = runtime_env.get("PYTHONPATH", "")
+        runtime_env["PYTHONPATH"] = os.pathsep.join(
+            path for path in (project_root, existing_pythonpath) if path
+        )
         cmd = [
             PYTHON_EXEC, "-m", "streamlit", "run", "main.py",
             "--server.maxUploadSize=3072",
             "--server.maxMessageSize=3072"
         ]
-        subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True, env=runtime_env)
     except KeyboardInterrupt:
         print("\n⏹️  Aplikasi dihentikan oleh pengguna")
     except subprocess.CalledProcessError as e:
