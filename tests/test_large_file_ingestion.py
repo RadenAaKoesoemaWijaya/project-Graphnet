@@ -1,7 +1,33 @@
 import pandas as pd
+import pytest
 
 from cache_manager import get_file_hash
-from file_handler import read_large_csv, remove_duplicates_from_parquet, stream_csv_to_parquet
+from config import MAX_EXCEL_FILE_SIZE
+from file_handler import (
+    ingest_file_to_raw_parquet,
+    read_file_with_optimization,
+    read_large_csv,
+    remove_duplicates_from_parquet,
+    stream_csv_to_parquet,
+)
+
+
+class UploadedBytes:
+    def __init__(self, payload, name="claims.xlsx", reported_size=None):
+        import io
+
+        self._buffer = io.BytesIO(payload)
+        self.name = name
+        self.size = len(payload) if reported_size is None else reported_size
+
+    def seek(self, position):
+        return self._buffer.seek(position)
+
+    def tell(self):
+        return self._buffer.tell()
+
+    def read(self, size=-1):
+        return self._buffer.read(size)
 
 
 def test_stream_csv_to_parquet_preserves_rows_and_columns(tmp_path):
@@ -86,3 +112,31 @@ def test_upload_cache_hash_distinguishes_same_name_and_size():
     second = UploadedFile(b"claim_id,amount\nC2,20\n")
     assert first.size == second.size
     assert get_file_hash(first) != get_file_hash(second)
+
+
+def test_excel_upload_is_buffered_once_and_converted_to_parquet(tmp_path):
+    source_df = pd.DataFrame({
+        "claim_id": ["C1", "C2"],
+        "amount": [100.5, 250.0],
+        "status": ["PAID", "PENDING"],
+    })
+    excel_buffer = __import__("io").BytesIO()
+    source_df.to_excel(excel_buffer, index=False, engine="openpyxl")
+    uploaded_file = UploadedBytes(excel_buffer.getvalue())
+
+    output, row_count, schema = ingest_file_to_raw_parquet(uploaded_file, "xlsx")
+
+    actual = pd.read_parquet(output)
+    assert row_count == 2
+    assert schema["columns"] == ["claim_id", "amount", "status"]
+    assert actual["claim_id"].tolist() == ["C1", "C2"]
+
+
+def test_excel_upload_over_limit_fails_before_parsing():
+    uploaded_file = UploadedBytes(
+        b"not-a-real-workbook",
+        reported_size=MAX_EXCEL_FILE_SIZE + 1,
+    )
+
+    with pytest.raises(ValueError, match="dibatasi 100MB"):
+        read_file_with_optimization(uploaded_file, "xlsx")

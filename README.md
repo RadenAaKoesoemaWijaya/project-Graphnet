@@ -286,6 +286,7 @@ ASTINA mendukung continuous serverless deployment ke Cloud Run via Artifact Regi
 *Catatan penting deployment:*
 - *Cloud Run menggunakan memory 16 GiB, 4 CPU, concurrency 1, timeout 3600 detik, minimum 1 instance, dan maksimum 5 instance. Concurrency 1 dipilih karena ingestion dan preprocessing dataset menggunakan memory besar.*
 - *Batas upload aplikasi dan request Cloud Run adalah 3 GiB. Dataset besar tetap membutuhkan temporary disk yang memadai; upload CSV/Parquet lebih disarankan daripada Excel.*
+- *Upload Excel (`.xlsx`/`.xls`) dibatasi 100 MiB karena parser Excel menggunakan memory penuh. Untuk dataset lebih besar, konversi terlebih dahulu ke CSV atau Parquet.*
 - *Untuk persistensi model, tetapkan `_GCS_BUCKET` dan berikan service account minimal role `roles/storage.objectAdmin` pada bucket. Cache dan `/tmp` Cloud Run bersifat ephemeral.*
 - *Deployment default bersifat privat (`_ALLOW_UNAUTH=false`). Gunakan Secret Manager untuk API key dan password production; jangan menaruh secret di `cloudbuild.yaml` atau source control.*
 - *Setelah deploy, verifikasi health endpoint dan URL service sebelum menerima traffic.*

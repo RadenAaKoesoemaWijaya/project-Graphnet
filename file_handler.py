@@ -160,6 +160,43 @@ def fix_arrow_compatibility(df):
                 df[col] = df[col].astype('string')
     return df
 
+def _read_local_file_with_optimization(file_path, file_type):
+    """Read a local file after it has been safely buffered to disk."""
+    if file_type == 'csv':
+        df = read_large_csv(file_path, progress_bar=True)
+    elif file_type == 'parquet':
+        st.info("🚀 Menggunakan Polars engine untuk Parquet...")
+        df = read_with_polars(file_path, 'parquet')
+        if df is None:
+            df = pd.read_parquet(file_path)
+        df = optimize_memory_usage(df)
+    elif file_type in ['xlsx', 'xls']:
+        excel_errors = ['#NULL!', '#DIV/0!', '#VALUE!', '#REF!', '#NAME?', '#NUM!', '#N/A', '#N/A!']
+        errors_to_replace = ['']
+        for error in excel_errors:
+            errors_to_replace.extend([
+                error, error.lower(), error.upper(),
+                error + ' ', ' ' + error
+            ])
+        df = pd.read_excel(
+            file_path,
+            na_values=errors_to_replace,
+            keep_default_na=True,
+        )
+        if df.empty:
+            raise ValueError(
+                "File Excel berhasil dibaca tetapi tidak memiliki baris data. "
+                "Pastikan sheet pertama berisi header dan minimal satu baris data."
+            )
+        df = optimize_memory_usage(df)
+    elif file_type == 'json':
+        df = pd.read_json(file_path)
+        df = optimize_memory_usage(df)
+    else:
+        raise ValueError(f"Unsupported file type: {file_type}")
+
+    return fix_arrow_compatibility(df)
+
 def read_file_with_optimization(uploaded_file, file_type='csv'):
     """
     Read uploaded file with streaming buffer and memory optimization for large files
@@ -173,8 +210,12 @@ def read_file_with_optimization(uploaded_file, file_type='csv'):
     file_size = uploaded_file.size
     check_file_size(file_size)
 
-    if file_size > 100 * 1024 * 1024 and file_type in ['xlsx', 'xls']:
-        st.warning("⚠️ Format Excel sangat lambat dan tidak efisien untuk file >100MB. Sangat disarankan menggunakan Parquet atau CSV.")
+    if file_type in ['xlsx', 'xls'] and file_size > MAX_EXCEL_FILE_SIZE:
+        limit_mb = MAX_EXCEL_FILE_SIZE / (1024 * 1024)
+        raise ValueError(
+            f"File Excel dibatasi {limit_mb:.0f}MB karena parser Excel menggunakan memory penuh. "
+            "Gunakan CSV atau Parquet untuk dataset yang lebih besar."
+        )
 
     # Stream upload buffer to disk in 8MB chunks to prevent memory explosion
     with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{file_type}') as tmp_file:
@@ -184,36 +225,7 @@ def read_file_with_optimization(uploaded_file, file_type='csv'):
         tmp_file_path = tmp_file.name
 
     try:
-        if file_type == 'csv':
-            df = read_large_csv(tmp_file_path, progress_bar=True)
-        elif file_type == 'parquet':
-            st.info("🚀 Menggunakan Polars engine untuk Parquet...")
-            df = read_with_polars(tmp_file_path, 'parquet')
-            if df is None:
-                df = pd.read_parquet(tmp_file_path)
-            df = optimize_memory_usage(df)
-        elif file_type in ['xlsx', 'xls']:
-            excel_errors = ['#NULL!', '#DIV/0!', '#VALUE!', '#REF!', '#NAME?', '#NUM!', '#N/A', '#N/A!']
-            errors_to_replace = ['']
-            for error in excel_errors:
-                errors_to_replace.extend([
-                    error, error.lower(), error.upper(),
-                    error + ' ', ' ' + error
-                ])
-            df = pd.read_excel(tmp_file_path,
-                             na_values=errors_to_replace,
-                             keep_default_na=True)
-            df = optimize_memory_usage(df)
-        elif file_type == 'json':
-            df = pd.read_json(tmp_file_path)
-            df = optimize_memory_usage(df)
-        else:
-            raise ValueError(f"Unsupported file type: {file_type}")
-
-        # Fix Arrow compatibility without expanding memory
-        df = fix_arrow_compatibility(df)
-
-        return df
+        return _read_local_file_with_optimization(tmp_file_path, file_type)
 
     finally:
         # Clean up temporary file
@@ -347,6 +359,10 @@ def ingest_file_to_raw_parquet(uploaded_file, file_type='csv'):
     Stream uploaded file directly to a raw Parquet file on disk without loading into RAM.
     Returns (raw_parquet_path, total_rows, schema_dict)
     """
+    file_type = (file_type or 'csv').lower().lstrip('.')
+    if file_type == 'excel':
+        file_type = 'xlsx'
+
     file_size = uploaded_file.size
     check_file_size(file_size)
     
@@ -369,8 +385,13 @@ def ingest_file_to_raw_parquet(uploaded_file, file_type='csv'):
             shutil.copyfile(tmp_file_path, raw_parquet_path)
         else:
             # Fallback for Excel / JSON
-            df = read_file_with_optimization(uploaded_file, file_type)
-            df = fix_arrow_compatibility(df)
+            if file_type in ['xlsx', 'xls'] and file_size > MAX_EXCEL_FILE_SIZE:
+                limit_mb = MAX_EXCEL_FILE_SIZE / (1024 * 1024)
+                raise ValueError(
+                    f"File Excel dibatasi {limit_mb:.0f}MB karena parser Excel menggunakan memory penuh. "
+                    "Gunakan CSV atau Parquet untuk dataset yang lebih besar."
+                )
+            df = _read_local_file_with_optimization(tmp_file_path, file_type)
             df.to_parquet(raw_parquet_path, index=False, compression="zstd")
             del df
             gc.collect()

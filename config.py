@@ -7,6 +7,7 @@ import pandas as pd
 # File upload configuration for large files
 MAX_FILE_SIZE = 3 * 1024 * 1024 * 1024  # 3GiB in bytes
 MAX_DIRECT_DETECTION_FILE_SIZE = 500 * 1024 * 1024  # Direct detection still uses an in-memory DataFrame
+MAX_EXCEL_FILE_SIZE = 100 * 1024 * 1024  # Excel parsing is full-memory via pandas
 CHUNK_SIZE = 50 * 1024 * 1024  # 50MB chunks for processing
 VISUALIZATION_SAMPLE_SIZE = 5000
 SHAP_BACKGROUND_SAMPLE_SIZE = 500
