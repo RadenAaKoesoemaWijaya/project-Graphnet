@@ -87,9 +87,9 @@ flowchart TD
 | **Entry Point & Router** | `main.py` | Konfigurasi Streamlit, top navbar, inisialisasi state, error boundary |
 | **UI Components & Styles** | `ui_components.py` | Glassmorphic CSS, breadcrumb tracker, live telemetry pills |
 | **UI Sidebar & Nav** | `ui/sidebar.py` | Navigasi menu, status kesiapan pipeline (0–100%), telemetri hardware |
-| **UI Utilities & Charts** | `ui/utils.py` | Smart feature alignment, visual helper, chart Plotly, export data |
+| **UI Utilities & Charts** | `ui/utils.py` | Smart feature alignment, bounded visualization sampling, chart Plotly, export data |
 | **Schema Harmonizer** | `schema_harmonizer.py` | Penyelarasan semantik alias kolom (ID/EN/medis), derivasi deterministik, provenance tagging, & evaluasi kesiapan 9 aturan (Circuit Breaker) |
-| **File Handler** | `file_handler.py` | Streaming IO multi-format (CSV, Excel `.xlsx`/`.xls`, Parquet), normalisasi format otomatis, optimasi memory dtype, buffer IO chunking 8MB |
+| **File Handler** | `file_handler.py` | Streaming IO CSV/Parquet, Excel `.xlsx`/`.xls` melalui temporary file tunggal, normalisasi format, optimasi dtype, buffer 8MB |
 | **Large File Processor** | `large_file_processor.py` | Chunking dataset, memory-bounded preprocessing per batch |
 | **Data Validator & Sanitizer** | `data_validator.py` | Integritas kolom, sanitasi tipe data, evaluasi skema 14 kolom inti |
 | **Data Preprocessing & Selection**| `preprocessing_optimized.py` | Imputasi, outlier capping, domain features, SelectKBest, Corr filter, PCA |
@@ -115,13 +115,16 @@ flowchart TD
 Aplikasi diaktifkan melalui terminal atau *production launcher*:
 
 ```powershell
-# Jalankan menggunakan Streamlit
+# Jalankan melalui launcher resmi agar virtual environment dan Windows event loop
+# dikonfigurasi sebelum server Streamlit dibuat.
 .\.venv\Scripts\Activate.ps1
-streamlit run main.py
-
-# Atau menggunakan production launcher
 python run.py
 ```
+
+Pada Windows, `run.py` meneruskan root proyek melalui `PYTHONPATH` sehingga
+`sitecustomize.py` dapat mengaktifkan `WindowsSelectorEventLoopPolicy` sebelum
+Streamlit membuat event loop. Ini mencegah log `ProactorBasePipeTransport` saat
+browser menutup koneksi WebSocket.
 
 `main.py` mengeksekusi tahapan inisialisasi:
 1. Memanggil `st.set_page_config()` pada baris pertama (judul, favicon, layout wide).
@@ -158,7 +161,10 @@ python run.py
 - Menyediakan tombol aksi cepat menuju modul *Data Collection* atau *Detection*.
 
 ### 4.2 Data Collection & Preprocessing (`ui/pages/data_collection.py`)
-- **File Uploader Multi-Format**: Menerima `.csv`, `.xlsx`, `.xls`, dan `.parquet` hingga batas 3 GiB.
+- **File Uploader Multi-Format**: Menerima `.csv`, `.xlsx`, `.xls`, dan `.parquet`. CSV/Parquet mengikuti batas upload 3 GiB; Excel dibatasi 100 MiB karena parser Excel menggunakan memory penuh.
+- **Excel Ingestion Aman**: Upload Excel dibuffer ke temporary file satu kali, dibaca dengan `pandas.read_excel`, divalidasi agar tidak kosong, lalu dikonversi ke Parquet. Dataset Excel di atas 100 MiB diarahkan ke CSV/Parquet untuk mencegah OOM.
+- **Large Dataset Path**: CSV ditulis bertahap ke raw Parquet; preprocessing besar tetap memakai path Parquet dan Polars lazy. Preview serta chart menggunakan sample maksimum 5.000 baris.
+- **Deduplikasi Out-of-Core**: Opsi penghapusan duplikasi pada input Parquet menggunakan Polars lazy dan mempertahankan metadata jumlah baris yang dihapus.
 - **Validasi Kuota & Ukuran**: Memeriksa kuota harian dan alokasi memori melalui `rate_limit.py`.
 - **Schema Harmonizer & Semantic Alias Resolution (`SchemaHarmonizer`)**: Secara transparan menyelaraskan sinonim kolom bahasa Indonesia dan standar medis ke nama kanonikal, tanpa memerlukan preprocessing manual dari pengguna:
   - Resolusi alias: `no_klaim` → `claim_id`, `no_peserta` → `patient_id`, `kode_faskes` → `provider_id`, `biaya_tagihan` → `billed_amount`, `lama_rawat` → `length_of_stay`, `diagnosa` → `diagnosis_code`, dll.
@@ -169,6 +175,7 @@ python run.py
   - Penandaan metadata provenance pada kolom hasil imputasi default (`df.attrs["_imputed_columns"]`), mencegah false positive pada aturan bisnis.
 - **Matriks Kesiapan 9 Aturan Bisnis (Circuit Breaker UI)**: Kartu diagnostik interaktif yang menampilkan status eksekusi per aturan (`🟢 READY`, `🟡 DERIVED`, `⚪ SKIPPED`) dan rincian per kolom (`✅ Ada Langsung`, `🔄 Alias`, `⚡ Diturunkan`, `⚪ Default`, `❌ Tidak Ada`).
 - **Exploratory Data Analysis (EDA)**: Distribusi nilai numerik, visualisasi *missing value*, dan analisis korelasi awal.
+- **Visualisasi Bounded**: Histogram, distribusi probabilitas, dan chart kategori tidak mengirim DataFrame besar langsung ke Plotly cache; visualisasi memakai sample deterministik, sedangkan angka agregat tetap dihitung dari seluruh dataset.
 - **Opsi Preprocessing Terpadu**:
   - Deteksi dan capping outlier berbasis IQR.
   - Ekstraksi fitur tanggal (*day_of_week*, *month*, *quarter*).
@@ -214,6 +221,7 @@ python run.py
 - **Explainable AI (XAI)**:
   - *Global Feature Importance*: SHAP Summary Beeswarm Plot dan Bar Plot atribut signifikansi global.
   - *Local Instance Explanation*: LIME Waterfall Plot dan Force Plot untuk membedah alasan individual suatu klaim ditandai anomali.
+- **SHAP Resource Guard**: Background SHAP dibatasi maksimal 500 baris dan data plot evaluasi menggunakan sample bounded agar UI tetap responsif.
 - **GNN Relational Contribution**: Analisis kontribusi koneksi graf terhadap probabilitas anomali klaim.
 
 ### 4.5 Detection, Rule Auditing & AI Copilot Workspace (`ui/pages/detection.py`)
@@ -816,9 +824,9 @@ Modul `pii_masker.py` melindungi data sensitif sesuai regulasi UU Perlindungan D
 
 ---
 
-## 12. Pengujian Kualitas & Quality Gate (82 Test Cases)
+## 12. Pengujian Kualitas & Quality Gate (111 Test Cases)
 
-Seluruh komponen ASTINA diuji secara otomatis menggunakan suite Pytest yang mencakup **82 skenario uji terdaftar** (82 Passed, 100% Green), termasuk modul uji keamanan siber, autentikasi, resiliensi schema harmonizer, dan subgraf anomali GNN:
+Seluruh komponen ASTINA diuji secara otomatis menggunakan suite Pytest yang mencakup **111 skenario uji terdaftar** (111 Passed, 100% Green pada validasi terakhir), termasuk keamanan siber, autentikasi, resiliensi schema, ingestion Excel, helper visualisasi, dan subgraf anomali GNN:
 
 ```powershell
 # Menjalankan seluruh test suite
@@ -843,12 +851,14 @@ Seluruh komponen ASTINA diuji secara otomatis menggunakan suite Pytest yang menc
 | `test_gnn_minibatch.py` | 4 | Uji PyTorch GNN mini-batch NeighborLoader, forward pass, dan early stopping |
 | `test_gpu_and_pipeline_fixes.py` | 6 | Uji kebersihan memori GPU, parameter XGBoost hardware, fallback CUDA, fuzzy similarity parity, dan pseudo-label caching |
 | `test_graph_scaling.py` | 9 | Uji batasan node/edge graph builder, pencegahan OOM pada graf besar, dan 7 skenario `build_anomaly_subgraph`: basic, seed inclusion, score shape, edge_type propagation, torch tensor input, single-node degenerate, all-low-scores fallback |
-| `test_large_file_ingestion.py` | 2 | Uji konversi streaming CSV-to-Parquet per chunk dengan alokasi buffer aman |
+| `test_large_file_ingestion.py` | 6 | Uji CSV-to-Parquet, deduplikasi Parquet, cache key upload, dan ingestion Excel XLSX |
 | `test_optuna_ensemble_and_drift.py` | 5 | Uji optimasi hyperparameter Optuna dan deteksi Kolmogorov-Smirnov drift |
 | `test_pipeline_edge_cases.py` | 12 | Uji toleransi data null, data bertipe campuran, sanitasi string, dan extreme amounts |
 | `test_schema_synthesis_and_resilience.py` | 6 | Uji resiliensi SchemaHarmonizer: zero-crash dataset minimal, aliasing bahasa Indonesia, derivasi LOS deterministik, circuit breaker weight re-normalization, provenance tagging, dan empty DataFrame |
 | `test_streaming_preprocessing_memory.py` | 2 | Uji batasan pemakaian RAM (<100MB peak) pada pemrosesan streaming skala besar |
-| **Total Test Suite** | **82 (82 Passed)** | **100% Passed (Green)** |
+| `test_visualization_helpers.py` | 4 | Uji sampling bounded, deterministik, chart valid, dan input kosong |
+| `test_windows_event_loop.py` | 2 | Uji Windows Selector event loop pada proses utama dan subprocess Streamlit |
+| **Total Test Suite** | **111 (111 Passed)** | **100% Passed (Green)** |
 
 ---
 
@@ -880,7 +890,7 @@ toolbarMode = "minimal"      # Kurangi render overhead pada sistem RAM rendah
 Konfigurasi ini terutama penting pada mesin dengan RAM ≤ 8 GB (seperti mesin dengan RAM terpakai ≥ 75% sebelum aplikasi dijalankan).
 
 #### `ConnectionResetError: [WinError 10054]`
-Error ini muncul di log Windows ketika browser menutup tab/koneksi WebSocket saat server Streamlit masih aktif. Ini adalah perilaku normal asyncio ProactorEventLoop di Windows — **tidak menyebabkan crash aplikasi**, hanya log warning. Tidak perlu tindakan dari sisi kode aplikasi.
+Error ini berasal dari koneksi WebSocket yang ditutup browser saat server masih aktif. Pada Windows, ASTINA mencegah exception callback noisy tersebut dengan `WindowsSelectorEventLoopPolicy` melalui `sitecustomize.py` dan launcher `run.py`. Gunakan `python run.py`; jangan menjalankan `streamlit run main.py` secara langsung pada Windows.
 
 #### Dependensi Baru: `lime` & catatan `alibi-detect`
 Library `lime>=0.2.0.0` telah ditambahkan ke `requirements.txt` (sebelumnya hanya ada di venv tapi tidak terdokumentasi di requirements). Library `alibi-detect` **tidak dimasukkan** ke `requirements.txt` utama karena instalasinya menarik TensorFlow (~2GB) yang akan memperlamban Docker build secara signifikan. Sistem berjalan penuh tanpa `alibi-detect` — fitur drift detection menggunakan Kolmogorov-Smirnov via `scipy` yang sudah tersedia. Untuk mengaktifkan fitur drift lanjutan: `pip install "alibi-detect[torch]>=0.12.0"`.
@@ -905,8 +915,8 @@ py -3.13 -m venv .venv
 # 2. Install Dependensi
 pip install -r requirements.txt
 
-# 3. Jalankan Aplikasi
-streamlit run main.py
+# 3. Jalankan aplikasi melalui launcher resmi
+python run.py
 ```
 
 ### 12.2 Docker Desktop
@@ -921,8 +931,12 @@ docker-compose logs -f
 
 ### 12.3 Google Cloud Run Serverless
 ```powershell
-# Deploy otomatis via PowerShell
-.\.cloudrun\deploy.ps1
+# Deploy otomatis melalui Bash, WSL, atau Git Bash
+./deploy.sh PROJECT_ID asia-southeast2 astina GCS_BUCKET
+
+# Alternatif PowerShell langsung melalui Cloud Build
+gcloud builds submit --config=cloudbuild.yaml `
+  --substitutions="_REGION=asia-southeast2,_SERVICE=astina,_GCS_BUCKET=GCS_BUCKET"
 ```
 
 ---

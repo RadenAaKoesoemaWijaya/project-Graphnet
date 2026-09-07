@@ -91,7 +91,7 @@ project-Graphnet/
 │       ├── status.py                # Telemetri performa sistem & audit logging
 │       └── settings.py              # Konfigurasi LLM, Copilot, model registry & sistem
 │
-├── tests/                           # Unit test & integrasi otomatis (Pytest) - 107 Test Cases
+├── tests/                           # Unit test & integrasi otomatis (Pytest) - 111 Test Cases
 │   ├── conftest.py                  # Pytest fixtures & setup lingkungan uji
 │   ├── test_agentic_copilot.py      # Uji Copilot, FAISS RAG, zero-wipeout fallback, & XAI/GNN context
 │   ├── test_app_startup.py          # Uji startup & integritas import modul utama
@@ -102,6 +102,8 @@ project-Graphnet/
 │   ├── test_gpu_and_pipeline_fixes.py # Uji kebersihan VRAM, fallback CUDA/CPU, & fuzzy parity
 │   ├── test_graph_scaling.py        # Uji penskalaan graf, edge budget limit & build_anomaly_subgraph (7 skenario)
 │   ├── test_large_file_ingestion.py # Uji streaming CSV-to-Parquet chunk ingestion
+│   ├── test_visualization_helpers.py # Uji sampling bounded dan chart edge cases
+│   ├── test_windows_event_loop.py   # Uji event loop Windows dan subprocess launcher
 │   ├── test_optuna_ensemble_and_drift.py # Uji optimasi Optuna & deteksi pergeseran data
 │   ├── test_pipeline_edge_cases.py  # Uji edge cases & robustness data tak standar
 │   ├── test_schema_synthesis_and_resilience.py # Uji resilient schema harmonizer, aliasing Indonesia & circuit breaker
@@ -899,7 +901,7 @@ Untuk troubleshooting, cek log di terminal atau halaman **Status Sistem** untuk 
 
 ## 🧪 Pengujian & Validasi Kualitas
 
-Aplikasi dilengkapi suite pengujian otomatis komprehensif (**107 Test Cases**) untuk memverifikasi keandalan seluruh komponen sistem, termasuk pengujian keamanan siber (*cybersecurity*), autentikasi, resiliensi schema, streaming dataset, visualisasi helper, dan subgraf anomali GNN:
+Aplikasi dilengkapi suite pengujian otomatis komprehensif (**111 Test Cases**) untuk memverifikasi keandalan seluruh komponen sistem, termasuk pengujian keamanan siber (*cybersecurity*), autentikasi, resiliensi schema, streaming dataset, ingestion Excel, visualisasi helper, event loop Windows, dan subgraf anomali GNN:
 
 ```powershell
 # Jalankan seluruh test suite dengan Pytest
@@ -916,7 +918,7 @@ python system_status.py
 ```
 
 Hasil verifikasi memastikan:
-- ✅ **107 Test Cases (107 Passed, 100% Green)** mencakup seluruh modul aplikasi.
+- ✅ **111 Test Cases (111 Passed, 100% Green)** mencakup seluruh modul aplikasi.
 - ✅ **Schema Harmonizer & Semantic Aliasing** — Penyelarasan transparan 13+ sinonim kolom bahasa Indonesia/industri ke nama kanonikal terverifikasi akurat.
 - ✅ **Circuit Breaker & Dynamic Weight Re-normalization** — Dataset minimal (hanya 2 kolom) tidak menyebabkan crash; bobot aturan aktif dinormalisasi ulang dengan benar.
 - ✅ **Derivasi Deterministik LOS** — `admission_date` dan `discharge_date` diturunkan otomatis dari `service_date` + `length_of_stay`; `detect_prolonged_stay_and_readmission()` berjalan tanpa error.
@@ -942,14 +944,15 @@ Hasil verifikasi memastikan:
 
 - **Port 8501 bentrok / sudah digunakan**:
   ```powershell
-  streamlit run main.py --server.port 8502
+   $env:STREAMLIT_SERVER_PORT="8502"
+   python run.py
   ```
 - **Error PyTorch / CUDA di Local**:
   Pastikan versi PyTorch sesuai dengan versi driver CUDA Anda. Untuk mode CPU murni, instalasi standar dari `requirements.txt` langsung siap digunakan.
 - **Docker Desktop permission / volume mount**:
-  Pastikan folder `cache/` dan `models/` ada di root project sebelum menjalankan `docker-compose up`. Jika belum ada, buat terlebih dahulu:
+   Pastikan folder `cache/`, `models/`, `logs/`, dan `tmp-data/` ada di root project sebelum menjalankan `docker-compose up`. Jika belum ada, buat terlebih dahulu:
   ```powershell
-  New-Item -ItemType Directory -Force cache, models
+   New-Item -ItemType Directory -Force cache, models, logs, tmp-data
   docker-compose up --build -d
   ```
 - **GNN visualization tidak muncul / semua node berwarna seragam**:
