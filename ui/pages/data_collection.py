@@ -4,10 +4,11 @@ import numpy as np
 from ui.utils import *
 from state_manager import *
 from rate_limit import check_upload_quota, increment_quota
+from cache_manager import get_file_hash
 
 from file_handler import (
     ingest_file_to_raw_parquet, get_parquet_sample, get_file_info,
-    show_file_size_warning, save_processed_data
+    show_file_size_warning, save_processed_data, remove_duplicates_from_parquet
 )
 
 def load_and_validate_raw_data(uploaded_file):
@@ -117,7 +118,9 @@ def show_data_collection_page():
             import time
             upload_start_time = time.time()
 
-            raw_cache_key = (uploaded_file.name, uploaded_file.size)
+            # Include content samples in the key so same-name, same-size files
+            # cannot reuse an unrelated raw Parquet result.
+            raw_cache_key = get_file_hash(uploaded_file)
             if st.session_state.get('raw_data_cache_key') == raw_cache_key:
                 raw_parquet_path = st.session_state['raw_data_cache_path']
                 df = st.session_state['raw_data_cache_sample']
@@ -313,6 +316,7 @@ def show_data_collection_page():
                 with st.spinner("Memproses data transaksi..."):
                     preprocessing_success = False
                     preprocessing_metadata = {}
+                    duplicate_metadata = None
                     result = None
                     dataset_rows = st.session_state.get('raw_data_total_rows', len(df) if hasattr(df, 'shape') else 0)
                     dataset_cols = st.session_state.get('raw_data_total_cols', len(df.columns) if hasattr(df, 'columns') else 0)
@@ -320,7 +324,22 @@ def show_data_collection_page():
                     try:
                         input_target = st.session_state.get('raw_data_cache_path') or df
 
-                        if st.session_state['enable_duplicate_removal'] and isinstance(input_target, pd.DataFrame):
+                        if st.session_state['enable_duplicate_removal'] and isinstance(input_target, str):
+                            subset_cols = None
+                            if duplicate_subset.strip():
+                                subset_cols = [col.strip() for col in duplicate_subset.split(',') if col.strip()]
+                            input_target, duplicate_metadata = remove_duplicates_from_parquet(
+                                input_target,
+                                subset=subset_cols,
+                                keep='first',
+                            )
+
+                            if duplicate_metadata['duplicates_removed'] > 0:
+                                st.info(f"🔍 Duplikasi dihapus: {duplicate_metadata['duplicates_removed']:,} baris ({duplicate_metadata['duplicate_rate']:.2%})")
+                            else:
+                                st.info("✅ Tidak ada duplikasi ditemukan")
+
+                        elif st.session_state['enable_duplicate_removal'] and isinstance(input_target, pd.DataFrame):
                             subset_cols = None
                             if duplicate_subset.strip():
                                 subset_cols = [col.strip() for col in duplicate_subset.split(',') if col.strip()]
@@ -332,7 +351,6 @@ def show_data_collection_page():
                                 st.info(f"🔍 Duplikasi dihapus: {duplicate_metadata['duplicates_removed']:,} baris ({duplicate_metadata['duplicate_rate']:.2%})")
                             else:
                                 st.info("✅ Tidak ada duplikasi ditemukan")
-                            preprocessing_metadata['duplicate_removal'] = duplicate_metadata
 
                         result = preprocess_insurance_claims_optimized(
                             input_target,
@@ -350,6 +368,8 @@ def show_data_collection_page():
                         from datetime import datetime
                         preprocessing_metadata = dict(preprocessing_metadata_pipeline) if isinstance(preprocessing_metadata_pipeline, dict) else {}
                         preprocessing_metadata['processed_at'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        if duplicate_metadata is not None:
+                            preprocessing_metadata['duplicate_removal'] = duplicate_metadata
 
                         # Ensure standard keys exist to prevent downstream KeyError
                         if 'original_columns_count' not in preprocessing_metadata:

@@ -401,6 +401,54 @@ def get_parquet_sample(parquet_path: str, n: int = 5000) -> pd.DataFrame:
         raise FileNotFoundError(f"Parquet file not found: {parquet_path}")
     return pl.scan_parquet(parquet_path).head(n).collect().to_pandas()
 
+def remove_duplicates_from_parquet(input_path, output_path=None, subset=None, keep='first'):
+    """Remove duplicate rows from Parquet without materializing pandas data."""
+    if not os.path.exists(input_path):
+        raise FileNotFoundError(f"Parquet file not found: {input_path}")
+    if keep not in ('first', 'last', False):
+        raise ValueError("keep must be 'first', 'last', or False")
+
+    os.makedirs(TEMP_DATA_DIR, exist_ok=True)
+    if output_path is None:
+        output_path = os.path.join(TEMP_DATA_DIR, f"deduplicated_{uuid.uuid4().hex}.parquet")
+    else:
+        output_dir = os.path.dirname(output_path)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+
+    lf = pl.scan_parquet(input_path)
+    schema = lf.collect_schema()
+    columns = list(schema.names())
+    if subset is not None:
+        missing_columns = [column for column in subset if column not in columns]
+        if missing_columns:
+            raise ValueError(f"Kolom deduplikasi tidak ditemukan: {', '.join(missing_columns)}")
+
+    original_rows = lf.select(pl.len()).collect().item()
+    polars_keep = 'none' if keep is False else keep
+    try:
+        lf.unique(
+            subset=subset,
+            keep=polars_keep,
+            maintain_order=True,
+        ).sink_parquet(output_path, compression='zstd')
+        final_rows = pl.scan_parquet(output_path).select(pl.len()).collect().item()
+    except Exception:
+        if os.path.exists(output_path):
+            os.unlink(output_path)
+        raise
+
+    duplicate_count = original_rows - final_rows
+    metadata = {
+        'original_rows': int(original_rows),
+        'duplicates_removed': int(duplicate_count),
+        'final_rows': int(final_rows),
+        'duplicate_rate': float(duplicate_count / original_rows) if original_rows else 0.0,
+        'subset': subset,
+        'keep': keep,
+    }
+    return output_path, metadata
+
 def show_file_size_warning(file_size_gb):
     """
     Show warning for large files

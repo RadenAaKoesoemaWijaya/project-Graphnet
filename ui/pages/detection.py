@@ -1,3 +1,4 @@
+from config import MAX_FILE_SIZE, MAX_DIRECT_DETECTION_FILE_SIZE, LARGE_DATASET_CONFIG
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -282,6 +283,12 @@ def show_detection_page():
                 file_ext = uploaded_file.name.rsplit(".", 1)[-1].lower()
                 fmt_map = {"csv": "csv", "xlsx": "xlsx", "xls": "xls", "parquet": "parquet"}
                 file_format: str = fmt_map.get(file_ext, file_ext) or "csv"
+                if uploaded_file.size > MAX_DIRECT_DETECTION_FILE_SIZE:
+                    limit_mb = MAX_DIRECT_DETECTION_FILE_SIZE / (1024 * 1024)
+                    raise ValueError(
+                        f"Upload langsung pada halaman deteksi dibatasi {limit_mb:.0f}MB. "
+                        "Untuk dataset besar, gunakan halaman Unggah Data agar diproses sebagai Parquet."
+                    )
                 raw_df = read_file_with_optimization(uploaded_file, file_format)
 
                 # ── Post-read validation ──────────────────────────────────
