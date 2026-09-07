@@ -1068,6 +1068,7 @@ def show_data_collection_page():
                     if show_preprocessing_insight and isinstance(df_processed, pd.DataFrame):
                         # Tampilkan informasi preprocessing
                         st.subheader("Hasil Preprocessing")
+                        st.caption("Visualisasi menggunakan sample terbatas untuk menjaga responsivitas halaman.")
                         st.write(f"Jumlah fitur untuk modeling: {len(feature_columns)}")
                         st.write("Fitur yang digunakan:")
                         st.write(feature_columns)

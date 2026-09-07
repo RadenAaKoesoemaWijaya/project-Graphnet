@@ -384,10 +384,17 @@ def show_evaluation_page():
                 
                 # Use training data as background
                 if 'train_df' in st.session_state:
-                    background_data = st.session_state['train_df'][training_features].values
+                    background_df = sample_dataframe_for_visualization(
+                        st.session_state['train_df'],
+                        max_rows=SHAP_BACKGROUND_SAMPLE_SIZE,
+                    )
+                    background_data = background_df[training_features].values
                 else:
                     # Use evaluation data as fallback
-                    background_data = X_eval_df.values[:100]
+                    background_data = sample_dataframe_for_visualization(
+                        X_eval_df,
+                        max_rows=SHAP_BACKGROUND_SAMPLE_SIZE,
+                    ).values
                 
                 # Initialize explainers
                 if explainer.initialize_explainers(background_data):
@@ -399,18 +406,30 @@ def show_evaluation_page():
                     with col_expl1:
                         if 'isolation_forest' in explainer.explainers:
                             st.subheader("Isolation Forest Feature Importance")
-                            explainer.plot_feature_importance('isolation_forest', X=X_eval_df.values, max_features=10)
+                            explainer.plot_feature_importance(
+                                'isolation_forest',
+                                X=sample_dataframe_for_visualization(X_eval_df).values,
+                                max_features=10,
+                            )
                     
                     with col_expl2:
                         if 'xgboost' in explainer.explainers:
                             st.subheader("XGBoost Feature Importance")
-                            explainer.plot_feature_importance('xgboost', X=X_eval_df.values, max_features=10)
+                            explainer.plot_feature_importance(
+                                'xgboost',
+                                X=sample_dataframe_for_visualization(X_eval_df).values,
+                                max_features=10,
+                            )
                     
                     # SHAP summary plot
                     if 'isolation_forest' in explainer.explainers or 'xgboost' in explainer.explainers:
                         st.subheader("SHAP Summary Plot")
                         model_to_plot = 'isolation_forest' if 'isolation_forest' in explainer.explainers else 'xgboost'
-                        explainer.plot_shap_summary(X_eval_df.values, model_to_plot, max_display=10)
+                        explainer.plot_shap_summary(
+                            sample_dataframe_for_visualization(X_eval_df).values,
+                            model_to_plot,
+                            max_display=10,
+                        )
                     
                     # Store explainer in session for later use
                     st.session_state['model_explainer'] = explainer

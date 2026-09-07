@@ -69,16 +69,42 @@ from sklearn.neighbors import LocalOutlierFactor
 from sklearn.svm import OneClassSVM
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import roc_auc_score, precision_recall_curve, auc, precision_score, recall_score, f1_score, confusion_matrix
+from config import SHAP_BACKGROUND_SAMPLE_SIZE, VISUALIZATION_SAMPLE_SIZE
 import warnings
 warnings.filterwarnings('ignore')
 
 TRAINING_MODE_UNSUPERVISED = "unsupervised"
 TRAINING_MODE_SUPERVISED = "supervised"
 
+def sample_dataframe_for_visualization(df, max_rows=VISUALIZATION_SAMPLE_SIZE, random_state=42):
+    """Return a bounded, deterministic DataFrame sample for charts and previews."""
+    if df is None:
+        return None
+    if not isinstance(df, pd.DataFrame):
+        raise TypeError("df must be a pandas DataFrame")
+    if max_rows < 1:
+        raise ValueError("max_rows must be positive")
+    if len(df) <= max_rows:
+        return df
+    return df.sample(n=max_rows, random_state=random_state)
+
+def sample_values_for_visualization(values, max_values=VISUALIZATION_SAMPLE_SIZE, random_state=42):
+    """Return bounded values for charts without changing the source array."""
+    if values is None:
+        return np.asarray([])
+    values_array = np.asarray(values)
+    if values_array.size <= max_values:
+        return values_array
+    rng = np.random.default_rng(random_state)
+    indices = rng.choice(values_array.size, size=max_values, replace=False)
+    return values_array[indices]
+
 # Cached Plotly chart generators for performance optimization
 @st.cache_data(ttl=300, max_entries=20)
 def create_histogram_chart(df, column, nbins=40, title=None):
     """Create cached histogram chart"""
+    if not isinstance(df, pd.DataFrame) or column not in df.columns or df.empty:
+        return None
     if title is None:
         title = f"Distribusi: {column}"
     return px.histogram(df, x=column, nbins=nbins, title=title)
@@ -105,6 +131,9 @@ def create_pie_chart(values, names, title="Pie Chart"):
 @st.cache_data(ttl=300, max_entries=20)
 def create_probability_distribution(probabilities, title="Distribusi Probabilitas", threshold=0.5):
     """Create cached probability distribution chart"""
+    probabilities = sample_values_for_visualization(probabilities)
+    if probabilities.size == 0:
+        return None
     fig = px.histogram(
         x=probabilities,
         nbins=50,

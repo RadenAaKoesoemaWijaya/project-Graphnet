@@ -91,7 +91,7 @@ project-Graphnet/
 │       ├── status.py                # Telemetri performa sistem & audit logging
 │       └── settings.py              # Konfigurasi LLM, Copilot, model registry & sistem
 │
-├── tests/                           # Unit test & integrasi otomatis (Pytest) - 82 Test Cases
+├── tests/                           # Unit test & integrasi otomatis (Pytest) - 107 Test Cases
 │   ├── conftest.py                  # Pytest fixtures & setup lingkungan uji
 │   ├── test_agentic_copilot.py      # Uji Copilot, FAISS RAG, zero-wipeout fallback, & XAI/GNN context
 │   ├── test_app_startup.py          # Uji startup & integritas import modul utama
@@ -107,9 +107,8 @@ project-Graphnet/
 │   ├── test_schema_synthesis_and_resilience.py # Uji resilient schema harmonizer, aliasing Indonesia & circuit breaker
 │   └── test_streaming_preprocessing_memory.py # Uji batasan memori streaming preprocessing
 │
-├── .cloudrun/                       # Konfigurasi & skrip deploy Google Cloud Run
-│   ├── deploy.ps1                   # Skrip deploy otomatis PowerShell
-│   └── deploy.sh                    # Skrip deploy otomatis Bash
+├── cloudbuild.yaml                  # Build, push, dan deploy Cloud Run via Cloud Build
+├── deploy.sh                        # Wrapper deploy Cloud Run (Bash/WSL/Git Bash)
 ├── Dockerfile                       # Multi-stage Dockerfile aman (non-root appuser)
 ├── docker-compose.yml               # Orkestrasi Docker Compose dengan persistensi volume
 ├── requirements.txt                 # Daftar dependensi Python terverifikasi
@@ -125,7 +124,7 @@ project-Graphnet/
 - **Akselerasi Opsional**: GPU NVIDIA (CUDA 12.x) untuk akselerasi PyTorch/GNN. AMD ROCm didukung secara teoritis via PyTorch ROCm build.
 - **Docker**: Docker Desktop versi terbaru dengan Docker Compose v2.
 
-Semua dependensi inti dikunci pada [requirements.txt](file:///c:/project-Graphnet/requirements.txt):
+Semua dependensi inti dikunci pada [requirements.txt](requirements.txt):
 `streamlit==1.61.1`, `pandas`, `numpy`, `scikit-learn`, `scipy`, `joblib`, `torch>=2.4.0`, `torch-geometric>=2.6.0`, `imbalanced-learn`, `plotly>=6.0.0`, `xgboost`, `lightgbm`, `catboost`, `polars`, `pyarrow`, `optuna`, `hdbscan`, `faiss-cpu`, `psutil`, `shap`, `lime`, `google-cloud-storage`.
 
 > **Catatan Streamlit API:** Sejak `streamlit>=1.45`, parameter `use_container_width` pada `st.plotly_chart`, `st.dataframe`, dan `st.button` telah dihapus dan digantikan oleh `width='stretch'` / `width='content'`. Seluruh komponen UI ASTINA sudah menggunakan API baru ini.
@@ -249,6 +248,7 @@ Aplikasi dilengkapi **Multi-stage Dockerfile** dan **Docker Compose** yang mengi
 
 1. **Jalankan build dan container**:
    ```bash
+   mkdir -p tmp-data
    docker-compose up --build -d
    ```
 2. **Periksa status container & log real-time**:
@@ -263,7 +263,7 @@ Aplikasi dilengkapi **Multi-stage Dockerfile** dan **Docker Compose** yang mengi
    docker-compose down
    ```
 
-*Catatan: Direktori `./cache` dan `./models` otomatis di-mount ke host agar model terlatih dan cache analisis tetap persisten saat container di-restart.*
+*Catatan: Direktori `./cache`, `./models`, dan `./logs` di-mount ke host. `./tmp-data` digunakan untuk temporary Parquet agar file besar tidak memenuhi container layer. Pastikan folder tersebut dibuat sebelum menjalankan Compose.*
 
 ---
 
@@ -271,15 +271,16 @@ Aplikasi dilengkapi **Multi-stage Dockerfile** dan **Docker Compose** yang mengi
 
 ASTINA mendukung continuous serverless deployment ke Cloud Run via Artifact Registry:
 
-- **Windows (PowerShell)**:
-  ```powershell
-  .\.cloudrun\deploy.ps1
-  ```
-- **Linux / macOS**:
+- **Linux / macOS / WSL / Git Bash**:
   ```bash
-  chmod +x .cloudrun/deploy.sh
-  ./.cloudrun/deploy.sh
+   chmod +x deploy.sh
+   ./deploy.sh PROJECT_ID REGION astina GCS_BUCKET
   ```
+- **Windows PowerShell tanpa wrapper Bash**:
+   ```powershell
+   gcloud builds submit --config=cloudbuild.yaml `
+         --substitutions="_REGION=asia-southeast2,_SERVICE=astina,_GCS_BUCKET=nama-bucket-anda"
+   ```
 - **CI/CD via Cloud Build** (push ke main branch):
   ```bash
   gcloud builds submit --config=cloudbuild.yaml \
@@ -287,9 +288,30 @@ ASTINA mendukung continuous serverless deployment ke Cloud Run via Artifact Regi
   ```
 
 *Catatan penting deployment:*
-- *Konfigurasi `.streamlit/config.toml` (memory, GC, minimal toolbar) sudah ter-include di Docker image dan aktif di Cloud Run.*
-- *Untuk persistensi model di Cloud Run, tetapkan `GOOGLE_CLOUD_BUCKET` di env vars dan gunakan Service Account dengan role Storage Object Admin.*
-- *Deployment default bersifat privat (`--no-allow-unauthenticated`). Tambahkan `_ALLOW_UNAUTH=true` di substitutions `cloudbuild.yaml` hanya untuk demo publik.*
+- *Cloud Run menggunakan memory 16 GiB, 4 CPU, concurrency 1, timeout 3600 detik, minimum 1 instance, dan maksimum 5 instance. Concurrency 1 dipilih karena ingestion dan preprocessing dataset menggunakan memory besar.*
+- *Batas upload aplikasi dan request Cloud Run adalah 3 GiB. Dataset besar tetap membutuhkan temporary disk yang memadai; upload CSV/Parquet lebih disarankan daripada Excel.*
+- *Untuk persistensi model, tetapkan `_GCS_BUCKET` dan berikan service account minimal role `roles/storage.objectAdmin` pada bucket. Cache dan `/tmp` Cloud Run bersifat ephemeral.*
+- *Deployment default bersifat privat (`_ALLOW_UNAUTH=false`). Gunakan Secret Manager untuk API key dan password production; jangan menaruh secret di `cloudbuild.yaml` atau source control.*
+- *Setelah deploy, verifikasi health endpoint dan URL service sebelum menerima traffic.*
+
+#### Verifikasi deployment
+
+```bash
+# Status service dan URL
+gcloud run services describe astina \
+   --region=asia-southeast2 \
+   --format="value(status.url)"
+
+# Health check aplikasi
+curl --fail "SERVICE_URL/_stcore/health"
+
+# Log error terbaru
+gcloud run logs read astina \
+   --region=asia-southeast2 \
+   --limit=50
+```
+
+Untuk workload dataset besar, lakukan smoke test berurutan: upload sample kecil, preprocessing, training mode cepat, evaluasi, lalu detection. Jangan menguji beberapa upload besar secara bersamaan pada instance yang sama.
 
 ---
 
@@ -317,7 +339,7 @@ Untuk panduan deployment yang lebih mendetail termasuk:
 - Troubleshooting deployment issues
 - Performance optimization
 
-Silakan lihat [DEPLOYMENT.md](file:///c:/project-Graphnet/DEPLOYMENT.md)
+Silakan lihat [DEPLOYMENT.md](DEPLOYMENT.md)
 
 ---
 
@@ -356,7 +378,7 @@ python run.py
 
 ### 👥 4 Akun Bawaan (Default Accounts) & Hak Akses Modul
 
-Sistem menyediakan 4 akun uji coba terkonfigurasi dengan hash SHA-256 dan *cryptographic salt* di [auth_manager.py](file:///c:/project-Graphnet/auth_manager.py):
+Sistem menyediakan 4 akun uji coba terkonfigurasi dengan hash SHA-256 dan *cryptographic salt* di [auth_manager.py](auth_manager.py):
 
 | Peran (Role) | Username | Password Default | Modul / Halaman yang Diizinkan | Deskripsi Peran & Tanggung Jawab |
 | :--- | :--- | :--- | :--- | :--- |
@@ -386,7 +408,7 @@ Sistem menyediakan 4 akun uji coba terkonfigurasi dengan hash SHA-256 dan *crypt
    - Klik tombol **`🚪 Keluar (Logout)`** yang terletak tepat di bawah kartu profil pengguna di sidebar.
    - Sesi pengguna di-reset secara instan, audit log mencatat aktivitas `USER_LOGOUT`, dan tampilan otomatis dialihkan kembali ke gerbang login.
 4. **Pencatatan Audit Trail Kriptografis Otomatis**:
-   - Setiap kali terjadi login berhasil (`USER_LOGIN_SUCCESS`), kegagalan login (`LOGIN_FAILED`), maupun logout (`USER_LOGOUT`), engine [audit_trail.py](file:///c:/project-Graphnet/audit_trail.py) secara otomatis mencatat username, peran, waktu presisi, dan hash berantai SHA-256 untuk akuntabilitas forensik.
+   - Setiap kali terjadi login berhasil (`USER_LOGIN_SUCCESS`), kegagalan login (`LOGIN_FAILED`), maupun logout (`USER_LOGOUT`), engine [audit_trail.py](audit_trail.py) secara otomatis mencatat username, peran, waktu presisi, dan hash berantai SHA-256 untuk akuntabilitas forensik.
 
 ---
 
@@ -880,7 +902,7 @@ Untuk troubleshooting, cek log di terminal atau halaman **Status Sistem** untuk 
 
 ## 🧪 Pengujian & Validasi Kualitas
 
-Aplikasi dilengkapi suite pengujian otomatis komprehensif (**82 Test Cases**) untuk memverifikasi keandalan seluruh komponen sistem secara end-to-end, termasuk pengujian keamanan siber (*cybersecurity*), autentikasi, resiliensi schema, dan subgraf anomali GNN:
+Aplikasi dilengkapi suite pengujian otomatis komprehensif (**107 Test Cases**) untuk memverifikasi keandalan seluruh komponen sistem, termasuk pengujian keamanan siber (*cybersecurity*), autentikasi, resiliensi schema, streaming dataset, visualisasi helper, dan subgraf anomali GNN:
 
 ```powershell
 # Jalankan seluruh test suite dengan Pytest
@@ -897,7 +919,7 @@ python system_status.py
 ```
 
 Hasil verifikasi memastikan:
-- ✅ **82 Test Cases (82 Passed, 100% Green)** mencakup seluruh modul aplikasi.
+- ✅ **107 Test Cases (107 Passed, 100% Green)** mencakup seluruh modul aplikasi.
 - ✅ **Schema Harmonizer & Semantic Aliasing** — Penyelarasan transparan 13+ sinonim kolom bahasa Indonesia/industri ke nama kanonikal terverifikasi akurat.
 - ✅ **Circuit Breaker & Dynamic Weight Re-normalization** — Dataset minimal (hanya 2 kolom) tidak menyebabkan crash; bobot aturan aktif dinormalisasi ulang dengan benar.
 - ✅ **Derivasi Deterministik LOS** — `admission_date` dan `discharge_date` diturunkan otomatis dari `service_date` + `length_of_stay`; `detect_prolonged_stay_and_readmission()` berjalan tanpa error.

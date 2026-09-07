@@ -162,20 +162,23 @@ gcloud services enable cloudbuild.googleapis.com
 gcloud services enable storage.googleapis.com
 ```
 
-#### Automated Deployment (PowerShell)
+#### Automated Deployment (Bash, WSL, or Git Bash)
 ```powershell
 # Navigate to project directory
 cd C:\project-Graphnet
 
-# Run deployment script
-.\.cloudrun\deploy.ps1
+# Run deployment script: PROJECT_ID REGION SERVICE GCS_BUCKET
+./deploy.sh YOUR_PROJECT_ID asia-southeast2 astina astina-models-YOUR_PROJECT_ID
 
-# Follow prompts for:
-# - Project ID
-# - Region (default: us-central1)
-# - Service name (default: astina)
-# - GCS bucket name
-# - Memory allocation (default: 16GB)
+# Defaults: region asia-southeast2, service astina, repository astina-images.
+# The fourth argument is optional; omit it when model persistence is not needed.
+```
+
+Windows PowerShell can submit the same Cloud Build directly:
+
+```powershell
+gcloud builds submit --config=cloudbuild.yaml `
+    --substitutions="_REGION=asia-southeast2,_SERVICE=astina,_GCS_BUCKET=astina-models-YOUR_PROJECT_ID"
 ```
 
 #### Manual Deployment Steps
@@ -788,11 +791,11 @@ python run.py
 # Docker Local
 docker-compose up --build -d
 
-# Cloud Run Deploy
-.\.cloudrun\deploy.ps1
+# Cloud Run Deploy (Bash/WSL/Git Bash)
+./deploy.sh YOUR_PROJECT_ID asia-southeast2 astina GCS_BUCKET
 
 # View Logs
-gcloud run logs read astina --region=us-central1 --project=PROJECT_ID --follow
+gcloud run logs read astina --region=asia-southeast2 --project=PROJECT_ID --follow
 
 # Health Check
 curl https://YOUR_SERVICE_URL/_stcore/health
@@ -804,5 +807,5 @@ gcloud run services update astina --region=us-central1 --project=PROJECT_ID --re
 ---
 
 **Deployment Guide Version**: 1.0  
-**Last Updated**: 2026-09-06  
+**Last Updated**: 2026-09-07
 **Maintained By**: ASTINA Development Team

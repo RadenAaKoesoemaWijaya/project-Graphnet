@@ -18,6 +18,7 @@ set -euo pipefail
 PROJECT_ID="${1:-${GOOGLE_CLOUD_PROJECT:-$(gcloud config get-value project 2>/dev/null)}}"
 REGION="${2:-asia-southeast2}"
 SERVICE="${3:-astina}"
+GCS_BUCKET="${4:-${GOOGLE_CLOUD_BUCKET:-}}"
 REPOSITORY="astina-images"
 AR_HOST="${REGION}-docker.pkg.dev"
 
@@ -42,6 +43,7 @@ gcloud services enable \
   run.googleapis.com \
   cloudbuild.googleapis.com \
   artifactregistry.googleapis.com \
+  storage.googleapis.com \
   --quiet
 
 # --- Create the Artifact Registry repository if it does not exist ------------
@@ -60,7 +62,7 @@ log "Submitting Cloud Build (this may take a few minutes) ..."
 gcloud builds submit \
   --config=cloudbuild.yaml \
   --region="${REGION}" \
-  --substitutions="_REGION=${REGION},_SERVICE=${SERVICE},_REPOSITORY=${REPOSITORY},_AR_HOST=${AR_HOST}" \
+  --substitutions="_REGION=${REGION},_SERVICE=${SERVICE},_REPOSITORY=${REPOSITORY},_AR_HOST=${AR_HOST},_GCS_BUCKET=${GCS_BUCKET}" \
   --quiet
 
 # --- Print the URL of the deployed service ------------------------------------

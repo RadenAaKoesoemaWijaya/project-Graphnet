@@ -608,11 +608,12 @@ def show_detection_page():
                 st.plotly_chart(fig_pred, width='stretch')
 
             with v_col2:
-                fig_hist = create_histogram_chart(df_result, 'anomaly_probability', nbins=40,
+                fig_hist = create_histogram_chart(sample_dataframe_for_visualization(df_result), 'anomaly_probability', nbins=40,
                                                  title='Distribusi Skor Anomali (Multi-Model Ensemble)')
-                fig_hist.add_vline(x=threshold, line_dash="dash", line_color="red",
-                                   annotation_text=f"Threshold: {threshold:.2f}")
-                st.plotly_chart(fig_hist, width='stretch')
+                if fig_hist is not None:
+                    fig_hist.add_vline(x=threshold, line_dash="dash", line_color="red",
+                                       annotation_text=f"Threshold: {threshold:.2f}")
+                    st.plotly_chart(fig_hist, width='stretch')
 
             st.markdown("#### 🛡️ Executive Risk Summary Panel")
             summary_cards = _build_safety_summary(df_result, risk_summary)
@@ -628,10 +629,12 @@ def show_detection_page():
                     )
 
             # Category distribution chart
-            category_chart_df = df_result.copy()
-            if 'risk_category' not in category_chart_df.columns:
+            if 'risk_category' in df_result.columns:
+                category_counts = df_result['risk_category'].value_counts().reset_index()
+            else:
+                category_chart_df = sample_dataframe_for_visualization(df_result)
                 category_chart_df['risk_category'] = category_chart_df.apply(_derive_risk_category, axis=1)
-            category_counts = category_chart_df['risk_category'].value_counts().reset_index()
+                category_counts = category_chart_df['risk_category'].value_counts().reset_index()
             category_counts.columns = ['Risk Category', 'Count']
             category_counts = category_counts[category_counts['Count'] > 0]
 
