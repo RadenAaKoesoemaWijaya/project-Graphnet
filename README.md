@@ -78,6 +78,14 @@ project-Graphnet/
 ├── retry_utils.py                   # Utilitas exponential backoff retry
 ├── cloud_storage.py                 # Sinkronisasi artefak model ke Google Cloud Storage
 │
+├── scripts/                         # Production automation & security scripts
+│   ├── security_validator.py        # Automated security validation before deployment
+│   ├── setup_production_env.py      # Interactive production environment setup
+│   ├── setup_secrets_manager.py     # Google Secret Manager integration
+│   ├── monitoring_setup.py         # Cloud Monitoring dashboards & alerts setup
+│   ├── cache_cleanup_scheduler.py   # Automated cache cleanup for data governance
+│   └── backup_scheduler.py          # Automated backup scheduler (local & GCS)
+│
 ├── ui/                              # Antarmuka Pengguna Streamlit
 │   ├── sidebar.py                   # Navigasi, telemetry status, & switch dataset
 │   ├── utils.py                     # Visual helper, grafik Plotly, & smart alignment
@@ -291,6 +299,7 @@ ASTINA mendukung continuous serverless deployment ke Cloud Run via Artifact Regi
 - *Upload Excel (`.xlsx`/`.xls`) dibatasi 100 MiB karena parser Excel menggunakan memory penuh. Untuk dataset lebih besar, konversi terlebih dahulu ke CSV atau Parquet.*
 - *Untuk persistensi model, tetapkan `_GCS_BUCKET` dan berikan service account minimal role `roles/storage.objectAdmin` pada bucket. Cache dan `/tmp` Cloud Run bersifat ephemeral.*
 - *Deployment default bersifat privat (`_ALLOW_UNAUTH=false`). Gunakan Secret Manager untuk API key dan password production; jangan menaruh secret di `cloudbuild.yaml` atau source control.*
+- *Untuk setup security dan monitoring production lengkap, jalankan: `python scripts/setup_production_env.py`, `python scripts/setup_secrets_manager.py`, dan `python scripts/monitoring_setup.py` sebelum deployment.*
 - *Setelah deploy, verifikasi health endpoint dan URL service sebelum menerima traffic.*
 
 #### Verifikasi deployment
@@ -825,6 +834,50 @@ services:
 #### Melalui Halaman Deteksi (Legacy)
 Konfigurasi juga tersedia di halaman **Deteksi Anomali** → Tab 4 (AI Investigator Copilot & BAP) → expander "🛠️ Konfigurasi Copilot & LLM Engine".
 
+### 🔐 Production Security Configuration
+
+Untuk deployment production, ASTINA menyediakan tools otomatis untuk setup security dan monitoring:
+
+#### 1. Security Validation
+Validasi konfigurasi security sebelum deployment:
+```bash
+python scripts/security_validator.py
+```
+**Yang dicek:** Environment files, hardcoded secrets, gitignore, dependencies, authentication, PII protection, audit trail.
+
+#### 2. Production Environment Setup
+Setup environment production dengan secure passwords:
+```bash
+python scripts/setup_production_env.py
+```
+**Fitur:** Generate secure passwords, create `.env.production`, configure optional settings.
+
+#### 3. Secret Manager Integration
+Setup Google Secret Manager untuk credentials:
+```bash
+python scripts/setup_secrets_manager.py
+```
+**Fitur:** Create secrets, grant access, generate deployment commands.
+
+#### 4. Monitoring Setup
+Setup Cloud Monitoring dengan metrics dan alerts:
+```bash
+python scripts/monitoring_setup.py
+```
+**Fitur:** Create log-based metrics, alert policies, dashboards, uptime checks.
+
+#### 5. Data Governance Automation
+Setup cache cleanup dan backup automation:
+```bash
+# Cache cleanup
+python scripts/cache_cleanup_scheduler.py --max-age-hours 24
+
+# Backup automation
+python scripts/backup_scheduler.py --local --cleanup
+```
+
+**Detail lengkap:** Lihat dokumentasi di `SECURITY_SETUP.md`, `PRODUCTION_MONITORING.md`, dan `IMPLEMENTATION_SUMMARY.md`.
+
 ### 🔐 Keamanan API Key
 
 **Best Practices untuk API Key Management:**
@@ -899,6 +952,191 @@ Untuk troubleshooting, cek log di terminal atau halaman **Status Sistem** untuk 
 
 ---
 
+## 🔒 Production Security & Monitoring Setup
+
+ASTINA menyediakan tools dan dokumentasi lengkap untuk deployment production yang aman dan termonitor. Semua perangkat ini diimplementasikan tanpa mengganggu fungsi yang sudah ada.
+
+### 🛡️ Security Hardening
+
+#### 1. Security Validation System
+ASTINA menyertakan **automated security validator** yang memeriksa konfigurasi sebelum deployment:
+
+```bash
+# Run security validation
+python scripts/security_validator.py
+```
+
+**Yang dicek:**
+- ✅ Environment file security (tidak ada default passwords)
+- ✅ Hardcoded secrets di source code
+- ✅ Gitignore configuration untuk sensitive files
+- ✅ Dependency security (pinned versions)
+- ✅ Authentication module implementation
+- ✅ PII protection implementation
+- ✅ Audit trail implementation
+
+#### 2. Production Environment Setup
+Setup environment production dengan secure passwords:
+
+```bash
+# Interactive setup script
+python scripts/setup_production_env.py
+```
+
+**Fitur:**
+- Generate cryptographically secure passwords (16 chars)
+- Create `.env.production` from template
+- Configure optional settings (GCS, database, LLM)
+- Provide security guidance
+
+#### 3. Google Secret Manager Integration
+Untuk production, gunakan Google Secret Manager untuk menyimpan credentials:
+
+```bash
+# Interactive Secret Manager setup
+python scripts/setup_secrets_manager.py
+```
+
+**Fitur:**
+- Create secrets untuk passwords, API keys, database credentials
+- Grant Cloud Run service account access
+- Generate deployment commands
+- Support multiple secret types
+
+#### 4. Pre-commit Security Hooks
+Install pre-commit hooks untuk validasi otomatis sebelum setiap commit:
+
+```bash
+pip install pre-commit
+pre-commit install
+pre-commit run --all-files
+```
+
+**Includes:**
+- Security validator (always runs)
+- Python linting (black, flake8, mypy)
+- Secret detection (detect-secrets)
+- File size checks
+- YAML/JSON syntax validation
+
+### 📊 Production Monitoring Setup
+
+#### 1. Monitoring Dashboard Setup
+Setup Cloud Monitoring dengan metrics dan dashboards:
+
+```bash
+# Interactive monitoring setup
+python scripts/monitoring_setup.py
+```
+
+**Fitur:**
+- Create log-based metrics (user logins, detection runs, anomalies, errors)
+- Generate alert policy configuration
+- Generate dashboard configuration
+- Setup uptime check commands
+
+#### 2. Key Metrics yang Dimonitor
+- **Business Metrics**: Detection success rate, false positive rate, processing time
+- **Technical Metrics**: Error rate, response time, memory usage, CPU usage
+- **Security Metrics**: Failed authentication, security alerts, unusual data access
+
+#### 3. Alert Policies
+Alert yang dikonfigurasi:
+- Critical: Service down, security breach, data loss risk
+- Warning: High error rate, performance degradation, resource exhaustion
+- Info: Usage trends, model drift
+
+### 🗄️ Data Governance
+
+#### 1. Cache Cleanup Automation
+Automatisasi cleanup cache untuk compliance dan privacy:
+
+```bash
+# Run cache cleanup
+python scripts/cache_cleanup_scheduler.py --max-age-hours 24
+
+# Dry run (testing)
+python scripts/cache_cleanup_scheduler.py --dry-run
+```
+
+**Fitur:**
+- Configurable retention policies (default: 24 hours)
+- Dry-run mode untuk testing
+- Detailed cleanup statistics
+- Comprehensive logging
+
+**Scheduling:**
+```bash
+# Cron job (Linux)
+0 2 * * * cd /path/to/astina && python scripts/cache_cleanup_scheduler.py
+
+# Windows Task Scheduler
+# Create task to run daily at 2 AM
+```
+
+#### 2. Backup Automation
+Automatisasi backup model artifacts dan data penting:
+
+```bash
+# Local backup
+python scripts/backup_scheduler.py --local --cleanup
+
+# GCS backup
+python scripts/backup_scheduler.py --gcs --bucket your-bucket-name
+
+# Both local and GCS
+python scripts/backup_scheduler.py --local --gcs --bucket your-bucket-name
+```
+
+**Fitur:**
+- Support local dan GCS backup
+- Configurable compression
+- Automatic cleanup of old backups (keep last 5)
+- Comprehensive backup statistics
+
+**Scheduling:**
+```bash
+# Daily backup (2 AM)
+0 2 * * * cd /path/to/astina && python scripts/backup_scheduler.py --local --gcs --bucket your-bucket --cleanup
+```
+
+### 🔒 HTTPS Enforcement
+
+HTTPS diaktifkan secara otomatis di Cloud Run. Untuk custom domain dan advanced configuration, lihat dokumentasi lengkap di `HTTPS_SETUP.md`.
+
+**Fitur:**
+- Cloud Run built-in HTTPS (automatic)
+- Custom domain dengan managed certificates
+- Security headers (HSTS, X-Frame-Options, etc.)
+- Certificate management guidance
+
+### 📚 Dokumentasi Production
+
+Dokumentasi lengkap untuk setup production:
+
+- **SECURITY_SETUP.md** - Comprehensive security setup guide
+- **PRODUCTION_MONITORING.md** - Monitoring dan alerting guide
+- **HTTPS_SETUP.md** - HTTPS enforcement guide
+- **IMPLEMENTATION_SUMMARY.md** - Implementation summary lengkap
+
+### ✅ Production Deployment Checklist
+
+Sebelum deployment ke production:
+
+- [ ] Security validation passes: `python scripts/security_validator.py`
+- [ ] `.env.production` created dengan secure passwords
+- [ ] `AUTH_ENABLED=true` di production environment
+- [ ] Secret Manager configured (jika menggunakan)
+- [ ] Pre-commit hooks installed
+- [ ] Monitoring setup completed
+- [ ] Alert policies configured
+- [ ] Cache cleanup scheduled
+- [ ] Backup automation configured
+- [ ] HTTPS verified
+- [ ] Tested di staging environment
+
+---
+
 ## 🧪 Pengujian & Validasi Kualitas
 
 Aplikasi dilengkapi suite pengujian otomatis komprehensif (**111 Test Cases**) untuk memverifikasi keandalan seluruh komponen sistem, termasuk pengujian keamanan siber (*cybersecurity*), autentikasi, resiliensi schema, streaming dataset, ingestion Excel, visualisasi helper, event loop Windows, dan subgraf anomali GNN:
@@ -915,6 +1153,9 @@ python verify_audit_trail.py
 
 # Periksa status telemetri hardware & environment readiness
 python system_status.py
+
+# Validasi security configuration sebelum deployment
+python scripts/security_validator.py
 ```
 
 Hasil verifikasi memastikan:

@@ -40,6 +40,8 @@ substitutions:
   # balancer). Override with --substitutions=_ALLOW_UNAUTH=true for
   # public demos if you understand the risk.
   _ALLOW_UNAUTH: "false"
+  # SECURITY: Always enforce authentication in production
+  _AUTH_ENABLED: "true"
   # R4: optional GCS bucket for persistent model artefacts. When set
   # ``cloud_storage`` mirrors uploads/downloads automatically.
   # IMPORTANT: Set this to your GCS bucket name for production to persist
@@ -100,7 +102,8 @@ steps:
       - --allow-unauthenticated=${_ALLOW_UNAUTH}
       # R3: structured (JSON) logs are picked up by Cloud Logging.
       # R4: optional GCS bucket for model persistence.
-      - --set-env-vars=POLARS_SKIP_CPU_CHECK=1,STREAMLIT_SERVER_MAX_UPLOAD_SIZE=3072,ASTINA_LOG_FORMAT=json,CACHE_DIR=/tmp/astina_cache,MODELS_DIR=/tmp/astina_models,GOOGLE_CLOUD_BUCKET=${_GCS_BUCKET}
+      # SECURITY: Enforce authentication in production
+      - --set-env-vars=POLARS_SKIP_CPU_CHECK=1,STREAMLIT_SERVER_MAX_UPLOAD_SIZE=3072,ASTINA_LOG_FORMAT=json,CACHE_DIR=/tmp/astina_cache,MODELS_DIR=/tmp/astina_models,GOOGLE_CLOUD_BUCKET=${_GCS_BUCKET},AUTH_ENABLED=${_AUTH_ENABLED}
 
 # Store the built image so it can be inspected later.
 images:

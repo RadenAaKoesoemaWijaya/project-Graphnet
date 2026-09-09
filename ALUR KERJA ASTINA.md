@@ -105,6 +105,12 @@ flowchart TD
 | **Model Registry** | `model_registry.py` | Versi model, schema metadata, dynamic model loader |
 | **Cloud Storage** | `cloud_storage.py` | Sinkronisasi model dan checkpoint ke Google Cloud Storage (GCS) |
 | **System Telemetry** | `system_status.py` | Monitoring utilisasi CPU, RAM, GPU/VRAM, dan hardware specs |
+|| **Security Validator** | scripts/security_validator.py | Automated security validation sebelum deployment |
+|| **Production Setup** | scripts/setup_production_env.py | Interactive production environment setup dengan secure passwords |
+|| **Secret Manager Setup** | scripts/setup_secrets_manager.py | Google Secret Manager integration untuk credentials |
+|| **Monitoring Setup** | scripts/monitoring_setup.py | Cloud Monitoring dashboards dan alerts setup |
+|| **Cache Cleanup** | scripts/cache_cleanup_scheduler.py | Automated cache cleanup untuk data governance |
+|| **Backup Scheduler** | scripts/backup_scheduler.py | Automated backup scheduler (local & GCS) |
 
 ---
 
@@ -938,6 +944,191 @@ docker-compose logs -f
 gcloud builds submit --config=cloudbuild.yaml `
   --substitutions="_REGION=asia-southeast2,_SERVICE=astina,_GCS_BUCKET=GCS_BUCKET"
 ```
+
+**Catatan penting:** Untuk deployment production yang aman dan termonitor, jalankan script automation berikut sebelum deployment:
+- `python scripts/setup_production_env.py` - Setup environment production
+- `python scripts/setup_secrets_manager.py` - Setup Secret Manager untuk credentials
+- `python scripts/monitoring_setup.py` - Setup monitoring dan alerts
+- `python scripts/security_validator.py` - Validasi security configuration
+
+---
+
+## 13. Production Security & Monitoring Setup
+
+ASTINA menyediakan tools otomatis untuk deployment production yang aman dan termonitor. Semua perangkat ini diimplementasikan tanpa mengganggu fungsi yang sudah ada.
+
+### 13.1 Security Hardening
+
+#### Security Validation System
+Validasi konfigurasi security sebelum deployment:
+
+```bash
+python scripts/security_validator.py
+```
+
+**Yang dicek:**
+- ✅ Environment file security (tidak ada default passwords)
+- ✅ Hardcoded secrets di source code
+- ✅ Gitignore configuration untuk sensitive files
+- ✅ Dependency security (pinned versions)
+- ✅ Authentication module implementation
+- ✅ PII protection implementation
+- ✅ Audit trail implementation
+
+#### Production Environment Setup
+Setup environment production dengan secure passwords:
+
+```bash
+python scripts/setup_production_env.py
+```
+
+**Fitur:**
+- Generate cryptographically secure passwords (16 chars)
+- Create `.env.production` from template
+- Configure optional settings (GCS, database, LLM)
+- Provide security guidance
+
+#### Google Secret Manager Integration
+Untuk production, gunakan Google Secret Manager untuk menyimpan credentials:
+
+```bash
+python scripts/setup_secrets_manager.py
+```
+
+**Fitur:**
+- Create secrets untuk passwords, API keys, database credentials
+- Grant Cloud Run service account access
+- Generate deployment commands
+- Support multiple secret types
+
+#### Pre-commit Security Hooks
+Install pre-commit hooks untuk validasi otomatis sebelum setiap commit:
+
+```bash
+pip install pre-commit
+pre-commit install
+pre-commit run --all-files
+```
+
+**Includes:**
+- Security validator (always runs)
+- Python linting (black, flake8, mypy)
+- Secret detection (detect-secrets)
+- File size checks
+- YAML/JSON syntax validation
+
+### 13.2 Production Monitoring Setup
+
+#### Monitoring Dashboard Setup
+Setup Cloud Monitoring dengan metrics dan dashboards:
+
+```bash
+python scripts/monitoring_setup.py
+```
+
+**Fitur:**
+- Create log-based metrics (user logins, detection runs, anomalies, errors)
+- Generate alert policy configuration
+- Generate dashboard configuration
+- Setup uptime check commands
+
+#### Key Metrics yang Dimonitor
+- **Business Metrics**: Detection success rate, false positive rate, processing time
+- **Technical Metrics**: Error rate, response time, memory usage, CPU usage
+- **Security Metrics**: Failed authentication, security alerts, unusual data access
+
+#### Alert Policies
+Alert yang dikonfigurasi:
+- Critical: Service down, security breach, data loss risk
+- Warning: High error rate, performance degradation, resource exhaustion
+- Info: Usage trends, model drift
+
+### 13.3 Data Governance Automation
+
+#### Cache Cleanup Automation
+Automatisasi cleanup cache untuk compliance dan privacy:
+
+```bash
+# Run cache cleanup
+python scripts/cache_cleanup_scheduler.py --max-age-hours 24
+
+# Dry run (testing)
+python scripts/cache_cleanup_scheduler.py --dry-run
+```
+
+**Fitur:**
+- Configurable retention policies (default: 24 hours)
+- Dry-run mode untuk testing
+- Detailed cleanup statistics
+- Comprehensive logging
+
+**Scheduling:**
+```bash
+# Cron job (Linux)
+0 2 * * * cd /path/to/astina && python scripts/cache_cleanup_scheduler.py
+
+# Windows Task Scheduler
+# Create task to run daily at 2 AM
+```
+
+#### Backup Automation
+Automatisasi backup model artifacts dan data penting:
+
+```bash
+# Local backup
+python scripts/backup_scheduler.py --local --cleanup
+
+# GCS backup
+python scripts/backup_scheduler.py --gcs --bucket your-bucket-name
+
+# Both local and GCS
+python scripts/backup_scheduler.py --local --gcs --bucket your-bucket-name
+```
+
+**Fitur:**
+- Support local dan GCS backup
+- Configurable compression
+- Automatic cleanup of old backups (keep last 5)
+- Comprehensive backup statistics
+
+**Scheduling:**
+```bash
+# Daily backup (2 AM)
+0 2 * * * cd /path/to/astina && python scripts/backup_scheduler.py --local --gcs --bucket your-bucket --cleanup
+```
+
+### 13.4 HTTPS Enforcement
+
+HTTPS diaktifkan secara otomatis di Cloud Run. Untuk custom domain dan advanced configuration, lihat dokumentasi lengkap di `SECURITY_SETUP.md`.
+
+**Fitur:**
+- Cloud Run built-in HTTPS (automatic)
+- Custom domain dengan managed certificates
+- Security headers (HSTS, X-Frame-Options, etc.)
+- Certificate management guidance
+
+### 13.5 Production Deployment Checklist
+
+Sebelum deployment ke production:
+
+- [ ] Security validation passes: `python scripts/security_validator.py`
+- [ ] `.env.production` created dengan secure passwords
+- [ ] `AUTH_ENABLED=true` di production environment
+- [ ] Secret Manager configured (jika menggunakan)
+- [ ] Pre-commit hooks installed
+- [ ] Monitoring setup completed
+- [ ] Alert policies configured
+- [ ] Cache cleanup scheduled
+- [ ] Backup automation configured
+- [ ] HTTPS verified
+- [ ] Tested di staging environment
+
+### 13.6 Dokumentasi Production
+
+Dokumentasi lengkap untuk setup production:
+
+- **SECURITY_SETUP.md** - Comprehensive security setup guide
+- **PRODUCTION_MONITORING.md** - Monitoring dan alerting guide
 
 ---
 
