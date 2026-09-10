@@ -5,42 +5,168 @@ import polars as pl
 from config import *
 import gc
 import os
+import csv as _csv
+import gzip
+import logging
 from tqdm import tqdm
 import tempfile
 import shutil
-import tempfile
 import uuid
 
+logger = logging.getLogger("astina.file_handler")
 
-def stream_csv_to_parquet(file_path, output_path=None, chunk_size=50000, progress_bar=True):
-    """Write a CSV to Parquet in bounded-memory batches.
 
-    This is the storage boundary for large-file workflows. It deliberately
-    returns a path and row count instead of a full DataFrame.
-    """
+def _report_progress(progress_callback, stage, percent, message):
+    if progress_callback is None:
+        return
+    try:
+        progress_callback(stage, max(0.0, min(100.0, float(percent))), message)
+    except Exception:
+        logger.debug("Progress callback failed", exc_info=True)
+
+
+def normalize_upload_type(file_type, filename=""):
+    """Normalize uploader extension including .csv.gz."""
+    name = (filename or "").lower()
+    ft = (file_type or "csv").lower().lstrip(".")
+    if name.endswith(".csv.gz") or ft in {"gz", "csv.gz"}:
+        return "csv.gz"
+    if ft == "excel":
+        return "xlsx"
+    if ft == "json":
+        return "json"
+    return ft
+
+
+def check_ingest_resources(file_size_bytes, copies=None):
+    """Fail fast when temp disk (or RAM) cannot hold ingest copies."""
+    copies = INGEST_DISK_COPIES if copies is None else copies
+    os.makedirs(TEMP_DATA_DIR, exist_ok=True)
+    usage = shutil.disk_usage(TEMP_DATA_DIR)
+    needed = int(file_size_bytes * copies) + INGEST_DISK_SLACK_BYTES
+    if usage.free < needed:
+        raise ValueError(
+            f"Ruang disk tidak cukup untuk ingest. Diperlukan sekitar {needed / (1024**3):.2f} GB "
+            f"bebas di {TEMP_DATA_DIR} (tersedia {usage.free / (1024**3):.2f} GB). "
+            "Kosongkan disk atau set TEMP_DATA_DIR ke volume yang lebih besar."
+        )
+    try:
+        import psutil
+        # Only gate RAM for large uploads; small files and CI hosts with low
+        # "available" pages must still ingest.
+        if file_size_bytes >= 100 * 1024 * 1024:
+            available = psutil.virtual_memory().available
+            if available < 256 * 1024 * 1024:
+                raise ValueError(
+                    "RAM tersedia kurang dari 256 MB untuk file besar. "
+                    "Tutup aplikasi lain sebelum mengunggah."
+                )
+    except ImportError:
+        pass
+    return True
+
+
+def can_materialize_dataset(file_size_bytes, safety_factor=2.0, reserve_bytes=1024 * 1024 * 1024):
+    """Whether it is safe to load a dataset fully into pandas."""
+    try:
+        import psutil
+        available = psutil.virtual_memory().available
+        return available > int(file_size_bytes * safety_factor) + reserve_bytes
+    except Exception:
+        return file_size_bytes <= MAX_DIRECT_DETECTION_FILE_SIZE
+
+
+def _open_csv_text(file_path, encoding, errors="strict"):
+    if str(file_path).lower().endswith(".gz"):
+        return gzip.open(file_path, "rt", encoding=encoding, errors=errors)
+    return open(file_path, "r", encoding=encoding, errors=errors)
+
+
+def sniff_csv_dialect(file_path, sample_size=None):
+    """Detect encoding and delimiter for CSV / CSV.GZ without reading the whole file."""
+    sample_size = CSV_SNIFF_BYTES if sample_size is None else sample_size
+    encodings = ["utf-8-sig", "utf-8", "latin-1", "cp1252"]
+    try:
+        opener = gzip.open if str(file_path).lower().endswith(".gz") else open
+        with opener(file_path, "rb") as raw_file:
+            prefix = raw_file.read(4)
+        if prefix.startswith(b"\xff\xfe") or prefix.startswith(b"\xfe\xff"):
+            encodings = ["utf-16", "utf-8-sig", "utf-8", "latin-1"]
+        elif prefix.startswith(b"\xef\xbb\xbf"):
+            encodings = ["utf-8-sig", "utf-8", "latin-1"]
+    except Exception:
+        pass
+
+    last_error = None
+    for encoding in encodings:
+        try:
+            with _open_csv_text(file_path, encoding, errors="strict") as handle:
+                sample = handle.read(sample_size)
+        except UnicodeDecodeError as exc:
+            last_error = exc
+            continue
+        except Exception as exc:
+            last_error = exc
+            continue
+        if not sample:
+            continue
+        try:
+            dialect = _csv.Sniffer().sniff(sample, delimiters=",;\t|")
+            separator = dialect.delimiter
+        except _csv.Error:
+            separator = max([",", ";", "\t", "|"], key=sample.count)
+            if sample.count(separator) == 0:
+                separator = ","
+        return {"encoding": encoding, "separator": separator}
+
+    if last_error:
+        logger.warning("CSV sniff fallback to latin-1: %s", last_error)
+    return {"encoding": "latin-1", "separator": ","}
+
+
+def _stream_upload_to_path(uploaded_file, destination_path, progress_callback=None):
+    """Write an upload buffer to disk in 8MB chunks (single copy)."""
+    os.makedirs(os.path.dirname(destination_path) or ".", exist_ok=True)
+    total_size = int(getattr(uploaded_file, "size", 0) or 0)
+    copied = 0
+    if hasattr(uploaded_file, "seek"):
+        try:
+            uploaded_file.seek(0)
+        except Exception:
+            pass
+    with open(destination_path, "wb") as out_file:
+        while True:
+            chunk = uploaded_file.read(UPLOAD_STREAM_BYTES)
+            if not chunk:
+                break
+            out_file.write(chunk)
+            copied += len(chunk)
+            if total_size:
+                _report_progress(
+                    progress_callback,
+                    "buffer",
+                    10.0 + min(25.0, 25.0 * copied / total_size),
+                    f"Menulis ke disk ({copied / (1024**2):.1f} MB)...",
+                )
+    return destination_path
+
+
+def _pandas_csv_to_parquet(file_path, output_path, chunk_size, dialect, progress_callback=None):
     import pyarrow as pa
     import pyarrow.parquet as pq
-
-    file_size = os.path.getsize(file_path)
-    check_file_size(file_size)
-    if output_path is None:
-        # Ensure TEMP_DATA_DIR exists before attempting to write
-        os.makedirs(TEMP_DATA_DIR, exist_ok=True)
-        output_path = os.path.join(
-            TEMP_DATA_DIR,
-            f"raw_{uuid.uuid4().hex}.parquet",
-        )
-    else:
-        # Ensure the parent directory of the output path exists
-        output_dir = os.path.dirname(output_path)
-        if output_dir:
-            os.makedirs(output_dir, exist_ok=True)
 
     writer = None
     writer_closed = False
     total_rows = 0
+    read_kwargs = {
+        "chunksize": chunk_size,
+        "sep": dialect.get("separator", ","),
+        "encoding": dialect.get("encoding", "utf-8"),
+        "low_memory": True,
+        "on_bad_lines": "warn",
+    }
     try:
-        for chunk_number, chunk in enumerate(pd.read_csv(file_path, chunksize=chunk_size), start=1):
+        for chunk_number, chunk in enumerate(pd.read_csv(file_path, **read_kwargs), start=1):
             chunk = optimize_memory_usage(chunk)
             chunk = fix_arrow_compatibility(chunk)
             for column in chunk.select_dtypes(include=["category"]).columns:
@@ -48,11 +174,64 @@ def stream_csv_to_parquet(file_path, output_path=None, chunk_size=50000, progres
             table = pa.Table.from_pandas(chunk, preserve_index=False)
             if writer is None:
                 writer = pq.ParquetWriter(output_path, table.schema, compression="zstd")
+            else:
+                table = table.cast(writer.schema, safe=False)
             writer.write_table(table)
             total_rows += len(chunk)
             del table, chunk
-            # Frequent full GC pauses dominate ingestion time for large files.
-            if chunk_number % 10 == 0:
+            if chunk_number % 50 == 0:
+                gc.collect()
+                _report_progress(
+                    progress_callback,
+                    "convert",
+                    min(85.0, 40.0 + chunk_number * 0.2),
+                    f"Konversi CSV chunk {chunk_number}...",
+                )
+    except TypeError:
+        read_kwargs.pop("on_bad_lines", None)
+        return _pandas_csv_to_parquet_legacy(file_path, output_path, chunk_size, dialect, progress_callback)
+    except Exception:
+        if writer is not None:
+            writer.close()
+            writer_closed = True
+        if os.path.exists(output_path):
+            os.unlink(output_path)
+        raise
+    finally:
+        if writer is not None and not writer_closed:
+            writer.close()
+    return output_path, total_rows
+
+
+def _pandas_csv_to_parquet_legacy(file_path, output_path, chunk_size, dialect, progress_callback=None):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    writer = None
+    writer_closed = False
+    total_rows = 0
+    try:
+        reader = pd.read_csv(
+            file_path,
+            chunksize=chunk_size,
+            sep=dialect.get("separator", ","),
+            encoding=dialect.get("encoding", "utf-8"),
+            low_memory=True,
+        )
+        for chunk_number, chunk in enumerate(reader, start=1):
+            chunk = optimize_memory_usage(chunk)
+            chunk = fix_arrow_compatibility(chunk)
+            for column in chunk.select_dtypes(include=["category"]).columns:
+                chunk[column] = chunk[column].astype(str)
+            table = pa.Table.from_pandas(chunk, preserve_index=False)
+            if writer is None:
+                writer = pq.ParquetWriter(output_path, table.schema, compression="zstd")
+            else:
+                table = table.cast(writer.schema, safe=False)
+            writer.write_table(table)
+            total_rows += len(chunk)
+            del table, chunk
+            if chunk_number % 50 == 0:
                 gc.collect()
     except Exception:
         if writer is not None:
@@ -64,8 +243,71 @@ def stream_csv_to_parquet(file_path, output_path=None, chunk_size=50000, progres
     finally:
         if writer is not None and not writer_closed:
             writer.close()
-
     return output_path, total_rows
+
+
+def stream_csv_to_parquet(file_path, output_path=None, chunk_size=50000, progress_bar=True, progress_callback=None):
+    """Write a CSV (or .csv.gz) to Parquet in bounded-memory streaming.
+
+    Prefers Polars scan/sink. Falls back to pandas chunks with sniffed
+    delimiter/encoding. Returns a path and row count, not a DataFrame.
+    """
+    file_size = os.path.getsize(file_path)
+    check_file_size(file_size)
+    check_ingest_resources(file_size)
+    if output_path is None:
+        os.makedirs(TEMP_DATA_DIR, exist_ok=True)
+        output_path = os.path.join(TEMP_DATA_DIR, f"raw_{uuid.uuid4().hex}.parquet")
+    else:
+        output_dir = os.path.dirname(output_path)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+
+    dialect = sniff_csv_dialect(file_path)
+    _report_progress(
+        progress_callback,
+        "sniff",
+        15.0,
+        f"Format CSV: pemisah '{dialect['separator']}', encoding {dialect['encoding']}",
+    )
+
+    # Polars scan_csv only accepts utf8 / utf8-lossy. Non-UTF encodings use pandas.
+    use_polars = dialect["encoding"] in {"utf-8", "utf-8-sig"}
+    if use_polars:
+        try:
+            _report_progress(progress_callback, "convert", 35.0, "Streaming CSV ke Parquet (Polars)...")
+            lf = pl.scan_csv(
+                file_path,
+                separator=dialect["separator"],
+                encoding="utf8-lossy",
+                infer_schema_length=10000,
+                ignore_errors=True,
+                try_parse_dates=False,
+                low_memory=True,
+            )
+            lf.sink_parquet(output_path, compression="zstd")
+            total_rows = pl.scan_parquet(output_path).select(pl.len()).collect().item()
+            if total_rows == 0:
+                raise ValueError("CSV tidak mengandung baris data.")
+            _report_progress(progress_callback, "convert", 90.0, f"Parquet siap ({total_rows:,} baris).")
+            return output_path, int(total_rows)
+        except Exception as exc:
+            logger.warning("Polars CSV ingest failed (%s); falling back to pandas chunks.", exc)
+            if os.path.exists(output_path):
+                try:
+                    os.unlink(output_path)
+                except Exception:
+                    pass
+
+    if chunk_size is None:
+        chunk_size = get_optimal_chunk_size(file_size) or 50000
+    return _pandas_csv_to_parquet(
+        file_path,
+        output_path,
+        chunk_size=chunk_size,
+        dialect=dialect,
+        progress_callback=progress_callback,
+    )
 
 def read_with_polars(file_path, file_type='csv'):
     """
@@ -102,25 +344,15 @@ def read_large_csv(file_path, chunk_size=None, progress_bar=True):
         chunk_size = get_optimal_chunk_size(file_size)
 
     if chunk_size is None or file_size < 50 * 1024 * 1024:  # < 50MB
-        # Read whole file — try auto-detecting delimiter first so that files
-        # with ';', '\t', or '|' separators are parsed correctly.
+        dialect = sniff_csv_dialect(file_path)
         try:
-            df = pd.read_csv(file_path)
-            # Heuristic: if the file has more than one row but only one column,
-            # the delimiter was probably not a comma — re-try with auto-sniff.
-            if df.shape[1] == 1 and file_size > 0:
-                import csv as _csv
-                with open(file_path, 'r', encoding='utf-8', errors='replace') as _f:
-                    sample = _f.read(4096)
-                dialect = _csv.Sniffer().sniff(sample, delimiters=',;\t|')
-                if dialect.delimiter != ',':
-                    df = pd.read_csv(file_path, sep=dialect.delimiter)
-        except UnicodeDecodeError:
-            # Fallback for non-UTF-8 encoded files (e.g. Latin-1, Windows-1252)
-            df = pd.read_csv(file_path, encoding='latin-1')
+            df = pd.read_csv(
+                file_path,
+                sep=dialect["separator"],
+                encoding=dialect["encoding"],
+            )
         except Exception:
-            # Last resort: let pandas sniff everything
-            df = pd.read_csv(file_path, sep=None, engine='python')
+            df = pd.read_csv(file_path, sep=None, engine="python", encoding="latin-1")
         if df.empty:
             raise ValueError(
                 "File berhasil dibaca tetapi tidak mengandung baris data (hanya header). "
@@ -162,7 +394,7 @@ def fix_arrow_compatibility(df):
 
 def _read_local_file_with_optimization(file_path, file_type):
     """Read a local file after it has been safely buffered to disk."""
-    if file_type == 'csv':
+    if file_type in ('csv', 'csv.gz'):
         df = read_large_csv(file_path, progress_bar=True)
     elif file_type == 'parquet':
         st.info("🚀 Menggunakan Polars engine untuk Parquet...")
@@ -201,14 +433,12 @@ def read_file_with_optimization(uploaded_file, file_type='csv'):
     """
     Read uploaded file with streaming buffer and memory optimization for large files
     """
-    # Normalize file_type
-    file_type = (file_type or 'csv').lower().lstrip('.')
-    if file_type == 'excel':
-        file_type = 'xlsx'
+    filename = getattr(uploaded_file, "name", "") or ""
+    file_type = normalize_upload_type(file_type, filename)
 
-    # Check file size
     file_size = uploaded_file.size
     check_file_size(file_size)
+    check_ingest_resources(file_size, copies=2.0)
 
     if file_type in ['xlsx', 'xls'] and file_size > MAX_EXCEL_FILE_SIZE:
         limit_mb = MAX_EXCEL_FILE_SIZE / (1024 * 1024)
@@ -217,18 +447,14 @@ def read_file_with_optimization(uploaded_file, file_type='csv'):
             "Gunakan CSV atau Parquet untuk dataset yang lebih besar."
         )
 
-    # Stream upload buffer to disk in 8MB chunks to prevent memory explosion
-    with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{file_type}') as tmp_file:
-        if hasattr(uploaded_file, 'seek'):
-            uploaded_file.seek(0)
-        shutil.copyfileobj(uploaded_file, tmp_file, length=8 * 1024 * 1024)
-        tmp_file_path = tmp_file.name
+    suffix = ".csv.gz" if file_type == "csv.gz" else f".{file_type}"
+    tmp_file_path = os.path.join(TEMP_DATA_DIR, f"read_{uuid.uuid4().hex}{suffix}")
+    os.makedirs(TEMP_DATA_DIR, exist_ok=True)
+    _stream_upload_to_path(uploaded_file, tmp_file_path)
 
     try:
         return _read_local_file_with_optimization(tmp_file_path, file_type)
-
     finally:
-        # Clean up temporary file
         if os.path.exists(tmp_file_path):
             try:
                 os.unlink(tmp_file_path)
@@ -354,65 +580,103 @@ def optimize_dataframe_memory(df):
         'memory_saved_percent': memory_saved_percent
     }
 
-def ingest_file_to_raw_parquet(uploaded_file, file_type='csv'):
+def ingest_file_to_raw_parquet(uploaded_file, file_type='csv', progress_callback=None):
     """
-    Stream uploaded file directly to a raw Parquet file on disk without loading into RAM.
-    Returns (raw_parquet_path, total_rows, schema_dict)
+    Stream uploaded file to a raw Parquet file on disk without loading into RAM.
+    Parquet uploads are written once (no extra temp copy). CSV is sniffed then
+    streamed. Returns (raw_parquet_path, total_rows, schema_dict).
     """
-    file_type = (file_type or 'csv').lower().lstrip('.')
-    if file_type == 'excel':
-        file_type = 'xlsx'
-
-    file_size = uploaded_file.size
+    filename = getattr(uploaded_file, "name", "") or ""
+    file_type = normalize_upload_type(file_type, filename)
+    file_size = int(getattr(uploaded_file, "size", 0) or 0)
     check_file_size(file_size)
-    
-    # Ensure TEMP_DATA_DIR exists before attempting to write
+    check_ingest_resources(file_size)
+
+    if file_type in ["xlsx", "xls"] and file_size > MAX_EXCEL_FILE_SIZE:
+        limit_mb = MAX_EXCEL_FILE_SIZE / (1024 * 1024)
+        raise ValueError(
+            f"File Excel dibatasi {limit_mb:.0f}MB karena parser Excel menggunakan memory penuh. "
+            "Gunakan CSV atau Parquet untuk dataset yang lebih besar."
+        )
+
     os.makedirs(TEMP_DATA_DIR, exist_ok=True)
-    
     unique_id = uuid.uuid4().hex
     raw_parquet_path = os.path.join(TEMP_DATA_DIR, f"raw_{unique_id}.parquet")
-    
-    with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{file_type}') as tmp_file:
-        if hasattr(uploaded_file, 'seek'):
-            uploaded_file.seek(0)
-        shutil.copyfileobj(uploaded_file, tmp_file, length=8 * 1024 * 1024)
-        tmp_file_path = tmp_file.name
+    tmp_file_path = None
 
     try:
-        if file_type == 'csv':
-            stream_csv_to_parquet(tmp_file_path, output_path=raw_parquet_path, progress_bar=False)
-        elif file_type == 'parquet':
-            shutil.copyfile(tmp_file_path, raw_parquet_path)
+        _report_progress(progress_callback, "start", 5.0, "Memulai ingest ke disk...")
+        if file_type == "parquet":
+            _stream_upload_to_path(uploaded_file, raw_parquet_path, progress_callback)
+        elif file_type in ("csv", "csv.gz"):
+            suffix = ".csv.gz" if file_type == "csv.gz" else ".csv"
+            tmp_file_path = os.path.join(TEMP_DATA_DIR, f"upload_{unique_id}{suffix}")
+            _stream_upload_to_path(uploaded_file, tmp_file_path, progress_callback)
+            stream_csv_to_parquet(
+                tmp_file_path,
+                output_path=raw_parquet_path,
+                progress_bar=False,
+                progress_callback=progress_callback,
+            )
         else:
-            # Fallback for Excel / JSON
-            if file_type in ['xlsx', 'xls'] and file_size > MAX_EXCEL_FILE_SIZE:
-                limit_mb = MAX_EXCEL_FILE_SIZE / (1024 * 1024)
-                raise ValueError(
-                    f"File Excel dibatasi {limit_mb:.0f}MB karena parser Excel menggunakan memory penuh. "
-                    "Gunakan CSV atau Parquet untuk dataset yang lebih besar."
-                )
-            df = _read_local_file_with_optimization(tmp_file_path, file_type)
-            df.to_parquet(raw_parquet_path, index=False, compression="zstd")
-            del df
-            gc.collect()
+            suffix = f".{file_type}"
+            tmp_file_path = os.path.join(TEMP_DATA_DIR, f"upload_{unique_id}{suffix}")
+            _stream_upload_to_path(uploaded_file, tmp_file_path, progress_callback)
+            _report_progress(progress_callback, "convert", 50.0, f"Mengonversi {file_type} ke Parquet...")
+            if file_type == "json":
+                try:
+                    pl.scan_ndjson(tmp_file_path).sink_parquet(raw_parquet_path, compression="zstd")
+                except Exception:
+                    df = _read_local_file_with_optimization(tmp_file_path, file_type)
+                    df.to_parquet(raw_parquet_path, index=False, compression="zstd")
+                    del df
+                    gc.collect()
+            else:
+                df = _read_local_file_with_optimization(tmp_file_path, file_type)
+                df.to_parquet(raw_parquet_path, index=False, compression="zstd")
+                del df
+                gc.collect()
 
-        # Extract schema and row count using Polars Lazy scan (zero-copy / low memory)
         lf = pl.scan_parquet(raw_parquet_path)
         total_rows = lf.select(pl.len()).collect().item()
+        if total_rows == 0:
+            raise ValueError(
+                "File berhasil dibaca tetapi tidak mengandung baris data. "
+                "Pastikan file memiliki header dan minimal satu baris data."
+            )
         schema = lf.collect_schema()
-        
         schema_dict = {
-            'columns': list(schema.names()),
-            'dtypes': {name: str(dtype) for name, dtype in schema.items()},
-            'total_rows': total_rows
+            "columns": list(schema.names()),
+            "dtypes": {name: str(dtype) for name, dtype in schema.items()},
+            "total_rows": int(total_rows),
         }
-        return raw_parquet_path, total_rows, schema_dict
+        _report_progress(progress_callback, "done", 100.0, f"Ingest selesai ({int(total_rows):,} baris).")
+        return raw_parquet_path, int(total_rows), schema_dict
+    except Exception:
+        if os.path.exists(raw_parquet_path):
+            try:
+                os.unlink(raw_parquet_path)
+            except Exception:
+                pass
+        raise
     finally:
-        if os.path.exists(tmp_file_path):
+        if tmp_file_path and os.path.exists(tmp_file_path):
             try:
                 os.unlink(tmp_file_path)
             except Exception:
                 pass
+
+
+def load_parquet_bounded(parquet_path, max_rows=100000):
+    """Load parquet fully only when RAM is safe; otherwise return a head sample."""
+    if not os.path.exists(parquet_path):
+        raise FileNotFoundError(f"Parquet file not found: {parquet_path}")
+    file_size = os.path.getsize(parquet_path)
+    total_rows = int(pl.scan_parquet(parquet_path).select(pl.len()).collect().item())
+    if can_materialize_dataset(file_size) and total_rows <= max_rows * 20:
+        return pd.read_parquet(parquet_path), False, total_rows
+    sample_n = min(max_rows, total_rows)
+    return get_parquet_sample(parquet_path, n=sample_n), True, total_rows
 
 def get_parquet_sample(parquet_path: str, n: int = 5000) -> pd.DataFrame:
     """
@@ -447,11 +711,12 @@ def remove_duplicates_from_parquet(input_path, output_path=None, subset=None, ke
 
     original_rows = lf.select(pl.len()).collect().item()
     polars_keep = 'none' if keep is False else keep
+    maintain_order = original_rows < 500_000
     try:
         lf.unique(
             subset=subset,
             keep=polars_keep,
-            maintain_order=True,
+            maintain_order=maintain_order,
         ).sink_parquet(output_path, compression='zstd')
         final_rows = pl.scan_parquet(output_path).select(pl.len()).collect().item()
     except Exception:

@@ -66,6 +66,21 @@ def get_processed_sample(n=1000):
         return None
     return lazy_lf.head(n).collect().to_pandas()
 
+
+def get_feature_selection_frame(max_rows=None):
+    """Load a bounded frame for feature-selection UI without materializing 3GB pandas."""
+    from config import FEATURE_SELECTION_SAMPLE_ROWS
+
+    max_rows = max_rows or FEATURE_SELECTION_SAMPLE_ROWS
+    path = st.session_state.get("df_processed_path")
+    if path and os.path.exists(path):
+        size_mb = os.path.getsize(path) / (1024 * 1024)
+        if size_mb > 50:
+            sample = get_processed_sample(n=max_rows)
+            if sample is not None and not sample.empty:
+                return sample
+    return get_df_processed()
+
 def update_df_processed(new_df):
     """Helper function to update df_processed and save to Parquet"""
     new_path = save_processed_data(new_df, prefix="preprocessed")

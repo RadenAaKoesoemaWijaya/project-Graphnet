@@ -6,6 +6,7 @@ headless = true
 # For internal/intranet deployment, XSRF protection alone is sufficient.
 enableXsrfProtection = true
 maxUploadSize = 3072
+maxMessageSize = 3072
 
 # ── Connection & Memory Health ─────────────────────────────────────────────
 # Increase WebSocket ping interval/timeout to reduce spurious disconnects
@@ -21,7 +22,8 @@ maxUploadSize = 3072
 
 [runner]
 # Rerun on file save (development convenience). Disable in production if needed.
-fastReruns = true
+# Disabled so a long ingest/preprocess is not interrupted by a file-save rerun.
+fastReruns = false
 # Enforce garbage collection of unreferenced Python objects after each script run
 # so that torch tensors and DataFrames released by Streamlit don't accumulate.
 postScriptGC = true

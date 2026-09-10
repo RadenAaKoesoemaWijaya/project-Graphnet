@@ -55,6 +55,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     STREAMLIT_SERVER_ENABLE_CORS=true \
     STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION=true \
     STREAMLIT_SERVER_MAX_UPLOAD_SIZE=3072 \
+    STREAMLIT_SERVER_MAX_MESSAGE_SIZE=3072 \
+    TEMP_DATA_DIR=/tmp/astina_temp_data \
     ASTINA_LOG_FORMAT=json \
     HOME=/home/appuser
 
@@ -89,4 +91,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
     CMD sh -c "curl --fail http://localhost:${PORT:-8501}/_stcore/health || exit 1"
 
 # Streamlit config supports Docker Desktop and Cloud Run through PORT.
-CMD ["sh", "-c", "streamlit run main.py --server.port=${PORT:-8501} --server.address=0.0.0.0 --server.headless=true --server.enableCORS=true --server.enableXsrfProtection=true --server.fileWatcherType=none --browser.gatherUsageStats=false"]
+CMD ["sh", "-c", "streamlit run main.py --server.port=${PORT:-8501} --server.address=0.0.0.0 --server.headless=true --server.enableCORS=true --server.enableXsrfProtection=true --server.fileWatcherType=none --browser.gatherUsageStats=false --server.maxUploadSize=3072 --server.maxMessageSize=3072"]

@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import os
 from ui.utils import *
 from state_manager import *
 from rate_limit import check_upload_quota, increment_quota
@@ -8,36 +9,49 @@ from cache_manager import get_file_hash
 
 from file_handler import (
     ingest_file_to_raw_parquet, get_parquet_sample, get_file_info,
-    show_file_size_warning, save_processed_data, remove_duplicates_from_parquet
+    show_file_size_warning, save_processed_data, remove_duplicates_from_parquet,
+    normalize_upload_type, check_ingest_resources,
 )
 
 def load_and_validate_raw_data(uploaded_file):
-    import time
-    file_extension = uploaded_file.name.split('.')[-1].lower()
-    
-    # 1. Ingest directly to Parquet on disk without full memory amplification
-    raw_parquet_path, total_rows, schema_dict = ingest_file_to_raw_parquet(uploaded_file, file_extension)
-    
-    # 2. Extract representative preview sample for UI and validation
-    sample_size = min(5000, total_rows)
-    df_sample = get_parquet_sample(raw_parquet_path, n=sample_size)
-    df_sample = DataSanitizer.sanitize_dataframe(df_sample)
-    
-    # 3. Validate on sample data and schema
-    is_valid, validation_results = comprehensive_validation(df_sample)
-    
-    memory_info = {
-        'original_memory_mb': uploaded_file.size / (1024 * 1024),
-        'optimized_memory_mb': (df_sample.memory_usage(deep=True).sum() / 1024**2),
-        'memory_saved_mb': max(0.0, (uploaded_file.size / (1024 * 1024)) - 10.0),
-        'memory_saved_percent': 85.0 if uploaded_file.size > 20 * 1024 * 1024 else 0.0
-    }
-    
-    return raw_parquet_path, df_sample, total_rows, len(schema_dict['columns']), memory_info, is_valid, validation_results
+    file_extension = normalize_upload_type("", uploaded_file.name)
+
+    progress = st.progress(0)
+    status = st.empty()
+
+    def on_progress(_stage, percent, message):
+        try:
+            progress.progress(min(1.0, max(0.0, float(percent) / 100.0)))
+        except Exception:
+            pass
+        status.caption(message)
+
+    try:
+        check_ingest_resources(uploaded_file.size)
+        raw_parquet_path, total_rows, schema_dict = ingest_file_to_raw_parquet(
+            uploaded_file, file_extension, progress_callback=on_progress
+        )
+        sample_size = min(5000, total_rows)
+        df_sample = get_parquet_sample(raw_parquet_path, n=sample_size)
+        df_sample = DataSanitizer.sanitize_dataframe(df_sample)
+        is_valid, validation_results = comprehensive_validation(df_sample)
+        memory_info = {
+            'original_memory_mb': uploaded_file.size / (1024 * 1024),
+            'optimized_memory_mb': (df_sample.memory_usage(deep=True).sum() / 1024**2),
+            'memory_saved_mb': max(0.0, (uploaded_file.size / (1024 * 1024)) - 10.0),
+            'memory_saved_percent': 85.0 if uploaded_file.size > 20 * 1024 * 1024 else 0.0
+        }
+        return raw_parquet_path, df_sample, total_rows, len(schema_dict['columns']), memory_info, is_valid, validation_results
+    finally:
+        try:
+            progress.empty()
+            status.empty()
+        except Exception:
+            pass
 
 def show_data_collection_page():
     st.title("Unggah Data Transaksi")
-    st.info("Tahap ini memeriksa kualitas data sebelum digunakan model. Upload 3 GiB dikonfigurasi, tetapi format Parquet lebih efisien untuk dataset besar.")
+    st.info("Tahap ini memeriksa kualitas data sebelum digunakan model. Upload hingga 3 GiB didukung untuk CSV/Parquet/.csv.gz. Excel dibatasi 100 MB; untuk file besar gunakan Parquet agar ingest tetap streaming.")
 
     st.markdown("""
     ### Tujuan: Mengumpulkan data transaksi untuk analisis anomali
@@ -67,16 +81,16 @@ def show_data_collection_page():
 
     # Upload file
     uploaded_file = st.file_uploader(
-        "Unggah file data transaksi (CSV/Excel/Parquet)",
-        type=["csv", "xlsx", "xls", "parquet"],
-        help="Mendukung file hingga 3GiB. Untuk file besar, gunakan Parquet dan pastikan storage temporary mencukupi."
+        "Unggah file data transaksi (CSV / CSV.GZ / Excel / Parquet)",
+        type=["csv", "xlsx", "xls", "parquet", "gz"],
+        help="CSV, Parquet, dan .csv.gz hingga 3 GiB (streaming). Excel .xlsx/.xls dibatasi 100 MB."
     )
 
     if uploaded_file is not None:
         try:
             # Check rate limit for file uploads
             user_id = st.session_state.get('username', 'anonymous')
-            allowed, error_msg = check_upload_quota(user_id)
+            allowed, error_msg = check_upload_quota(user_id, file_size_bytes=uploaded_file.size)
             if not allowed:
                 st.error(f"❌ {error_msg}")
                 st.info("💡 Silakan coba lagi nanti atau hubungi administrator untuk meningkatkan kuota.")
@@ -109,10 +123,10 @@ def show_data_collection_page():
                 st.session_state['last_uploaded_filename'] = uploaded_file.name
                 
             # Determine file type
-            file_extension = uploaded_file.name.split('.')[-1].lower()
-            valid_extensions = ['csv', 'xlsx', 'xls', 'parquet']
+            file_extension = normalize_upload_type("", uploaded_file.name)
+            valid_extensions = ['csv', 'csv.gz', 'xlsx', 'xls', 'parquet']
             if file_extension not in valid_extensions:
-                st.error(f"Format file .{file_extension} tidak didukung.")
+                st.error(f"Format file .{file_extension} tidak didukung. Gunakan CSV, .csv.gz, Excel, atau Parquet.")
                 return
 
             import time
@@ -165,8 +179,8 @@ def show_data_collection_page():
                 log_data_upload(
                     file_name=uploaded_file.name,
                     file_size=file_info['size_bytes'],
-                    row_count=df.shape[0],
-                    column_count=df.shape[1],
+                    row_count=total_rows,
+                    column_count=total_cols,
                     success=True
                 )
                 # Record metrics
@@ -175,8 +189,8 @@ def show_data_collection_page():
                     'file_size_mb': file_info['size_mb']
                 })
                 increment_counter('total_data_uploads')
-                set_gauge('current_dataset_rows', df.shape[0])
-                set_gauge('current_dataset_columns', df.shape[1])
+                set_gauge('current_dataset_rows', total_rows)
+                set_gauge('current_dataset_columns', total_cols)
                 
                 # Increment upload quota counter
                 increment_quota(user_id, 'upload')
@@ -194,7 +208,7 @@ def show_data_collection_page():
 
             eda_col1, eda_col2, eda_col3, eda_col4 = st.columns(4)
             with eda_col1:
-                st.metric("Baris", f"{df.shape[0]:,}")
+                st.metric("Baris", f"{total_rows:,}")
             with eda_col2:
                 st.metric("Kolom", f"{df.shape[1]}")
             with eda_col3:
@@ -809,7 +823,7 @@ def show_data_collection_page():
                     
                         if st.button("🔧 Terapkan Select K-Best", type="primary"):
                             try:
-                                selection_df = get_df_processed()
+                                selection_df = get_feature_selection_frame()
                                 if selection_df is not None and len(selection_df) > 5:
                                     with st.spinner("Menghitung skor Select K-Best..."):
                                         selected_features, feature_scores = apply_select_k_best(
@@ -856,7 +870,7 @@ def show_data_collection_page():
                     
                         if st.button("🔧 Terapkan Mutual Information", type="primary"):
                             with st.spinner("Menghitung Mutual Information..."):
-                                selection_df = get_df_processed()
+                                selection_df = get_feature_selection_frame()
                                 if selection_df is None:
                                     st.error("Data hasil preprocessing tidak dapat dimuat.")
                                     return
@@ -873,7 +887,7 @@ def show_data_collection_page():
                     
                         if st.button("🔧 Terapkan Tree-based Selection", type="primary"):
                             with st.spinner("Melatih model untuk menghitung importance..."):
-                                selection_df = get_df_processed()
+                                selection_df = get_feature_selection_frame()
                                 if selection_df is None:
                                     st.error("Data hasil preprocessing tidak dapat dimuat.")
                                     return
@@ -896,27 +910,39 @@ def show_data_collection_page():
                     
                         if st.button("🔧 Jalankan PCA", type="primary"):
                             with st.spinner("Menjalankan PCA..."):
-                                # Load df_processed from disk
-                                df_processed = get_df_processed()
+                                processed_path = st.session_state.get("df_processed_path")
+                                large_processed = (
+                                    isinstance(processed_path, str)
+                                    and os.path.exists(processed_path)
+                                    and os.path.getsize(processed_path) > 50 * 1024 * 1024
+                                )
+                                if large_processed:
+                                    df_processed = get_feature_selection_frame()
+                                else:
+                                    df_processed = get_df_processed()
                                 if df_processed is None:
                                     st.error("Data hasil praproses tidak ditemukan!")
                                     return
-                            
-                                # Remove old PCA columns if they exist to prevent accumulation
+
                                 old_pca_cols = [col for col in df_processed.columns if col.startswith('PCA_Component_')] if isinstance(df_processed, pd.DataFrame) else []
                                 if old_pca_cols and isinstance(df_processed, pd.DataFrame):
                                     df_processed = df_processed.drop(columns=old_pca_cols)
                                     st.info(f"🗑️ Membersihkan {len(old_pca_cols)} kolom PCA lama")
-                            
+
                                 df_pca, pca_cols, explained_variance = apply_pca_reduction(df_processed, feature_columns, n_components=n_comp)
-                            
-                                # Update df_processed in session state to include PCA columns
-                                for col in pca_cols:
-                                    df_processed[col] = df_pca[col]
-                            
-                                # Save updated df_processed back to Parquet
-                                update_df_processed(df_processed)
-                            
+
+                                if large_processed:
+                                    st.warning(
+                                        "Dataset besar: PCA dihitung dari sampel dan tidak menimpa file praproses penuh. "
+                                        "Gunakan Select K-Best atau Semua Fitur untuk pelatihan."
+                                    )
+                                    st.session_state['selected_features_cache'] = feature_columns
+                                else:
+                                    for col in pca_cols:
+                                        df_processed[col] = df_pca[col]
+                                    update_df_processed(df_processed)
+                                    st.session_state['selected_features_cache'] = pca_cols
+
                                 st.success(f"✅ PCA selesai! {len(pca_cols)} komponen menjelaskan {sum(explained_variance):.2%} variansi.")
 
                                 # Plot explained variance
@@ -925,9 +951,7 @@ def show_data_collection_page():
                                            title='Variansi Terjelaskan per Komponen',
                                            labels={'x': 'Komponen Utama', 'y': 'Variansi Terjelaskan'})
                                 st.plotly_chart(fig, width='stretch')
-                            
-                                st.session_state['selected_features_cache'] = pca_cols
-                                st.session_state['proceed_after_selection'] = True
+                                st.session_state['proceed_after_selection'] = not large_processed
                 
                     # Process selected features based on method
                     proceed_to_training = False

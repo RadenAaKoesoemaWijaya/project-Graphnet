@@ -10,6 +10,12 @@ from state_manager import *
 from repeat_billing_detector import RepeatBillingDetector
 from fuzzy_claim_matcher import FuzzyClaimMatcher
 from phantom_service_rules import PhantomServiceRuleEngine
+from file_handler import (
+    ingest_file_to_raw_parquet,
+    load_parquet_bounded,
+    normalize_upload_type,
+    read_file_with_optimization,
+)
 from ui.utils import (
     generate_sample_claims_template,
     render_schema_readiness_card,
@@ -127,20 +133,32 @@ def _build_safety_summary(df_result: pd.DataFrame, risk_summary: dict) -> list:
 
 
 def _get_active_session_dataset():
-    """Check and retrieve dataset available from earlier workflow steps."""
-    for key in ['df_processed', 'data', 'train_df', 'raw_data_cache_sample', 'raw_data_cache_df']:
-        candidate = st.session_state.get(key)
-        if isinstance(candidate, pd.DataFrame) and not candidate.empty and len(candidate) >= 2:
-            return candidate, f"Dataset Sesi Aktif ({key}: {len(candidate):,} baris)"
-            
-    if 'df_processed_path' in st.session_state and os.path.exists(st.session_state['df_processed_path']):
+    """Prefer full processed Parquet (bounded) over a 5k UI sample."""
+    processed_path = st.session_state.get("df_processed_path")
+    if isinstance(processed_path, str) and os.path.exists(processed_path):
         try:
-            df_disk = pd.read_parquet(st.session_state['df_processed_path'])
+            df_disk, sampled, total_rows = load_parquet_bounded(processed_path)
             if len(df_disk) >= 2:
+                if sampled:
+                    return (
+                        df_disk,
+                        f"Dataset Praproses (sampel {len(df_disk):,} dari {total_rows:,} baris)",
+                    )
                 return df_disk, f"Dataset Praproses Disk ({len(df_disk):,} baris)"
         except Exception:
             pass
-            
+
+    for key in ["df_processed", "data", "train_df"]:
+        candidate = st.session_state.get(key)
+        if isinstance(candidate, pd.DataFrame) and not candidate.empty and len(candidate) >= 2:
+            return candidate, f"Dataset Sesi Aktif ({key}: {len(candidate):,} baris)"
+
+    for key in ["raw_data_cache_sample", "raw_data_cache_df"]:
+        candidate = st.session_state.get(key)
+        if isinstance(candidate, pd.DataFrame) and not candidate.empty and len(candidate) >= 2:
+            total_rows = st.session_state.get("raw_data_total_rows", len(candidate))
+            return candidate, f"Sampel unggahan ({len(candidate):,} dari {total_rows:,} baris)"
+
     return None, None
 
 
@@ -262,8 +280,8 @@ def show_detection_page():
         with col_up1:
             uploaded_file = st.file_uploader(
                 "Unggah file dataset klaim asuransi:",
-                type=["csv", "xlsx", "xls", "parquet"],
-                help="Mendukung CSV, Excel (.xlsx, .xls), dan Parquet.",
+                type=["csv", "xlsx", "xls", "parquet", "gz"],
+                help="CSV/Parquet/.csv.gz hingga 3 GiB (streaming). Excel dibatasi 100 MB. File besar dimuat sebagai Parquet.",
                 key="detection_file_uploader"
             )
         with col_up2:
@@ -280,16 +298,20 @@ def show_detection_page():
 
         if uploaded_file is not None:
             try:
-                file_ext = uploaded_file.name.rsplit(".", 1)[-1].lower()
-                fmt_map = {"csv": "csv", "xlsx": "xlsx", "xls": "xls", "parquet": "parquet"}
-                file_format: str = fmt_map.get(file_ext, file_ext) or "csv"
+                file_format = normalize_upload_type("", uploaded_file.name)
                 if uploaded_file.size > MAX_DIRECT_DETECTION_FILE_SIZE:
-                    limit_mb = MAX_DIRECT_DETECTION_FILE_SIZE / (1024 * 1024)
-                    raise ValueError(
-                        f"Upload langsung pada halaman deteksi dibatasi {limit_mb:.0f}MB. "
-                        "Untuk dataset besar, gunakan halaman Unggah Data agar diproses sebagai Parquet."
+                    parquet_path, total_rows, _schema = ingest_file_to_raw_parquet(
+                        uploaded_file, file_format
                     )
-                raw_df = read_file_with_optimization(uploaded_file, file_format)
+                    raw_df, sampled, total_rows = load_parquet_bounded(parquet_path)
+                    if sampled:
+                        st.warning(
+                            f"File besar ({uploaded_file.size / (1024 * 1024):.0f} MB, {total_rows:,} baris). "
+                            f"Deteksi interaktif memakai sampel {len(raw_df):,} baris. "
+                            "Untuk seluruh data, gunakan halaman Unggah Data lalu pelatihan batch."
+                        )
+                else:
+                    raw_df = read_file_with_optimization(uploaded_file, file_format)
 
                 # ── Post-read validation ──────────────────────────────────
                 if raw_df is None or not isinstance(raw_df, pd.DataFrame):

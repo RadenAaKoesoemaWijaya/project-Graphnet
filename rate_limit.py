@@ -32,14 +32,21 @@ RATE_LIMITS = {
         'training_jobs_per_day': int(os.getenv('RATE_LIMIT_TRAINING_PER_DAY', '5')),
         'inference_per_minute': int(os.getenv('RATE_LIMIT_INFERENCE_PER_MINUTE', '100')),
         'concurrent_uploads': 2,
-        'max_file_size_gb': 2,
+        'max_file_size_gb': 3,
+    },
+    'auditor': {
+        'uploads_per_day': int(os.getenv('RATE_LIMIT_UPLOADS_PER_DAY', '10')),
+        'training_jobs_per_day': 0,
+        'inference_per_minute': int(os.getenv('RATE_LIMIT_INFERENCE_PER_MINUTE', '100')),
+        'concurrent_uploads': 2,
+        'max_file_size_gb': 3,
     },
     'admin': {
         'uploads_per_day': 100,
         'training_jobs_per_day': 50,
         'inference_per_minute': 1000,
         'concurrent_uploads': 10,
-        'max_file_size_gb': 10,
+        'max_file_size_gb': 3,
     },
     'viewer': {
         'uploads_per_day': 0,  # No upload permission
@@ -274,12 +281,40 @@ def _resolve_user_and_role(user_id: Optional[str] = None) -> Tuple[str, str]:
     except Exception:
         return user_id or "anonymous", "analyst"
 
-def check_upload_quota(user_id: str = None) -> Tuple[bool, Optional[str]]:
-    """Check upload quota for current user"""
+def check_upload_quota(user_id: str = None, file_size_bytes: int = None) -> Tuple[bool, Optional[str]]:
+    """Check upload quota for current user, including per-role max file size."""
     u_id, u_role = _resolve_user_and_role(user_id)
     allowed, error = check_user_quota(u_id, 'upload', u_role)
     if not allowed:
         return False, error
+    limits = RATE_LIMITS.get(u_role, UNAUTHENTICATED_LIMITS)
+    max_gb = float(limits.get('max_file_size_gb', 3) or 0)
+    if file_size_bytes is not None and max_gb >= 0:
+        if max_gb == 0:
+            return False, f"Peran '{u_role}' tidak diizinkan mengunggah file."
+        if file_size_bytes > max_gb * (1024 ** 3):
+            size_gb = file_size_bytes / (1024 ** 3)
+            return False, (
+                f"Ukuran file ({size_gb:.2f} GB) melebihi kuota peran '{u_role}' "
+                f"({max_gb:g} GB)."
+            )
+    return True, None
+
+
+def check_upload_file_size(file_size_bytes: int, user_id: str = None) -> Tuple[bool, Optional[str]]:
+    """Enforce per-role upload size quota (aligned with the 3 GiB application cap)."""
+    _, u_role = _resolve_user_and_role(user_id)
+    limits = RATE_LIMITS.get(u_role, UNAUTHENTICATED_LIMITS)
+    max_gb = float(limits.get('max_file_size_gb', 3))
+    if max_gb <= 0:
+        return False, f"Peran '{u_role}' tidak diizinkan mengunggah file."
+    max_bytes = int(max_gb * 1024 * 1024 * 1024)
+    if file_size_bytes > max_bytes:
+        size_gb = file_size_bytes / (1024 ** 3)
+        return False, (
+            f"Ukuran file ({size_gb:.2f} GB) melebihi kuota peran '{u_role}' "
+            f"({max_gb:g} GB)."
+        )
     return True, None
 
 def check_training_quota(user_id: str = None) -> Tuple[bool, Optional[str]]:

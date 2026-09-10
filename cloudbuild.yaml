@@ -103,7 +103,7 @@ steps:
       # R3: structured (JSON) logs are picked up by Cloud Logging.
       # R4: optional GCS bucket for model persistence.
       # SECURITY: Enforce authentication in production
-      - --set-env-vars=POLARS_SKIP_CPU_CHECK=1,STREAMLIT_SERVER_MAX_UPLOAD_SIZE=3072,ASTINA_LOG_FORMAT=json,CACHE_DIR=/tmp/astina_cache,MODELS_DIR=/tmp/astina_models,GOOGLE_CLOUD_BUCKET=${_GCS_BUCKET},AUTH_ENABLED=${_AUTH_ENABLED}
+      - --set-env-vars=POLARS_SKIP_CPU_CHECK=1,STREAMLIT_SERVER_MAX_UPLOAD_SIZE=3072,STREAMLIT_SERVER_MAX_MESSAGE_SIZE=3072,TEMP_DATA_DIR=/tmp/astina_temp_data,ASTINA_LOG_FORMAT=json,CACHE_DIR=/tmp/astina_cache,MODELS_DIR=/tmp/astina_models,GOOGLE_CLOUD_BUCKET=${_GCS_BUCKET},AUTH_ENABLED=${_AUTH_ENABLED}
 
 # Store the built image so it can be inspected later.
 images:

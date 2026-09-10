@@ -102,18 +102,21 @@ def compute_global_preprocessing_stats(parquet_path: str, enable_outlier_detecti
     cat_stats = {}
     for col in categorical_columns:
         try:
-            val_counts = lf.select(pl.col(col)).group_by(pl.col(col)).agg(pl.len().alias("count")).collect()
-            cardinality = len(val_counts)
-            
-            # Extract top 50 categories for mapping
-            top_cats = val_counts.sort("count", descending=True).head(50)
+            cardinality = lf.select(pl.col(col).n_unique()).collect().item()
+            top_cats = (
+                lf.group_by(pl.col(col))
+                .agg(pl.len().alias("count"))
+                .sort("count", descending=True)
+                .head(50)
+                .collect()
+            )
             freq_dict = {
-                str(row[col]): int(row["count"]) 
-                for row in top_cats.iter_rows(named=True) 
+                str(row[col]): int(row["count"])
+                for row in top_cats.iter_rows(named=True)
                 if row[col] is not None
             }
             cat_stats[col] = {
-                'cardinality': cardinality,
+                'cardinality': int(cardinality or 0),
                 'freq_map': freq_dict,
                 'top_categories': list(freq_dict.keys())[:5] if cardinality <= 5 else []
             }

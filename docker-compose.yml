@@ -14,6 +14,8 @@ services:
     environment:
       PORT: "8501"
       STREAMLIT_SERVER_MAX_UPLOAD_SIZE: "3072"
+      STREAMLIT_SERVER_MAX_MESSAGE_SIZE: "3072"
+      TEMP_DATA_DIR: "/tmp/astina_temp_data"
       ASTINA_LOG_FORMAT: "json"
       GOOGLE_CLOUD_BUCKET: ${GOOGLE_CLOUD_BUCKET:-}
       OPTUNA_N_JOBS: "4"

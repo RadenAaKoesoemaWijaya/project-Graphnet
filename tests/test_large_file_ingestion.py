@@ -140,3 +140,76 @@ def test_excel_upload_over_limit_fails_before_parsing():
 
     with pytest.raises(ValueError, match="dibatasi 100MB"):
         read_file_with_optimization(uploaded_file, "xlsx")
+
+
+def test_sniff_semicolon_csv_streams_to_parquet(tmp_path):
+    from file_handler import sniff_csv_dialect
+
+    source = tmp_path / "claims.csv"
+    source.write_text("claim_id;amount\nC1;10.5\nC2;20.0\n", encoding="utf-8")
+    dialect = sniff_csv_dialect(str(source))
+    assert dialect["separator"] == ";"
+
+    output, row_count = stream_csv_to_parquet(
+        str(source),
+        output_path=str(tmp_path / "claims.parquet"),
+        chunk_size=2,
+        progress_bar=False,
+    )
+    actual = pd.read_parquet(output)
+    assert row_count == 2
+    assert list(actual.columns) == ["claim_id", "amount"]
+    assert actual["claim_id"].tolist() == ["C1", "C2"]
+
+
+def test_csv_gz_ingest_to_parquet(tmp_path):
+    import gzip
+
+    payload = b"claim_id,amount\nC1,11\nC2,22\n"
+    gz_bytes = gzip.compress(payload)
+    uploaded_file = UploadedBytes(gz_bytes, name="claims.csv.gz")
+
+    output, row_count, schema = ingest_file_to_raw_parquet(uploaded_file, "gz")
+    actual = pd.read_parquet(output)
+    assert row_count == 2
+    assert schema["columns"] == ["claim_id", "amount"]
+    assert actual["claim_id"].tolist() == ["C1", "C2"]
+
+
+def test_parquet_ingest_writes_once(tmp_path):
+    source_df = pd.DataFrame({"claim_id": ["C1", "C2"], "amount": [1.5, 2.5]})
+    buffer = __import__("io").BytesIO()
+    source_df.to_parquet(buffer, index=False)
+    uploaded_file = UploadedBytes(buffer.getvalue(), name="claims.parquet")
+
+    output, row_count, schema = ingest_file_to_raw_parquet(uploaded_file, "parquet")
+    actual = pd.read_parquet(output)
+    assert row_count == 2
+    assert actual["claim_id"].tolist() == ["C1", "C2"]
+    assert schema["total_rows"] == 2
+
+
+def test_check_ingest_resources_rejects_insufficient_disk(monkeypatch):
+    from file_handler import check_ingest_resources
+
+    class Usage:
+        free = 1024
+        used = 1
+        total = 2048
+
+    monkeypatch.setattr("file_handler.shutil.disk_usage", lambda _path: Usage())
+    with pytest.raises(ValueError, match="Ruang disk"):
+        check_ingest_resources(100 * 1024 * 1024)
+
+
+def test_latin1_csv_ingest(tmp_path):
+    source = tmp_path / "claims.csv"
+    source.write_bytes("claim_id,note\nC1,caf\xe9\n".encode("latin-1"))
+    output, row_count = stream_csv_to_parquet(
+        str(source),
+        output_path=str(tmp_path / "latin.parquet"),
+        progress_bar=False,
+    )
+    actual = pd.read_parquet(output)
+    assert row_count == 1
+    assert "caf" in str(actual["note"].iloc[0]).lower()

@@ -11,9 +11,17 @@ MAX_EXCEL_FILE_SIZE = 100 * 1024 * 1024  # Excel parsing is full-memory via pand
 CHUNK_SIZE = 50 * 1024 * 1024  # 50MB chunks for processing
 VISUALIZATION_SAMPLE_SIZE = 5000
 SHAP_BACKGROUND_SAMPLE_SIZE = 500
+FEATURE_SELECTION_SAMPLE_ROWS = 50000
+INGEST_DISK_COPIES = 3.0
+INGEST_DISK_SLACK_BYTES = 256 * 1024 * 1024
+CSV_SNIFF_BYTES = 65536
+UPLOAD_STREAM_BYTES = 8 * 1024 * 1024
 
-# Temporary directory for processed data
-TEMP_DATA_DIR = os.path.join(tempfile.gettempdir(), "astina_temp_data")
+# Temporary directory for processed data (override with TEMP_DATA_DIR for Docker/Cloud volumes)
+TEMP_DATA_DIR = os.environ.get(
+    "TEMP_DATA_DIR",
+    os.path.join(tempfile.gettempdir(), "astina_temp_data"),
+)
 os.makedirs(TEMP_DATA_DIR, exist_ok=True)
 
 # Memory optimization settings
@@ -23,9 +31,9 @@ USE_CATEGORICAL_OPTIMIZATION = True
 
 # Streamlit file uploader configuration
 UPLOADER_CONFIG = {
-    'type': ['csv', 'parquet', 'xlsx', 'json'],
+    'type': ['csv', 'parquet', 'xlsx', 'xls', 'gz'],
     'max_file_size': MAX_FILE_SIZE,
-    'help': f'Upload file up to {MAX_FILE_SIZE // (1024*1024*1024)}GiB. Large files are processed in partitions.'
+    'help': f'Upload file up to {MAX_FILE_SIZE // (1024*1024*1024)}GiB. Large files are processed in partitions. Gunakan CSV/Parquet (atau .csv.gz); Excel dibatasi {MAX_EXCEL_FILE_SIZE // (1024*1024):.0f}MB.'
 }
 
 # Processing configuration for large datasets
@@ -136,8 +144,8 @@ def get_optimal_chunk_size(file_size_bytes):
         return 50000  # 50k rows per chunk
     elif file_size_bytes < 1024 * 1024 * 1024:  # < 1GB
         return 50000  # 50k rows per chunk
-    else:  # >= 1GB
-        return 100000  # 100k rows per chunk
+    else:  # >= 1GB — smaller row batches keep pandas fallback memory bounded
+        return 25000
 
 def optimize_memory_usage(df):
     """Optimize DataFrame memory usage"""
