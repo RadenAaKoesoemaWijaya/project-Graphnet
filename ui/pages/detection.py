@@ -32,6 +32,7 @@ from ui_components import (
     rate_limit_check,
 )
 from cache_manager import get_file_hash, get_dataframe_hash
+from large_file_processor import transform_dataframe_with_fitted_stats
 import shutil
 
 
@@ -548,12 +549,27 @@ def show_detection_page():
                     df_processed = st.session_state['detection_processed_df']
                     feature_columns_proc = st.session_state.get('detection_feature_columns', [])
                 else:
-                    df_processed, feature_columns_proc, _ = preprocess_insurance_claims_optimized(
-                        raw_df,
-                        enable_large_file_handling=st.session_state.get('enable_large_file_handling', True),
-                        enable_outlier_detection=st.session_state.get('enable_outlier_detection', True),
-                        enable_data_validation=st.session_state.get('enable_data_validation', True)
+                    training_metadata = getattr(detector, "training_metadata", {}) or {}
+                    fitted_preprocessing_stats = training_metadata.get(
+                        "preprocessing_fit_stats"
                     )
+                    if (
+                        training_metadata.get("preprocessing_contract_version") == 1
+                        and fitted_preprocessing_stats
+                    ):
+                        df_processed = transform_dataframe_with_fitted_stats(
+                            raw_df, fitted_preprocessing_stats
+                        )
+                        feature_columns_proc = fitted_preprocessing_stats.get(
+                            "initial_features", []
+                        )
+                    else:
+                        df_processed, feature_columns_proc, _ = preprocess_insurance_claims_optimized(
+                            raw_df,
+                            enable_large_file_handling=st.session_state.get('enable_large_file_handling', True),
+                            enable_outlier_detection=st.session_state.get('enable_outlier_detection', True),
+                            enable_data_validation=st.session_state.get('enable_data_validation', True)
+                        )
                     st.session_state['detection_processed_df'] = df_processed
                     st.session_state['detection_feature_columns'] = feature_columns_proc
                     st.session_state['detection_processed_signature'] = preprocessing_signature

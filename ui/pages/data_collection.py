@@ -13,6 +13,10 @@ from file_handler import (
     show_file_size_warning, save_processed_data, remove_duplicates_from_parquet,
     normalize_upload_type, check_ingest_resources,
 )
+from large_file_processor import (
+    prepare_train_validation_test_parquet,
+    preprocess_dataset_with_train_only_stats,
+)
 
 def load_and_validate_raw_data(uploaded_file):
     file_extension = normalize_upload_type("", uploaded_file.name)
@@ -262,9 +266,6 @@ def show_data_collection_page():
             st.subheader("⚙️ Opsi Preprocessing")
             st.caption("Preprocessing membersihkan data, menangani missing value/outlier, mengubah kategori dan tanggal menjadi fitur numerik, lalu menyimpan hasil untuk training.")
 
-            if 'enable_large_file_handling' not in st.session_state:
-                st.session_state['enable_large_file_handling'] = True
-            
             if 'enable_outlier_detection' not in st.session_state:
                 st.session_state['enable_outlier_detection'] = True
             
@@ -274,20 +275,14 @@ def show_data_collection_page():
             if 'enable_duplicate_removal' not in st.session_state:
                 st.session_state['enable_duplicate_removal'] = False
 
-            col_opt1, col_opt2, col_opt3 = st.columns(3)
+            col_opt1, col_opt2 = st.columns(2)
             with col_opt1:
-                st.checkbox(
-                    "Optimasi File Besar",
-                    key="enable_large_file_handling",
-                    help="Aktifkan pemrosesan paralel untuk dataset >100k baris"
-                )
-            with col_opt2:
                 st.checkbox(
                     "Deteksi Outlier",
                     key="enable_outlier_detection",
                     help="Aktifkan deteksi dan penanganan outlier menggunakan metode IQR"
                 )
-            with col_opt3:
+            with col_opt2:
                 st.checkbox(
                     "Validasi Data",
                     key="enable_data_validation",
@@ -308,6 +303,19 @@ def show_data_collection_page():
                     placeholder="Biarkan kosong untuk cek semua kolom",
                     help="Nama kolom dipisahkan koma. Kosong = cek semua kolom"
                 )
+
+            preprocessing_test_size = st.slider(
+                "Porsi data test sebelum preprocessing (%)",
+                min_value=10,
+                max_value=40,
+                value=20,
+                step=5,
+                key="preprocessing_test_size_pct",
+                help=(
+                    "Split ditetapkan pada data mentah. Validation mengambil 15% "
+                    "dari sisa data; seluruh statistik preprocessing hanya di-fit pada train."
+                ),
+            )
             
             # Show process button only if data hasn't been processed yet
             if 'df_processed_path' not in st.session_state:
@@ -340,6 +348,7 @@ def show_data_collection_page():
                     preprocessing_metadata = {}
                     duplicate_metadata = None
                     result = None
+                    temporary_input_paths = []
                     dataset_rows = st.session_state.get('raw_data_total_rows', len(df) if hasattr(df, 'shape') else 0)
                     dataset_cols = st.session_state.get('raw_data_total_cols', len(df.columns) if hasattr(df, 'columns') else 0)
 
@@ -350,11 +359,14 @@ def show_data_collection_page():
                             subset_cols = None
                             if duplicate_subset.strip():
                                 subset_cols = [col.strip() for col in duplicate_subset.split(',') if col.strip()]
+                            duplicate_input = input_target
                             input_target, duplicate_metadata = remove_duplicates_from_parquet(
                                 input_target,
                                 subset=subset_cols,
                                 keep='first',
                             )
+                            if input_target != duplicate_input:
+                                temporary_input_paths.append(input_target)
 
                             if duplicate_metadata['duplicates_removed'] > 0:
                                 st.info(f"🔍 Duplikasi dihapus: {duplicate_metadata['duplicates_removed']:,} baris ({duplicate_metadata['duplicate_rate']:.2%})")
@@ -374,12 +386,23 @@ def show_data_collection_page():
                             else:
                                 st.info("✅ Tidak ada duplikasi ditemukan")
 
-                        result = preprocess_insurance_claims_optimized(
+                        input_target, owns_partitioned_input = prepare_train_validation_test_parquet(
                             input_target,
-                            enable_large_file_handling=st.session_state['enable_large_file_handling'],
-                            enable_outlier_detection=st.session_state.get('enable_outlier_detection', True),
-                            enable_data_validation=st.session_state.get('enable_data_validation', True)
+                            test_size=preprocessing_test_size / 100,
                         )
+                        if owns_partitioned_input:
+                            temporary_input_paths.append(input_target)
+
+                        result = preprocess_dataset_with_train_only_stats(
+                            input_target,
+                            enable_outlier_detection=st.session_state.get('enable_outlier_detection', True),
+                            enable_data_validation=st.session_state.get('enable_data_validation', True),
+                            test_size=preprocessing_test_size / 100,
+                        )
+                        for temporary_path in temporary_input_paths:
+                            if os.path.exists(temporary_path):
+                                os.unlink(temporary_path)
+                        temporary_input_paths.clear()
 
                         if result is None or len(result) < 3 or result[0] is None:
                             raise ValueError("Fungsi preprocessing mengembalikan hasil yang tidak valid.")
@@ -427,9 +450,15 @@ def show_data_collection_page():
                             st.session_state["split_test_size"] = 0.2
                             st.session_state["feature_selection_scope"] = "train"
                             st.info(
-                                "Praproses selesai. Seleksi fitur interaktif untuk dataset "
-                                "yang muat di memori menggunakan partisi train saja; "
+                                "Split train/validation/test ditetapkan pada data mentah. "
+                                "Statistik imputasi, encoding, dan outlier di-fit hanya pada train; "
                                 f"validasi/test ditahan terpisah (stratifikasi: {stratify_label or 'tidak tersedia'})."
+                            )
+                        elif preprocessing_metadata.get("preprocessing_fit_scope") == "train_partition":
+                            st.info(
+                                "Split train/validation/test ditetapkan pada data mentah. "
+                                "Statistik preprocessing di-fit hanya pada partisi train dan "
+                                "diterapkan konsisten ke seluruh partisi."
                             )
 
                         preprocessing_success = True
@@ -545,6 +574,9 @@ def show_data_collection_page():
                                     st.write("Kolom yang dicek: Semua kolom")
 
                     except Exception as e:
+                        for temporary_path in temporary_input_paths:
+                            if os.path.exists(temporary_path):
+                                os.unlink(temporary_path)
                         error_type = type(e).__name__
                         error_message = str(e)
                         st.session_state['last_processing_error'] = {

@@ -646,6 +646,10 @@ def preprocess_insurance_claims_optimized(df, enable_large_file_handling=True, e
     
     # Exclude date columns from categorical processing
     categorical_columns = [col for col in categorical_columns if col not in date_columns]
+    categorical_columns = [
+        col for col in categorical_columns
+        if not any(key in col.lower() for key in ("fraud", "label", "target", "class"))
+    ]
     
     if len(categorical_columns) > 0:
         if len(df) > 50000:  # Use optimized encoding for larger datasets
@@ -659,7 +663,11 @@ def preprocess_insurance_claims_optimized(df, enable_large_file_handling=True, e
     numerical_columns = df_processed.select_dtypes(include=[np.number]).columns.tolist()  # type: ignore[arg-type]
     
     # Remove encoded columns from original numerical list to avoid duplication
-    original_numerical = [col for col in numerical_columns if not col.endswith('_encoded')]
+    original_numerical = [
+        col for col in numerical_columns
+        if not col.endswith('_encoded')
+        and not any(key in col.lower() for key in ("fraud", "label", "target", "class"))
+    ]
     
     # --- PRE-SELECTION STEP ---
     # Identify top informative features before complex engineering to avoid explosion
@@ -865,6 +873,8 @@ def preprocess_insurance_claims_optimized(df, enable_large_file_handling=True, e
     final_features = []
     
     for col in all_numerical:
+        if any(keyword in col.lower() for keyword in ("fraud", "label", "target", "class")):
+            continue
         # Skip if it's an ID column
         if any(keyword in col.lower() for keyword in id_keywords):
             if not col.endswith('_encoded'):  # Keep encoded IDs

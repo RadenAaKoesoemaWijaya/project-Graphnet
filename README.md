@@ -453,7 +453,7 @@ Deteksi membutuhkan dataset dengan minimal 2 baris agar analisis statistik, graf
 
 > **Batasan hasil file besar:** ingestion dapat berlangsung secara streaming, tetapi inference interaktif belum menjalankan analisis lengkap disk-backed dengan state lintas-chunk. Jika file tidak aman dimuat seluruhnya ke memori, aplikasi memakai sampel terbatas dan menandai hasil sebagai `PARTIAL_SAMPLE`. Hasil parsial hanya untuk eksplorasi; jangan gunakan sebagai audit seluruh dataset atau dasar keputusan pembayaran. Gunakan hasil `FULL_DATASET` hanya jika jumlah baris yang dianalisis sama dengan jumlah baris sumber.
 
-> **Batasan evaluasi model:** split train/validation/test dan tuning threshold menggunakan validation telah diterapkan, tetapi sebagian statistik preprocessing, encoding, dan penanganan outlier masih dapat dihitung sebelum split. Metrik evaluasi karena itu belum menjamin bebas dari preprocessing leakage; jangan menganggapnya sebagai estimasi performa produksi yang sepenuhnya unbiased.
+> **Pencegahan preprocessing leakage:** untuk data yang diproses melalui alur Unggah Data saat ini, split deterministik ditetapkan pada data mentah sebelum preprocessing. Imputasi, encoding kategori, statistik outlier, dan daftar fitur dipelajari dari partisi train saja; statistik yang sama digunakan untuk validation, test, dan inference model baru. Ukuran test diatur pada tahap preprocessing (validation mengambil 15% dari sisa data). Dataset hasil proses lama tanpa partisi train-only ditolak untuk training/evaluasi dan harus diproses ulang dari file mentah. Threshold tuning tetap menggunakan validation, bukan test.
 
 ### 📥 Unduh Template Dataset Standar
 
@@ -1145,7 +1145,7 @@ Sebelum deployment ke production:
 
 ## 🧪 Pengujian & Validasi Kualitas
 
-Aplikasi dilengkapi suite pengujian otomatis untuk memverifikasi keandalan seluruh komponen sistem, termasuk pengujian keamanan siber (*cybersecurity*), autentikasi, resiliensi schema, streaming dataset, ingestion Excel, visualisasi helper, event loop Windows, dan subgraf anomali GNN. Validasi terakhir: **122 tes lulus**.
+Aplikasi dilengkapi suite pengujian otomatis untuk memverifikasi keandalan seluruh komponen sistem, termasuk pengujian keamanan siber (*cybersecurity*), autentikasi, resiliensi schema, streaming dataset, ingestion Excel, visualisasi helper, event loop Windows, dan subgraf anomali GNN. Validasi terakhir: **123 tes lulus**.
 
 ```powershell
 # Jalankan seluruh test suite dengan Pytest
@@ -1165,7 +1165,7 @@ python scripts/security_validator.py
 ```
 
 Hasil verifikasi memastikan:
-- ✅ **122 tes lulus pada validasi terakhir**; jumlah tes dapat berubah saat suite berkembang.
+- ✅ **123 tes lulus pada validasi terakhir**; jumlah tes dapat berubah saat suite berkembang.
 - ✅ **Schema Harmonizer & Semantic Aliasing** — Penyelarasan transparan 13+ sinonim kolom bahasa Indonesia/industri ke nama kanonikal terverifikasi akurat.
 - ✅ **Circuit Breaker & Dynamic Weight Re-normalization** — Dataset minimal (hanya 2 kolom) tidak menyebabkan crash; bobot aturan aktif dinormalisasi ulang dengan benar.
 - ✅ **Derivasi Deterministik LOS** — `admission_date` dan `discharge_date` diturunkan otomatis dari `service_date` + `length_of_stay`; `detect_prolonged_stay_and_readmission()` berjalan tanpa error.

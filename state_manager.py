@@ -362,6 +362,41 @@ def split_processed_dataset_with_validation(df_processed, test_size=0.2, validat
     if df_processed is None or len(df_processed) < 10:
         raise ValueError("Dataset minimal 10 baris diperlukan untuk train/validation/test.")
 
+    partition_column = "__astina_partition"
+    if partition_column in df_processed.columns:
+        expected = {"train", "validation", "test"}
+        observed = set(df_processed[partition_column].dropna().astype(str).unique())
+        if not observed.issubset(expected):
+            raise ValueError("Kolom partisi dataset berisi nilai yang tidak dikenal.")
+        partitions = {
+            name: df_processed.loc[df_processed[partition_column] == name].drop(
+                columns=[
+                    column for column in (partition_column, "__astina_split_row_id")
+                    if column in df_processed.columns
+                ]
+            ).copy()
+            for name in ("train", "validation", "test")
+        }
+        if any(partitions[name].empty for name in partitions):
+            raise ValueError("Split train/validation/test berisi partisi kosong.")
+        label_candidates = [
+            column for column in df_processed.columns
+            if any(key in column.lower() for key in ("fraud", "label", "target", "class"))
+        ]
+        stratify_label = next(
+            (
+                column for column in label_candidates
+                if df_processed[column].nunique(dropna=True) == 2
+            ),
+            None,
+        )
+        return (
+            partitions["train"],
+            partitions["validation"],
+            partitions["test"],
+            stratify_label,
+        )
+
     label_candidates = [
         column for column in df_processed.columns
         if any(key in column.lower() for key in ("fraud", "label", "target", "class"))

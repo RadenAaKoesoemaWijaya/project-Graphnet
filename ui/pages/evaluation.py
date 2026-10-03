@@ -46,6 +46,19 @@ def show_evaluation_page():
         'training_label_column',
         getattr(detector, 'training_metadata', {}).get('label_column')
     )
+    preprocessing_metadata = st.session_state.get("preprocessing_metadata", {})
+    model_preprocessing_contract = (
+        getattr(detector, "training_metadata", {}) or {}
+    ).get("preprocessing_contract_version")
+    if (
+        preprocessing_metadata.get("preprocessing_contract_version") != 1
+        or model_preprocessing_contract != 1
+    ):
+        st.error(
+            "Evaluasi hanya tersedia untuk dataset dan model dengan kontrak preprocessing "
+            "train-only. Proses ulang data mentah dan latih ulang model sebelum evaluasi."
+        )
+        return
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     st.info(
@@ -75,29 +88,31 @@ def show_evaluation_page():
         if df_processed is None:
             st.error("❌ Gagal memuat data hasil praproses untuk evaluasi.")
             return
-        test_size = st.slider("Ukuran Test Set (%)", min_value=10, max_value=40, value=20, step=5)
-        if st.button("🔄 Split Data untuk Evaluasi", key="split_eval_data"):
+        if "__astina_partition" not in df_processed.columns:
+            st.error(
+                "Dataset evaluasi ini tidak memiliki split yang ditetapkan sebelum "
+                "preprocessing. Unggah ulang data mentah dan jalankan preprocessing "
+                "train-only sebelum evaluasi."
+            )
+            return
+        else:
             try:
                 train_df, validation_df, test_df, stratify_label = split_processed_dataset_with_validation(
                     df_processed,
-                    test_size=test_size / 100,
                 )
                 st.session_state['train_df'] = train_df
                 st.session_state['validation_df'] = validation_df
                 st.session_state['test_df'] = test_df
                 st.success(
-                    f"✅ Data terbagi: latih ({len(train_df)}), validasi "
-                    f"({len(validation_df)}), test ({len(test_df)}); "
+                    f"✅ Partisi yang sama dari data mentah digunakan: latih ({len(train_df)}), "
+                    f"validasi ({len(validation_df)}), test ({len(test_df)}); "
                     f"stratifikasi: {stratify_label or 'tidak tersedia'}"
                 )
             except Exception as e:
-                st.error(f"❌ Gagal membagi data evaluasi: {str(e)}")
-                st.info("💡 Tips: Pastikan dataset memiliki cukup data dan label valid untuk stratified split.")
-                # Clear invalid state
+                st.error(f"❌ Gagal menggunakan partisi data yang telah diproses: {str(e)}")
                 st.session_state.pop('train_df', None)
                 st.session_state.pop('validation_df', None)
                 st.session_state.pop('test_df', None)
-
     if 'test_df' not in st.session_state:
         st.info("📝 Klik tombol split untuk menyiapkan data evaluasi.")
         return

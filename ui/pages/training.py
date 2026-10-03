@@ -70,6 +70,18 @@ def show_training_page():
         if not isinstance(df_processed, pd.DataFrame):
             st.error("❌ Data praproses bukan DataFrame valid.")
             return
+        preprocessing_metadata = st.session_state.get("preprocessing_metadata", {})
+        if (
+            "__astina_partition" not in df_processed.columns
+            or preprocessing_metadata.get("preprocessing_contract_version") != 1
+            or preprocessing_metadata.get("preprocessing_fit_scope") != "train_partition"
+        ):
+            st.error(
+                "Dataset ini diproses dengan pipeline lama yang menghitung statistik "
+                "sebelum split. Untuk mencegah preprocessing leakage, unggah ulang data "
+                "mentah dan jalankan preprocessing train-only sebelum training."
+            )
+            return
         feature_columns = st.session_state['feature_columns']
 
         # Use selected features if available, otherwise use all features
@@ -131,7 +143,10 @@ def show_training_page():
     st.subheader("📊 Persiapan Data")
 
     if (
-        st.session_state.pop('auto_split_after_preprocessing', False)
+        (
+            st.session_state.pop('auto_split_after_preprocessing', False)
+            or "__astina_partition" in df_processed.columns
+        )
         and 'train_df' not in st.session_state
     ):
         try:
@@ -141,7 +156,8 @@ def show_training_page():
             st.session_state['train_df'] = train_df
             st.session_state['validation_df'] = validation_df
             st.session_state['test_df'] = test_df
-            st.session_state['split_test_size'] = 0.2
+            fitted_split = (st.session_state.get("preprocessing_metadata", {}).get("requested_split") or {})
+            st.session_state['split_test_size'] = float(fitted_split.get("test_fraction", 0.2))
             if stratify_label:
                 st.info(f"🔀 Pembagian data otomatis menggunakan stratified split berdasarkan kolom '{stratify_label}'")
             st.success(
@@ -157,9 +173,22 @@ def show_training_page():
             st.session_state.pop('test_df', None)
     
     # Split data
-    test_size = st.slider("Ukuran Data Uji:", 0.1, 0.4, 0.2, 0.05)
-    
-    if st.button("Bagi Data"):
+    has_precomputed_partitions = "__astina_partition" in df_processed.columns
+    if has_precomputed_partitions:
+        st.info(
+            "Partisi data sudah ditetapkan sebelum preprocessing untuk mencegah leakage. "
+            "Untuk mengubah ukuran split, kembali ke Unggah Data dan reproses dataset."
+        )
+    test_size = st.slider(
+        "Ukuran Data Uji:",
+        0.1,
+        0.4,
+        float(st.session_state.get("split_test_size", 0.2)),
+        0.05,
+        disabled=has_precomputed_partitions,
+    )
+
+    if st.button("Bagi Data", disabled=has_precomputed_partitions):
         try:
             train_df, validation_df, test_df, stratify_label = split_processed_dataset_with_validation(
                 df_processed, test_size=test_size
@@ -910,6 +939,14 @@ def show_training_page():
                 ),
                 "graph_node_count": st.session_state.get("graph_node_count", 0),
                 "graph_edge_count": st.session_state.get("graph_edge_count", 0),
+                "preprocessing_contract_version": (
+                    st.session_state.get("preprocessing_metadata", {}).get(
+                        "preprocessing_contract_version"
+                    )
+                ),
+                "preprocessing_fit_stats": st.session_state.get(
+                    "preprocessing_metadata", {}
+                ).get("fit_statistics"),
             }
 
             def train_worker(

@@ -183,6 +183,8 @@ browser menutup koneksi WebSocket.
 - **Exploratory Data Analysis (EDA)**: Distribusi nilai numerik, visualisasi *missing value*, dan analisis korelasi awal.
 - **Visualisasi Bounded**: Histogram, distribusi probabilitas, dan chart kategori tidak mengirim DataFrame besar langsung ke Plotly cache; visualisasi memakai sample deterministik, sedangkan angka agregat tetap dihitung dari seluruh dataset.
 - **Opsi Preprocessing Terpadu**:
+  - Split deterministik disimpan pada data mentah sebelum fit; statistik missing value, kategori, outlier, dan daftar fitur dihitung hanya dari partisi train lalu digunakan sama untuk validation/test.
+  - Statistik fit disertakan pada metadata model dan digunakan kembali saat inference untuk menjaga transformasi tetap konsisten.
   - Deteksi dan capping outlier berbasis IQR.
   - Ekstraksi fitur tanggal (*day_of_week*, *month*, *quarter*).
   - Pembentukan rasio domain asuransi (*payment_ratio*, *allowance_ratio*, *zscore*, *high_amount_quick_submit*).
@@ -200,7 +202,7 @@ browser menutup koneksi WebSocket.
 - **Simpan & Downstream State**: Menulis DataFrame hasil ke file Parquet terkompresi Zstandard dan memperbarui `state_manager.py`.
 
 ### 4.3 Training Model (`ui/pages/training.py`)
-- **Data Splitting**: Pembagian data latih (*train*) dan data uji (*test*) dengan metode *Stratified Split* (mempertahankan proporsi label fraud) atau *Random Split*.
+- **Data Splitting**: Memakai partisi train/validation/test yang telah ditetapkan dari data mentah sebelum preprocessing. Dataset lama tanpa kontrak ini harus diproses ulang sebelum training.
 - **Visualisasi Anomaly-Focused Subgraph (Post-Training)**: Setelah training GNN selesai, sistem secara otomatis membangun subgraf terfokus anomali menggunakan fungsi `build_anomaly_subgraph()` (`model.py`) — **model di-score satu kali selagi masih warm**, hasilnya disimpan ke `st.session_state['gnn_anomaly_subgraph']`. UI tidak perlu memanggil ulang inferensi penuh saat render. Subgraf yang ditampilkan terdiri dari:
   - **Top-K node seed anomali** — klaim dengan skor GNN tertinggi (default 50, dapat diatur via slider 5–200).
   - **Tetangga 1-hop** dari node seed — memperlihatkan koneksi langsung (faskes / pasien / diagnosis yang sama), visualisasi sindikat kolusi.
@@ -222,8 +224,8 @@ browser menutup koneksi WebSocket.
 - **Visualisasi Topologi Graf**: Menampilkan visualisasi interaktif anomaly-focused subgraph (NetworkX + Plotly) — top-K node paling mencurigai beserta ego-graph tetangga 1-hop-nya. Lihat detail di bagian **Visualisasi Anomaly-Focused Subgraph** di atas.
 
 ### 4.4 Evaluation & Explainability (`ui/pages/evaluation.py`)
-- Data dibagi deterministik menjadi train, validation, dan test. Threshold tuning hanya memakai validation; test dipakai untuk pelaporan evaluasi.
-- Dataset lama tanpa partisi validation independen tidak dapat dipakai untuk auto-optimasi threshold; model perlu dilatih ulang.
+- Evaluasi memakai partisi train/validation/test yang sama dengan preprocessing dan training. Threshold tuning hanya memakai validation; test dipakai untuk pelaporan evaluasi.
+- Dataset lama tanpa partisi train-only ditolak agar metrik tidak memberi kesan bebas leakage; unggah ulang data mentah dan proses ulang.
 - **Metrik Klasifikasi Supervised**: Evaluasi Accuracy, Precision, Recall, F1-Score, ROC-AUC, PR-AUC, dan Brier Score.
 - **Visualisasi Diagnostik**: Interactive Confusion Matrix heatmap, ROC Curve, dan Precision-Recall Curve.
 - **Explainable AI (XAI)**:
@@ -835,7 +837,7 @@ Modul `pii_masker.py` melindungi data sensitif sesuai regulasi UU Perlindungan D
 
 ## 12. Pengujian Kualitas & Quality Gate
 
-Seluruh komponen ASTINA diuji secara otomatis menggunakan suite Pytest. Pada validasi terakhir, **122 tes lulus** (100% passed), termasuk keamanan siber, autentikasi, resiliensi schema, ingestion Excel, helper visualisasi, dan subgraf anomali GNN:
+Seluruh komponen ASTINA diuji secara otomatis menggunakan suite Pytest. Pada validasi terakhir, **123 tes lulus** (100% passed), termasuk keamanan siber, autentikasi, resiliensi schema, ingestion Excel, helper visualisasi, dan subgraf anomali GNN:
 
 ```powershell
 # Menjalankan seluruh test suite
@@ -867,11 +869,12 @@ Seluruh komponen ASTINA diuji secara otomatis menggunakan suite Pytest. Pada val
 | `test_large_file_ingestion.py` | 13 | Uji CSV/Parquet streaming, validasi agregat, cache key upload, dan ingestion Excel |
 | `test_optuna_ensemble_and_drift.py` | 5 | Uji optimasi hyperparameter Optuna dan deteksi Kolmogorov-Smirnov drift |
 | `test_pipeline_edge_cases.py` | 15 | Uji edge cases pipeline, agregasi skor, split deterministik, dan sinyal ML |
+| `test_train_only_preprocessing.py` | 1 | Uji split sebelum fit, invariansi statistik terhadap perubahan holdout, target leakage, dan reuse statistik inference |
 | `test_schema_synthesis_and_resilience.py` | 6 | Uji resiliensi SchemaHarmonizer: zero-crash dataset minimal, aliasing bahasa Indonesia, derivasi LOS deterministik, circuit breaker weight re-normalization, provenance tagging, dan empty DataFrame |
 | `test_streaming_preprocessing_memory.py` | 2 | Uji batasan pemakaian RAM (<100MB peak) pada pemrosesan streaming skala besar |
 | `test_visualization_helpers.py` | 4 | Uji sampling bounded, deterministik, chart valid, dan input kosong |
 | `test_windows_event_loop.py` | 2 | Uji Windows Selector event loop pada proses utama dan subprocess Streamlit |
-| **Total Test Suite** | **122 (122 Passed pada validasi terakhir)** | **100% Passed (Green)** |
+| **Total Test Suite** | **123 (123 Passed pada validasi terakhir)** | **100% Passed (Green)** |
 
 ---
 
