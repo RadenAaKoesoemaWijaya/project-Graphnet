@@ -28,7 +28,7 @@ Aplikasi ini dilengkapi antarmuka interaktif berbasis **Streamlit**, mendukung i
 - **🛡️ Cryptographic Audit Trail**: Pencatatan riwayat audit forensik berantai hash SHA-256 anti-tamper untuk setiap aksi ingestion, preprocessing, training, deteksi, dan ekspor data.
 - **🔐 Enterprise Auth Gateway & RBAC (Role-Based Access Control)**: Gerbang autentikasi aman dengan pemisahan 4 peran pengguna (*Admin*, *Auditor*, *Analyst*, *Viewer*) yang mematuhi standar UU No. 27 Tahun 2022 (UU PDP) dan HIPAA Security Rule, dilengkapi pencatatan audit log login/logout otomatis.
 - **🔒 PII Masking & Data Privacy**: Perlindungan data sensitif pasien (NIK, Nama, Rekam Medis) secara dinamis sesuai regulasi perlindungan data pribadi (UU PDP / HIPAA).
-- **⚡ Batch-Only Optimized Streaming Pipeline**: Ingestion data berkecepatan tinggi dengan Polars/PyArrow LazyFrame, penulisan Parquet per chunk terkompresi Zstandard, dan evaluasi kesiapan skema otomatis (0–100%).
+- **⚡ Streaming Data Ingestion & Validation**: Ingestion dan validasi dataset CSV/Parquet dapat dilakukan per chunk dengan Polars/PyArrow dan penyimpanan Parquet terkompresi. Ini tidak berarti inference deteksi sudah memproses semua baris file besar; lihat batasan operasional sebelum menggunakan hasil.
 - **🔄 Concept Drift & Automated Retraining**: Deteksi pergeseran distribusi data (*covariate & concept drift*) otomatis menggunakan uji Kolmogorov-Smirnov dengan *Champion-Challenger Quality Gate*.
 - **⚖️ 9 Modul Aturan Bisnis Fraud Medis**:
   1. *Repeat Billing*: Deteksi klaim berulang untuk pasien/tindakan identik dalam jendela waktu 30 hari.
@@ -188,10 +188,11 @@ Semua dependensi inti dikunci pada [requirements.txt](requirements.txt):
    *Output yang diharapkan jika berhasil: `CUDA Available: True` beserta nama GPU Anda.*
 
 5. **Jalankan aplikasi**:
-    - Jalankan melalui launcher resmi (mengatur virtual environment dan Windows event loop):
-     ```bash
-     python run.py
-     ```
+   Jalankan melalui launcher resmi dari root proyek. Di Windows, gunakan interpreter virtual environment:
+   ```powershell
+   .\.venv\Scripts\python.exe run.py
+   ```
+   Jika virtual environment sudah aktif, `python run.py` juga dapat digunakan. Di Linux/macOS, aktifkan `.venv` lalu jalankan `python run.py`.
 
 6. **Akses Dashboard**:
    Buka browser pada [http://localhost:8501](http://localhost:8501). Pada menu **Status Sistem** atau sidebar, indikator akan otomatis menampilkan ikon 🚀 **GPU CUDA Aktif**.
@@ -448,7 +449,11 @@ python run.py
 
 ## 📋 Panduan Persiapan Data & Format Skema Batch Deteksi
 
-Untuk menjamin akurasi estimasi statistik (*IQR, Quantile, Z-Score*), topologi graf GNN, serta 9 modul aturan bisnis, deteksi anomali ASTINA **wajib menggunakan dataset batch** (minimal 2 baris data).
+Deteksi membutuhkan dataset dengan minimal 2 baris agar analisis statistik, graf GNN, dan aturan temporal dapat berjalan. Istilah “dataset batch” di sini merujuk pada beberapa klaim yang dianalisis bersama, bukan jaminan bahwa inference mencakup seluruh file besar.
+
+> **Batasan hasil file besar:** ingestion dapat berlangsung secara streaming, tetapi inference interaktif belum menjalankan analisis lengkap disk-backed dengan state lintas-chunk. Jika file tidak aman dimuat seluruhnya ke memori, aplikasi memakai sampel terbatas dan menandai hasil sebagai `PARTIAL_SAMPLE`. Hasil parsial hanya untuk eksplorasi; jangan gunakan sebagai audit seluruh dataset atau dasar keputusan pembayaran. Gunakan hasil `FULL_DATASET` hanya jika jumlah baris yang dianalisis sama dengan jumlah baris sumber.
+
+> **Batasan evaluasi model:** split train/validation/test dan tuning threshold menggunakan validation telah diterapkan, tetapi sebagian statistik preprocessing, encoding, dan penanganan outlier masih dapat dihitung sebelum split. Metrik evaluasi karena itu belum menjamin bebas dari preprocessing leakage; jangan menganggapnya sebagai estimasi performa produksi yang sepenuhnya unbiased.
 
 ### 📥 Unduh Template Dataset Standar
 
@@ -575,7 +580,7 @@ flowchart LR
 3. **Pilih Sumber Data**:
    - Pilih opsi **📤 Unggah File Baru (CSV / XLSX / XLS / Parquet)**.
    - Unggah berkas klaim baru yang ingin diperiksa (gunakan format standar sesuai template).
-   - Ingestion file besar dilakukan secara streaming, tetapi deteksi interaktif dapat memakai sampel terbatas bila seluruh file tidak aman dimuat ke memori. Hasil tersebut diberi status `PARTIAL_SAMPLE` dan tidak boleh dipakai sebagai audit seluruh dataset.
+   - Ingestion file besar dilakukan secara streaming, tetapi deteksi interaktif dapat memakai sampel terbatas bila seluruh file tidak aman dimuat ke memori. Periksa status cakupan hasil: `PARTIAL_SAMPLE` berarti hasil eksploratif, bukan audit lengkap; gunakan `FULL_DATASET` hanya saat semua baris sumber dianalisis.
 4. **Atur Parameter Deteksi**:
    - Tentukan **Ambang Batas Anomali** (Anomaly Threshold, default: `0.50`) via slider.
    - Aktifkan atau nonaktifkan **Analisis Graf Relasi (GNN)** jika model GNN tersedia.
