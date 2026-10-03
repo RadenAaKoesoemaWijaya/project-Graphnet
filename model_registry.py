@@ -31,7 +31,7 @@ def get_versions():
 def save_model_version(temp_prefix, metrics=None):
     """Save the models from a temp prefix to a versioned directory."""
     init_registry()
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     version_name = f"model_v_{timestamp}"
     version_dir = os.path.join(MODELS_DIR, version_name)
     os.makedirs(version_dir, exist_ok=True)

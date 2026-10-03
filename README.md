@@ -2,7 +2,7 @@
 
 **ASTINA** adalah platform analitik dan investigasi fraud klaim asuransi kesehatan berbasis **Hybrid AI Enterprise** yang menggabungkan kekuatan **Machine Learning Ensemble** (Isolation Forest, Autoencoder, XGBoost, GNN) dengan **Rule-Based Business Engine** (9 modul aturan audit klaim), **Agentic AI Copilot bertenaga RAG**, serta **Audit Trail Kriptografis**.
 
-Aplikasi ini dilengkapi antarmuka interaktif berbasis **Streamlit**, mendukung pemrosesan dataset besar secara efisien (streaming chunk & Parquet caching), serta menyediakan Explainable AI (XAI) untuk transparansi keputusan investigasi klinis dan finansial.
+Aplikasi ini dilengkapi antarmuka interaktif berbasis **Streamlit**, mendukung ingestion dan validasi dataset besar secara efisien (streaming chunk & Parquet caching), serta menyediakan Explainable AI (XAI) untuk transparansi keputusan investigasi klinis dan finansial. Inference interaktif untuk file yang tidak aman dimuat penuh saat ini menggunakan sampel dan ditandai parsial; gunakan hanya untuk eksplorasi, bukan audit lengkap.
 
 ---
 
@@ -99,7 +99,7 @@ project-Graphnet/
 │       ├── status.py                # Telemetri performa sistem & audit logging
 │       └── settings.py              # Konfigurasi LLM, Copilot, model registry & sistem
 │
-├── tests/                           # Unit test & integrasi otomatis (Pytest) - 111 Test Cases
+├── tests/                           # Unit test & integrasi otomatis (Pytest)
 │   ├── conftest.py                  # Pytest fixtures & setup lingkungan uji
 │   ├── test_agentic_copilot.py      # Uji Copilot, FAISS RAG, zero-wipeout fallback, & XAI/GNN context
 │   ├── test_app_startup.py          # Uji startup & integritas import modul utama
@@ -575,6 +575,7 @@ flowchart LR
 3. **Pilih Sumber Data**:
    - Pilih opsi **📤 Unggah File Baru (CSV / XLSX / XLS / Parquet)**.
    - Unggah berkas klaim baru yang ingin diperiksa (gunakan format standar sesuai template).
+   - Ingestion file besar dilakukan secara streaming, tetapi deteksi interaktif dapat memakai sampel terbatas bila seluruh file tidak aman dimuat ke memori. Hasil tersebut diberi status `PARTIAL_SAMPLE` dan tidak boleh dipakai sebagai audit seluruh dataset.
 4. **Atur Parameter Deteksi**:
    - Tentukan **Ambang Batas Anomali** (Anomaly Threshold, default: `0.50`) via slider.
    - Aktifkan atau nonaktifkan **Analisis Graf Relasi (GNN)** jika model GNN tersedia.
@@ -665,9 +666,9 @@ $$\text{Business Risk Score} = 0.40(R_{\text{repeat}}) + 0.20(R_{\text{phantom}}
 Jika aturan ke-$i$ dilewati (SKIPPED), bobot aturan aktif dinormalkan ulang:
 $$w_i' = \frac{w_i}{\sum_{j \in \text{active}} w_j}, \quad \text{sehingga} \sum_{i \in \text{active}} w_i' = 1.0$$
 
-$$\text{Final Risk Score} = 0.50(\text{Business Risk Score}) + 0.30(\text{ML Anomaly Score}) + 0.20(\text{Duplicate Payment Flag})$$
+$$\text{Final Risk Score} = 1 - (1 - \text{Business Risk Score})(1 - \text{ML Anomaly Score})(1 - \text{Duplicate Payment Flag})$$
 
-* **Klasifikasi Severity:** **Low Risk** ($< 0.40$), **Medium Risk** ($0.40 - 0.64$), dan **High Risk** ($\ge 0.65$).
+* **Skor Risiko Final:** noisy-OR dari skor risiko aturan bisnis, skor anomali ML, dan sinyal pembayaran duplikat. Flag *High Risk* mengikuti threshold yang dipilih pada halaman Deteksi; skor adalah sinyal untuk review, bukan persetujuan/penolakan pembayaran otomatis.
 
 ### 7. Multi-Tab Investigation Workspace (`detection.py`)
 * **Tab 1: 📊 Ringkasan & Visualisasi**: Distribusi klaim Normal vs Anomali yang seimbang, histogram probabilitas multi-model dengan garis ambang batas dinamis, panel ringkasan 11 kartu risiko eksekutif (*Total Klaim, Anomali, High Risk, Repeat Billing, Phantom, Provider Capacity, Duplicate, Upcoding, Cloning, Stay Risk, Med/Device*), dan visualisasi proporsi risiko kategori bar & donut chart.
@@ -1139,7 +1140,7 @@ Sebelum deployment ke production:
 
 ## 🧪 Pengujian & Validasi Kualitas
 
-Aplikasi dilengkapi suite pengujian otomatis komprehensif (**111 Test Cases**) untuk memverifikasi keandalan seluruh komponen sistem, termasuk pengujian keamanan siber (*cybersecurity*), autentikasi, resiliensi schema, streaming dataset, ingestion Excel, visualisasi helper, event loop Windows, dan subgraf anomali GNN:
+Aplikasi dilengkapi suite pengujian otomatis untuk memverifikasi keandalan seluruh komponen sistem, termasuk pengujian keamanan siber (*cybersecurity*), autentikasi, resiliensi schema, streaming dataset, ingestion Excel, visualisasi helper, event loop Windows, dan subgraf anomali GNN. Validasi terakhir: **122 tes lulus**.
 
 ```powershell
 # Jalankan seluruh test suite dengan Pytest
@@ -1159,7 +1160,7 @@ python scripts/security_validator.py
 ```
 
 Hasil verifikasi memastikan:
-- ✅ **111 Test Cases (111 Passed, 100% Green)** mencakup seluruh modul aplikasi.
+- ✅ **122 tes lulus pada validasi terakhir**; jumlah tes dapat berubah saat suite berkembang.
 - ✅ **Schema Harmonizer & Semantic Aliasing** — Penyelarasan transparan 13+ sinonim kolom bahasa Indonesia/industri ke nama kanonikal terverifikasi akurat.
 - ✅ **Circuit Breaker & Dynamic Weight Re-normalization** — Dataset minimal (hanya 2 kolom) tidak menyebabkan crash; bobot aturan aktif dinormalisasi ulang dengan benar.
 - ✅ **Derivasi Deterministik LOS** — `admission_date` dan `discharge_date` diturunkan otomatis dari `service_date` + `length_of_stay`; `detect_prolonged_stay_and_readmission()` berjalan tanpa error.

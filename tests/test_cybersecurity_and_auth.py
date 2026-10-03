@@ -1,7 +1,14 @@
 import os
 import time
 import unittest
-from auth_manager import AuthManager, hash_password, DEFAULT_USERS, ROLE_PERMISSIONS
+from unittest.mock import patch
+from auth_manager import (
+    AuthManager,
+    hash_password,
+    DEFAULT_USERS,
+    ROLE_PERMISSIONS,
+    validate_production_auth_configuration,
+)
 from agentic_copilot import AIGuardrail, AgenticInvestigatorCopilot
 from cache_manager import purge_expired_cache, CACHE_DIR, ensure_cache_dir
 from rate_limit import _resolve_user_and_role
@@ -46,6 +53,26 @@ class TestCybersecurityAndAuth(unittest.TestCase):
         self.assertIn('status', ROLE_PERMISSIONS['viewer'])
         self.assertNotIn('detect', ROLE_PERMISSIONS['viewer'])
         self.assertNotIn('train', ROLE_PERMISSIONS['viewer'])
+
+    def test_production_auth_configuration_fails_closed(self):
+        with patch.dict(os.environ, {"ASTINA_ENVIRONMENT": "production", "AUTH_ENABLED": "false"}):
+            with self.assertRaisesRegex(RuntimeError, "AUTH_ENABLED"):
+                validate_production_auth_configuration()
+
+        production_env = {
+            "ASTINA_ENVIRONMENT": "production",
+            "AUTH_ENABLED": "true",
+            "ASTINA_ADMIN_PASSWORD": "secure-admin-password",
+            "ASTINA_AUDITOR_PASSWORD": "secure-auditor-password",
+            "ASTINA_ANALYST_PASSWORD": "secure-analyst-password",
+            "ASTINA_VIEWER_PASSWORD": "secure-viewer-password",
+        }
+        with patch.dict(os.environ, production_env):
+            validate_production_auth_configuration()
+
+        with patch.dict(os.environ, {"ASTINA_ENVIRONMENT": "production", "AUTH_ENABLED": "true"}):
+            with self.assertRaisesRegex(RuntimeError, "kredensial"):
+                validate_production_auth_configuration()
 
     def test_ai_guardrail_prompt_injection_detection(self):
         # Safe queries should pass

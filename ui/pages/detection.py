@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 import os
 import json
+import hashlib
 import plotly.express as px
 from ui.utils import *
 from state_manager import *
@@ -30,6 +31,7 @@ from ui_components import (
     lru_session_get,
     rate_limit_check,
 )
+from cache_manager import get_file_hash, get_dataframe_hash
 import shutil
 
 
@@ -211,9 +213,10 @@ def show_detection_page():
 
     with st.expander("💡 Panduan Matriks Risiko & Tindak Lanjut Investigasi", expanded=False):
         st.markdown("""
-        - 🔴 **Risiko Tinggi (Skor >= 0.65)**: **HOLD KLAIM SEGERA**. Tahan pencairan dana, lakukan audit berkas medis mendalam, dan jadwalkan verifikasi lapangan ke faskes terkait.
-        - 🟡 **Risiko Sedang (0.40 <= Skor < 0.65)**: **KLARIFIKASI DOKUMEN**. Minta resume medis atau bukti penunjang (laboratorium/radiologi) kepada faskes sebelum persetujuan.
-        - 🟢 **Risiko Rendah (Skor < 0.40)**: **PERSETUJUAN OTOMATIS (STP)**. Pola klaim normal, diproses pembayaran langsung sesuai alur standar.
+        - Skor akhir menggabungkan bukti risiko aturan bisnis, anomali ML, dan pembayaran duplikat dengan noisy-OR agar sinyal kuat tidak terdilusi.
+        - 🔴 **Risiko Tinggi**: skor akhir memenuhi threshold yang dipilih pada konfigurasi deteksi. Tinjau klaim sebelum keputusan pembayaran.
+        - 🟡 **Perlu Review**: skor di bawah threshold tetapi terdapat sinyal anomali/aturan bisnis. Klarifikasi dokumen sesuai kebijakan organisasi.
+        - 🟢 **Risiko lebih rendah**: tidak memenuhi threshold dan tidak ada sinyal yang memerlukan review. Skor model bukan keputusan pembayaran otomatis.
         """)
 
     # ── 1. Model Loading ───────────────────────────────────────────────────────
@@ -274,6 +277,9 @@ def show_detection_page():
 
     raw_df = None
     source_description = ""
+    source_identity = ""
+    source_is_sampled = False
+    source_total_rows = None
 
     if selected_source.startswith("📤 Unggah File Baru"):
         col_up1, col_up2 = st.columns([3, 1])
@@ -298,6 +304,7 @@ def show_detection_page():
 
         if uploaded_file is not None:
             try:
+                source_identity = get_file_hash(uploaded_file)
                 file_format = normalize_upload_type("", uploaded_file.name)
                 if uploaded_file.size > MAX_DIRECT_DETECTION_FILE_SIZE:
                     parquet_path, total_rows, _schema = ingest_file_to_raw_parquet(
@@ -305,10 +312,12 @@ def show_detection_page():
                     )
                     raw_df, sampled, total_rows = load_parquet_bounded(parquet_path)
                     if sampled:
+                        source_is_sampled = True
+                        source_total_rows = total_rows
                         st.warning(
                             f"File besar ({uploaded_file.size / (1024 * 1024):.0f} MB, {total_rows:,} baris). "
-                            f"Deteksi interaktif memakai sampel {len(raw_df):,} baris. "
-                            "Untuk seluruh data, gunakan halaman Unggah Data lalu pelatihan batch."
+                            f"Deteksi interaktif hanya memakai sampel {len(raw_df):,} baris. "
+                            "Hasil ini parsial dan bukan audit lengkap seluruh file."
                         )
                 else:
                     raw_df = read_file_with_optimization(uploaded_file, file_format)
@@ -368,14 +377,24 @@ def show_detection_page():
     elif selected_source.startswith("🔄 Gunakan"):
         raw_df = session_df
         source_description = session_label
+        source_is_sampled = "sampel" in session_label.lower()
+        if source_is_sampled:
+            source_total_rows = st.session_state.get("raw_data_total_rows")
+        source_identity = str(
+            st.session_state.get("raw_data_cache_key")
+            or st.session_state.get("df_processed_path")
+            or get_dataframe_hash(raw_df)
+        )
 
     elif selected_source.startswith("🧪 Muat Dataset Sampel"):
         try:
             if os.path.exists("test_claims.csv"):
                 raw_df = pd.read_csv("test_claims.csv")
+                source_identity = get_dataframe_hash(raw_df)
                 source_description = f"Dataset Sampel Bawaan (test_claims.csv: {len(raw_df):,} baris)"
             else:
                 raw_df = generate_sample_claims_template(n_rows=20)
+                source_identity = get_dataframe_hash(raw_df)
                 source_description = f"Dataset Sampel Sintetis ({len(raw_df):,} baris)"
         except Exception as e:
             st.error(f"❌ Gagal memuat dataset sampel: {str(e)}")
@@ -390,12 +409,48 @@ def show_detection_page():
         return
 
     # Check if dataset changed to clear previous results
-    current_df_signature = f"{len(raw_df)}_{len(raw_df.columns)}_{list(raw_df.columns[:3])}"
+    if not source_identity:
+        source_identity = get_dataframe_hash(raw_df)
+    if not source_is_sampled and "sampel" in source_description.lower():
+        source_is_sampled = True
+    current_df_signature = hashlib.sha256(
+        json.dumps(
+            {
+                "source": source_identity,
+                "sampled": source_is_sampled,
+                "loaded_rows": len(raw_df),
+                "source_rows": source_total_rows,
+            },
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
     if st.session_state.get('last_detection_signature') != current_df_signature:
         st.session_state['last_detection_signature'] = current_df_signature
         st.session_state.pop('detection_results', None)
         st.session_state.pop('detection_executed', None)
         st.session_state.pop('detection_processed_df', None)
+        st.session_state.pop('detection_result_signature', None)
+
+    model_identity_payload = {
+        "training_features": list(training_features),
+        "training_metadata": getattr(detector, "training_metadata", {}) or {},
+        "model_version": st.session_state.get("model_version"),
+        "weights": {
+            "isolation_forest": getattr(detector, "isolation_weight", 0.0),
+            "autoencoder": getattr(detector, "autoencoder_weight", 0.0),
+            "xgboost": getattr(detector, "xgboost_weight", 0.0),
+            "gnn": getattr(detector, "gnn_weight", 0.0),
+        },
+        "artifacts": [
+            (name, os.path.getsize(os.path.join("models", name)),
+             os.path.getmtime(os.path.join("models", name)))
+            for name in sorted(os.listdir("models"))
+            if name.startswith("fraud_detector") and os.path.isfile(os.path.join("models", name))
+        ] if os.path.isdir("models") else [],
+    }
+    model_identity = hashlib.sha256(
+        json.dumps(model_identity_payload, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
 
     # Readiness Card UI
     st.markdown(
@@ -437,6 +492,31 @@ def show_detection_page():
             help="Menghubungkan pola klaim antar pasien dan provider dalam jaringan graf relasi."
         )
 
+    detection_config_signature = hashlib.sha256(
+        json.dumps(
+            {
+                "dataset": current_df_signature,
+                "model": model_identity,
+                "threshold": float(threshold),
+                "gnn": bool(enable_gnn_inf),
+                "preprocessing": {
+                    "large_file": bool(st.session_state.get("enable_large_file_handling", True)),
+                    "outliers": bool(st.session_state.get("enable_outlier_detection", True)),
+                    "validation": bool(st.session_state.get("enable_data_validation", True)),
+                },
+            },
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    if (
+        st.session_state.get("detection_executed")
+        and st.session_state.get("detection_result_signature") != detection_config_signature
+    ):
+        st.session_state.pop("detection_results", None)
+        st.session_state.pop("detection_executed", None)
+        st.session_state.pop("risk_summary", None)
+        st.session_state.pop("detection_result_signature", None)
+
     btn_col1, btn_col2 = st.columns([2, 1])
     with btn_col1:
         run_detection_clicked = st.button(
@@ -455,7 +535,16 @@ def show_detection_page():
         with st.spinner("⏳ Memproses data, merekonstruksi fitur inferensi, dan menjalankan multi-model ensemble..."):
             try:
                 # 1. Preprocessing with cache
-                if 'detection_processed_df' in st.session_state and st.session_state.get('last_detection_signature') == current_df_signature:
+                preprocessing_signature = (
+                    current_df_signature,
+                    bool(st.session_state.get("enable_large_file_handling", True)),
+                    bool(st.session_state.get("enable_outlier_detection", True)),
+                    bool(st.session_state.get("enable_data_validation", True)),
+                )
+                if (
+                    'detection_processed_df' in st.session_state
+                    and st.session_state.get('detection_processed_signature') == preprocessing_signature
+                ):
                     df_processed = st.session_state['detection_processed_df']
                     feature_columns_proc = st.session_state.get('detection_feature_columns', [])
                 else:
@@ -467,6 +556,7 @@ def show_detection_page():
                     )
                     st.session_state['detection_processed_df'] = df_processed
                     st.session_state['detection_feature_columns'] = feature_columns_proc
+                    st.session_state['detection_processed_signature'] = preprocessing_signature
 
                 if not isinstance(df_processed, pd.DataFrame):
                     df_processed = pd.DataFrame(df_processed)
@@ -537,8 +627,17 @@ def show_detection_page():
 
                 # 6. Integrated Claim Risk Pipeline (9 Business Rules + Composite Scoring)
                 from fraud_risk_pipeline import run_integrated_claim_risk_pipeline
-                df_risk, risk_summary = run_integrated_claim_risk_pipeline(df_result)
+                df_risk, risk_summary = run_integrated_claim_risk_pipeline(
+                    df_result,
+                    ml_scores=probabilities,
+                    risk_threshold=threshold,
+                )
                 df_result = df_risk
+                df_result["analysis_scope"] = (
+                    "PARTIAL_SAMPLE" if source_is_sampled else "FULL_DATASET"
+                )
+                if source_total_rows is not None:
+                    df_result["source_total_rows"] = int(source_total_rows)
                 df_result['business_risk_score'] = df_result.get('business_risk_score', pd.Series(0.0, index=df_result.index))
                 df_result['final_risk_score'] = df_result.get('final_risk_score', df_result['anomaly_probability'])
                 df_result['final_risk_flag'] = df_result.get('final_risk_flag', pd.Series((df_result['final_risk_score'] >= threshold).astype(int), index=df_result.index))
@@ -548,6 +647,7 @@ def show_detection_page():
                 st.session_state['detection_threshold'] = threshold
                 st.session_state['risk_summary'] = risk_summary
                 st.session_state['detection_executed'] = True
+                st.session_state['detection_result_signature'] = detection_config_signature
 
                 # Feature alignment diagnostics banner & audit expander
                 if n_filled > 0:
@@ -590,6 +690,11 @@ def show_detection_page():
 
         st.markdown("---")
         st.subheader("📊 3. Hasil & Analisis Deteksi Anomali")
+        if df_result.get("analysis_scope", pd.Series(["FULL_DATASET"])).iloc[0] == "PARTIAL_SAMPLE":
+            st.error(
+                f"Hasil parsial: {len(df_result):,} dari {source_total_rows or 'jumlah tidak diketahui'} "
+                "baris. Jangan gunakan sebagai hasil audit lengkap atau dasar keputusan pembayaran."
+            )
 
         # Top 4 Metrics Summary
         total_claims = len(df_result)

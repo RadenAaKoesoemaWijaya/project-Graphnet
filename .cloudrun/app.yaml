@@ -28,6 +28,30 @@ spec:
         env:
         - name: PORT
           value: "8501"
+        - name: ASTINA_ENVIRONMENT
+          value: "production"
+        - name: AUTH_ENABLED
+          value: "true"
+        - name: ASTINA_ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: astina-admin-password
+              key: latest
+        - name: ASTINA_AUDITOR_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: astina-auditor-password
+              key: latest
+        - name: ASTINA_ANALYST_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: astina-analyst-password
+              key: latest
+        - name: ASTINA_VIEWER_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: astina-viewer-password
+              key: latest
         - name: STREAMLIT_SERVER_ADDRESS
           value: "0.0.0.0"
         - name: STREAMLIT_SERVER_HEADLESS

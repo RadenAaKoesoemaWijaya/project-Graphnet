@@ -13,6 +13,8 @@ except ImportError:
     st = None
 from typing import Dict, List, Optional, Tuple, Any
 import logging
+import polars as pl
+import os
 
 logger = logging.getLogger("graphnet.data_validator")
 
@@ -354,6 +356,68 @@ def comprehensive_validation(df: pd.DataFrame, target_col: Optional[str] = None)
         logger.error(f"Error during comprehensive validation: {e}")
         return False, {'error': str(e)}
 
+
+def validate_parquet_dataset(parquet_path: str) -> Dict[str, Any]:
+    """Validate schema and quality aggregates across a Parquet file lazily."""
+    if not os.path.exists(parquet_path):
+        raise FileNotFoundError(f"Dataset Parquet tidak ditemukan: {parquet_path}")
+
+    lazy_frame = pl.scan_parquet(parquet_path)
+    schema = lazy_frame.collect_schema()
+    columns = list(schema.names())
+    if not columns:
+        raise ValueError("Dataset Parquet tidak memiliki kolom.")
+
+    expressions = [pl.len().alias("_total_rows")]
+    expressions.extend(
+        expression
+        for index, column in enumerate(columns)
+        for expression in (
+            pl.col(column).null_count().alias(f"_null_{index}"),
+            pl.col(column).n_unique().alias(f"_unique_{index}"),
+        )
+    )
+    numeric_columns = [
+        column for column, dtype in schema.items()
+        if dtype.is_numeric()
+    ]
+    for index, column in enumerate(numeric_columns):
+        expressions.extend([
+            pl.col(column).min().alias(f"_min_{index}"),
+            pl.col(column).max().alias(f"_max_{index}"),
+        ])
+
+    aggregate = lazy_frame.select(expressions).collect(engine="streaming").row(0, named=True)
+    total_rows = int(aggregate["_total_rows"])
+    null_counts = {
+        column: int(aggregate[f"_null_{index}"])
+        for index, column in enumerate(columns)
+    }
+    constant_columns = [
+        column for index, column in enumerate(columns)
+        if int(aggregate[f"_unique_{index}"]) <= 1
+    ]
+    invalid_ranges = {}
+    for index, column in enumerate(numeric_columns):
+        lower, upper = aggregate[f"_min_{index}"], aggregate[f"_max_{index}"]
+        name = column.lower()
+        if lower is None or upper is None:
+            continue
+        if "age" in name and (lower < 0 or upper > 120):
+            invalid_ranges[column] = {"min": lower, "max": upper, "expected": "0..120"}
+
+    return {
+        "is_valid": total_rows > 0,
+        "total_rows": total_rows,
+        "total_columns": len(columns),
+        "column_types": {column: str(dtype) for column, dtype in schema.items()},
+        "missing_values": sum(null_counts.values()),
+        "missing_by_column": null_counts,
+        "constant_columns": constant_columns,
+        "invalid_numeric_ranges": invalid_ranges,
+    }
+
+
 def display_validation_results(results: Dict[str, Any]) -> None:
     """
     Display validation results in a user-friendly format.
@@ -393,6 +457,25 @@ def display_validation_results(results: Dict[str, Any]) -> None:
                 st.warning("⚠️ **Peringatan:**")
                 for warning in basic['warnings']:
                     st.markdown(f"- {warning}")
+
+        full_dataset = results.get("full_dataset", {})
+        if full_dataset:
+            st.markdown("#### Pemeriksaan seluruh dataset (streaming)")
+            st.write(
+                f"{full_dataset['total_rows']:,} baris • "
+                f"{full_dataset['total_columns']} kolom • "
+                f"{full_dataset['missing_values']:,} nilai kosong"
+            )
+            if full_dataset.get("constant_columns"):
+                st.warning(
+                    "Kolom konstan: "
+                    + ", ".join(full_dataset["constant_columns"][:10])
+                )
+            if full_dataset.get("invalid_numeric_ranges"):
+                st.error(
+                    "Nilai di luar rentang yang diharapkan: "
+                    + ", ".join(full_dataset["invalid_numeric_ranges"])
+                )
         
         # ML readiness
         ml_ready = results.get('ml_readiness', {})

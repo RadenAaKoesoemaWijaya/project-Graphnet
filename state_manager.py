@@ -72,6 +72,12 @@ def get_feature_selection_frame(max_rows=None):
     from config import FEATURE_SELECTION_SAMPLE_ROWS
 
     max_rows = max_rows or FEATURE_SELECTION_SAMPLE_ROWS
+    training_frame = st.session_state.get("train_df")
+    if isinstance(training_frame, pd.DataFrame) and not training_frame.empty:
+        if len(training_frame) > max_rows:
+            return training_frame.sample(n=max_rows, random_state=42)
+        return training_frame
+
     path = st.session_state.get("df_processed_path")
     if path and os.path.exists(path):
         size_mb = os.path.getsize(path) / (1024 * 1024)
@@ -124,10 +130,14 @@ def reset_downstream_state():
     """Clear data-dependent state so a newly processed dataset starts from a clean pipeline."""
     keys_to_clear = [
         'train_df',
+        'validation_df',
         'test_df',
+        'split_test_size',
+        'validation_df',
         'selected_features',
         'selected_features_cache',
         'feature_selection_method',
+        'feature_selection_scope',
         'original_feature_count',
         'final_feature_count',
         'proceed_after_selection',
@@ -141,9 +151,20 @@ def reset_downstream_state():
         'training_features',
         'training_mode',
         'training_label_column',
+        'model_version',
         'detector',
+        'trained_detector',
         'model_trained',
         'X_eval_test',  # Add this key that's used in evaluation
+        'eval_threshold',
+        'evaluation_results',
+        'eval_metrics',
+        'detection_executed',
+        'detection_processed_df',
+        'detection_processed_signature',
+        'detection_result_signature',
+        'risk_summary',
+        'last_detection_signature',
         'uploaded_data',  # Clear uploaded data from detection page
         'preprocessing_metadata_new',  # Clear new preprocessing metadata
         'last_drift_detected',  # Clear drift detection status
@@ -332,3 +353,49 @@ def split_processed_dataset(df_processed, test_size=0.2):
     except Exception as e:
         logger.error(f"Error dalam split_processed_dataset: {e}")
         raise
+
+
+def split_processed_dataset_with_validation(df_processed, test_size=0.2, validation_size=0.15):
+    """Create deterministic train/validation/test partitions with stratification when feasible."""
+    if not 0 < test_size < 1 or not 0 < validation_size < 1:
+        raise ValueError("Ukuran test dan validation harus berada di antara 0 dan 1.")
+    if df_processed is None or len(df_processed) < 10:
+        raise ValueError("Dataset minimal 10 baris diperlukan untuk train/validation/test.")
+
+    label_candidates = [
+        column for column in df_processed.columns
+        if any(key in column.lower() for key in ("fraud", "label", "target", "class"))
+    ]
+    stratify_label = None
+    labels = None
+    for candidate in label_candidates:
+        candidate_labels = df_processed[candidate]
+        if candidate_labels.nunique(dropna=True) == 2:
+            labels = candidate_labels
+            stratify_label = candidate
+            break
+
+    def split(frame, fraction, stratify):
+        try:
+            return train_test_split(
+                frame,
+                test_size=fraction,
+                random_state=42,
+                stratify=stratify,
+            )
+        except ValueError as exc:
+            if stratify is None:
+                raise
+            logger.warning("Stratified split gagal (%s); menggunakan split acak.", exc)
+            return train_test_split(frame, test_size=fraction, random_state=42)
+
+    train_validation, test_df = split(df_processed, test_size, labels)
+    train_labels = train_validation[stratify_label] if stratify_label else None
+    train_df, validation_df = split(
+        train_validation,
+        validation_size,
+        train_labels,
+    )
+    if min(len(train_df), len(validation_df), len(test_df)) == 0:
+        raise ValueError("Split menghasilkan partisi kosong.")
+    return train_df, validation_df, test_df, stratify_label

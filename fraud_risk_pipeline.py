@@ -329,7 +329,11 @@ def run_integrated_claim_risk_pipeline(
     db_connection=None,
     chunk_size: int | None = None,
     ml_model=None,
+    ml_scores=None,
+    risk_threshold: float = 0.65,
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    if not 0.0 <= float(risk_threshold) <= 1.0:
+        raise ValueError("risk_threshold harus berada pada rentang 0 sampai 1.")
     if df is None or df.empty:
         return pd.DataFrame(), {
             "total_claims": 0,
@@ -370,36 +374,48 @@ def run_integrated_claim_risk_pipeline(
         enriched["duplicate_payment_status"] = ""
         enriched["status_message"] = "Tidak ada riwayat pembayaran"
 
-    enriched["business_risk_score"] = (
-        enriched["business_risk_score"]
-        + enriched["duplicate_payment_flag"].astype(float) * 0.10
-    ).clip(0, 1)
     enriched["business_risk_flag"] = (enriched["business_risk_score"] >= 0.6).astype(int)
 
-    # Hybrid risk calculation (combining rule-based and ML if provided)
-    if ml_model is not None and hasattr(ml_model, "predict_proba"):
-        try:
-            # If ML model score is available
-            ml_scores = ml_model.predict_proba(df)[:, 1] if hasattr(ml_model, "predict_proba") else np.zeros(len(df))
-            enriched["ml_anomaly_score"] = ml_scores
-            enriched["final_risk_score"] = (
-                enriched["business_risk_score"] * 0.5 +
-                enriched["ml_anomaly_score"] * 0.3 +
-                enriched["duplicate_payment_flag"].astype(float) * 0.2
-            ).clip(0, 1)
-        except Exception as e:
-            logger.warning(f"ML scoring fallback to rule score: {e}")
-            enriched["final_risk_score"] = (
-                enriched["business_risk_score"] * 0.7 +
-                enriched["duplicate_payment_flag"].astype(float) * 0.3
-            ).clip(0, 1)
-    else:
-        enriched["final_risk_score"] = (
-            enriched["business_risk_score"] * 0.7 +
-            enriched["duplicate_payment_flag"].astype(float) * 0.3
-        ).clip(0, 1)
+    # ML scores are supplied by the ensemble detector or read from its result column.
+    if ml_scores is None and "anomaly_probability" in df.columns:
+        ml_scores = df["anomaly_probability"].to_numpy()
 
-    enriched["final_risk_flag"] = (enriched["final_risk_score"] >= 0.65).astype(int)
+    if ml_scores is not None:
+        scores = np.asarray(ml_scores, dtype=np.float64).reshape(-1)
+        if len(scores) != len(enriched):
+            raise ValueError(
+                f"Jumlah skor ML ({len(scores)}) tidak sesuai jumlah klaim ({len(enriched)})."
+            )
+        if not np.isfinite(scores).all():
+            raise ValueError("Skor ML mengandung nilai NaN atau tak hingga.")
+        enriched["ml_anomaly_score"] = np.clip(scores, 0.0, 1.0)
+        # Combine independent risk evidence without diluting a strong single signal.
+        enriched["final_risk_score"] = 1.0 - (
+            (1.0 - enriched["business_risk_score"])
+            * (1.0 - enriched["ml_anomaly_score"])
+            * (1.0 - enriched["duplicate_payment_flag"].astype(float))
+        )
+    elif ml_model is not None and hasattr(ml_model, "predict_proba"):
+        try:
+            model_scores = np.asarray(ml_model.predict_proba(df))[:, 1]
+            if len(model_scores) != len(enriched) or not np.isfinite(model_scores).all():
+                raise ValueError("Model menghasilkan skor yang tidak valid.")
+            enriched["ml_anomaly_score"] = np.clip(model_scores, 0.0, 1.0)
+            enriched["final_risk_score"] = 1.0 - (
+                (1.0 - enriched["business_risk_score"])
+                * (1.0 - enriched["ml_anomaly_score"])
+                * (1.0 - enriched["duplicate_payment_flag"].astype(float))
+            )
+        except Exception as e:
+            logger.error("ML scoring gagal; tidak ada skor risiko akhir yang dapat dipercaya: %s", e)
+            raise
+    else:
+        enriched["final_risk_score"] = 1.0 - (
+            (1.0 - enriched["business_risk_score"])
+            * (1.0 - enriched["duplicate_payment_flag"].astype(float))
+        )
+
+    enriched["final_risk_flag"] = (enriched["final_risk_score"] >= risk_threshold).astype(int)
     enriched["risk_category"] = enriched.apply(derive_risk_category, axis=1)
 
     summary["duplicate_payment_claims"] = int(enriched["duplicate_payment_flag"].sum())

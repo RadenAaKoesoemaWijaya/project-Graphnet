@@ -114,6 +114,33 @@ def test_upload_cache_hash_distinguishes_same_name_and_size():
     assert get_file_hash(first) != get_file_hash(second)
 
 
+def test_upload_cache_hash_distinguishes_same_prefix_and_suffix():
+    from cache_manager import get_file_hash
+
+    class UploadedFile:
+        def __init__(self, payload):
+            import io
+
+            self._buffer = io.BytesIO(payload)
+            self.name = "claims.csv"
+            self.size = len(payload)
+            self.file_id = "first" if b"first" in payload else "second"
+
+        def seek(self, position):
+            return self._buffer.seek(position)
+
+        def tell(self):
+            return self._buffer.tell()
+
+        def read(self, size=-1):
+            return self._buffer.read(size)
+
+    first = UploadedFile(b"same-header\nfirst" + b"x" * 100 + b"same-tail")
+    second = UploadedFile(b"same-header\nsecond" + b"x" * 99 + b"same-tail")
+    assert first.size == second.size
+    assert get_file_hash(first) != get_file_hash(second)
+
+
 def test_excel_upload_is_buffered_once_and_converted_to_parquet(tmp_path):
     source_df = pd.DataFrame({
         "claim_id": ["C1", "C2"],
@@ -213,3 +240,18 @@ def test_latin1_csv_ingest(tmp_path):
     actual = pd.read_parquet(output)
     assert row_count == 1
     assert "caf" in str(actual["note"].iloc[0]).lower()
+
+
+def test_streaming_validation_checks_rows_after_preview_sample(tmp_path):
+    from data_validator import validate_parquet_dataset
+
+    frame = pd.DataFrame({
+        "claim_id": [f"C{i}" for i in range(5001)],
+        "patient_age": [40] * 5000 + [150],
+    })
+    parquet_path = tmp_path / "full_dataset.parquet"
+    frame.to_parquet(parquet_path, index=False)
+
+    report = validate_parquet_dataset(str(parquet_path))
+    assert report["total_rows"] == 5001
+    assert report["invalid_numeric_ranges"]["patient_age"]["max"] == 150

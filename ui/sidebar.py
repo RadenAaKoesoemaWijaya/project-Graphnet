@@ -43,7 +43,10 @@ def render_sidebar():
     st.sidebar.title("Menu Utama")
     
     # Check if any long operation is in progress
-    is_processing = st.session_state.get('is_processing', False)
+    is_processing = (
+        st.session_state.get('is_processing', False)
+        or st.session_state.get('training_in_progress', False)
+    )
     processing_message = st.session_state.get('processing_message', '')
     
     # Show processing indicator if active

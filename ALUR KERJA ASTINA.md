@@ -218,10 +218,12 @@ browser menutup koneksi WebSocket.
   - 🧠 **Mode Lengkap (*Deep Graph Ensemble*)**: Seluruh model ensemble, topologi graf GNN, serta optimasi bobot Optuna FPR Minimizer.
   - 🛠️ **Mode Kustom**: Kebebasan memilih algoritma, parameter epoch, learning rate, sampling neighbor, dan bobot ensemble.
 - **Hardware-Aware Telemetry**: Monitor beban komputasi *real-time* yang mendeteksi ketersediaan GPU NVIDIA CUDA dan memberikan rekomendasi hardware (*Badge*: 🟢 Ringan, 🟡 Sedang, 🔴 Berat).
-- **Asynchronous Training Worker**: Pelatihan berjalan di background thread dengan penulisan progres ke `cache/training_status.json`, mencegah UI Streamlit mengalami *freezing*.
+- **Asynchronous Training Worker**: Setiap pelatihan mendapat job ID dan file status atomik tersendiri di `cache/training_jobs/`. Pelatihan serta promosi model diserialisasi dalam satu proses agar sesi tidak saling menimpa status maupun artefak.
 - **Visualisasi Topologi Graf**: Menampilkan visualisasi interaktif anomaly-focused subgraph (NetworkX + Plotly) — top-K node paling mencurigai beserta ego-graph tetangga 1-hop-nya. Lihat detail di bagian **Visualisasi Anomaly-Focused Subgraph** di atas.
 
 ### 4.4 Evaluation & Explainability (`ui/pages/evaluation.py`)
+- Data dibagi deterministik menjadi train, validation, dan test. Threshold tuning hanya memakai validation; test dipakai untuk pelaporan evaluasi.
+- Dataset lama tanpa partisi validation independen tidak dapat dipakai untuk auto-optimasi threshold; model perlu dilatih ulang.
 - **Metrik Klasifikasi Supervised**: Evaluasi Accuracy, Precision, Recall, F1-Score, ROC-AUC, PR-AUC, dan Brier Score.
 - **Visualisasi Diagnostik**: Interactive Confusion Matrix heatmap, ROC Curve, dan Precision-Recall Curve.
 - **Explainable AI (XAI)**:
@@ -263,8 +265,8 @@ Alur eksekusi inferensi data baru terdiri dari tahapan terstruktur berikut:
    │  └── Repeat Billing, Phantom Service, Provider Capacity, Duplicate, dsb.
    │
 6. Agregasi Risiko Hybrid & Klasifikasi Tingkat Keparahan
-   │  ├── Final Risk Score: 50% Aturan Bisnis + 30% ML Anomaly + 20% Duplicate Flag
-   │  └── Severity Badge: High Risk (≥0.65), Medium Risk (0.40–0.64), Low Risk (<0.40)
+   │  ├── Final Risk Score: noisy-OR atas skor aturan bisnis, skor anomali ML, dan sinyal pembayaran duplikat
+   │  └── Flag High Risk memakai threshold deteksi yang dipilih pengguna
    │
 7. Penyajian Hasil pada 5 Tab Spesifik & Pembuatan Dokumen BAP AI Copilot
 ```
@@ -295,6 +297,8 @@ Setelah eksekusi deteksi dijalankan, halaman menyajikan diagnostik transparansi 
   - Kolom **Fitur Imputasi Median Training**
 - **Proteksi UI & Panduan Pemulihan (*Recovery Guide*)**:
   Jika model belum dilatih atau metadata fitur training tidak ditemukan, sistem menampilkan pesan informatif beserta tombol shortcut interaktif `🚀 Ke Halaman Pelatihan Model`.
+- **Identitas dan invalidasi hasil**: hash SHA-256 konten file membedakan upload yang bentuk/namanya sama. Hasil deteksi terikat pada identitas dataset, versi/artefak model, threshold, opsi GNN, dan opsi preprocessing.
+- **Batas file besar**: mode deteksi interaktif yang memakai sampel menghasilkan hasil parsial, bukan hasil batch seluruh klaim. UI harus mempertahankan peringatan ini dan tidak menandai hasil parsial sebagai lengkap.
 
 #### 4.5.4 Spesifikasi 5 Tab Investigasi Deteksi
 
@@ -574,13 +578,12 @@ Ini menjamin `business_risk_score` tetap berada dalam rentang $[0.0, 1.0]$ meski
 
 **Formula Skor Risiko Final:**
 
-$$\text{Final Risk Score} = 0.50(\text{Business Risk Score}) + 0.30(\text{ML Anomaly Score}) + 0.20(\text{Duplicate Payment Flag})$$
+$$\text{Final Risk Score} = 1 - (1 - \text{Business Risk Score})(1 - \text{ML Anomaly Score})(1 - \text{Duplicate Payment Flag})$$
 
 ### 8.3 Klasifikasi Tingkat Keparahan (Severity Classification)
 
-- 🟢 **Low Risk**: $\text{Final Risk Score} < 0.40$
-- 🟡 **Medium Risk**: $0.40 \le \text{Final Risk Score} < 0.65$
-- 🔴 **High Risk**: $\text{Final Risk Score} \ge 0.65$
+- 🔴 **High Risk**: `final_risk_score` mencapai threshold yang dipilih di UI Deteksi.
+- Sinyal di bawah threshold tetap ditampilkan untuk review; skor model bukan keputusan pembayaran otomatis.
 
 ---
 
@@ -830,9 +833,9 @@ Modul `pii_masker.py` melindungi data sensitif sesuai regulasi UU Perlindungan D
 
 ---
 
-## 12. Pengujian Kualitas & Quality Gate (111 Test Cases)
+## 12. Pengujian Kualitas & Quality Gate
 
-Seluruh komponen ASTINA diuji secara otomatis menggunakan suite Pytest yang mencakup **111 skenario uji terdaftar** (111 Passed, 100% Green pada validasi terakhir), termasuk keamanan siber, autentikasi, resiliensi schema, ingestion Excel, helper visualisasi, dan subgraf anomali GNN:
+Seluruh komponen ASTINA diuji secara otomatis menggunakan suite Pytest. Pada validasi terakhir, **122 tes lulus** (100% passed), termasuk keamanan siber, autentikasi, resiliensi schema, ingestion Excel, helper visualisasi, dan subgraf anomali GNN:
 
 ```powershell
 # Menjalankan seluruh test suite
@@ -849,22 +852,26 @@ Seluruh komponen ASTINA diuji secara otomatis menggunakan suite Pytest yang menc
 
 | Modul Test | Jumlah Uji | Cakupan Verifikasi |
 | :--- | :---: | :--- |
+| `test_batch_detection_utils.py` | 3 | Uji utilitas alignment dan template deteksi |
+| `test_feature_importance.py` | 1 | Uji visualisasi feature importance |
+| `test_feature_importance_quick.py` | 1 | Uji jalur cepat feature importance |
 | `test_agentic_copilot.py` | 9 | Uji pencarian semantik FAISS RAG (8 reg), retrieval outlier ML, inferensi Copilot, fallback zero-wipeout, Q&A heuristic, XAI/GNN context |
-| `test_cybersecurity_and_auth.py` | 6 | Uji SHA-256 auth, RBAC 4-role (admin/auditor/analyst/viewer), AI Guardrail (5 pola injeksi), blokir prompt injection di Copilot, cache lifecycle purge, rate-limit role resolution |
+| `test_cybersecurity_and_auth.py` | 7 | Uji SHA-256 auth, RBAC 4-role (admin/auditor/analyst/viewer), AI Guardrail, blokir prompt injection, cache lifecycle, rate-limit, dan production fail-closed |
 | `test_app_startup.py` | 1 | Uji startup aplikasi dan validitas seluruh dependensi import utama |
 | `test_detection_modules.py` | 14 | Uji menyeluruh 9 modul business rules, edge cases, dan integrasi pipeline |
 | `test_feature_selection.py` | 6 | Uji SelectKBest (F-score & MI), Tree Importance, Filter Multikolinearitas, Low-Variance, PCA |
 | `test_gnn_minibatch.py` | 4 | Uji PyTorch GNN mini-batch NeighborLoader, forward pass, dan early stopping |
 | `test_gpu_and_pipeline_fixes.py` | 6 | Uji kebersihan memori GPU, parameter XGBoost hardware, fallback CUDA, fuzzy similarity parity, dan pseudo-label caching |
 | `test_graph_scaling.py` | 9 | Uji batasan node/edge graph builder, pencegahan OOM pada graf besar, dan 7 skenario `build_anomaly_subgraph`: basic, seed inclusion, score shape, edge_type propagation, torch tensor input, single-node degenerate, all-low-scores fallback |
-| `test_large_file_ingestion.py` | 6 | Uji CSV-to-Parquet, deduplikasi Parquet, cache key upload, dan ingestion Excel XLSX |
+| `test_inference_shape_contract.py` | 14 | Uji kontrak bentuk/alignment fitur inferensi |
+| `test_large_file_ingestion.py` | 13 | Uji CSV/Parquet streaming, validasi agregat, cache key upload, dan ingestion Excel |
 | `test_optuna_ensemble_and_drift.py` | 5 | Uji optimasi hyperparameter Optuna dan deteksi Kolmogorov-Smirnov drift |
-| `test_pipeline_edge_cases.py` | 12 | Uji toleransi data null, data bertipe campuran, sanitasi string, dan extreme amounts |
+| `test_pipeline_edge_cases.py` | 15 | Uji edge cases pipeline, agregasi skor, split deterministik, dan sinyal ML |
 | `test_schema_synthesis_and_resilience.py` | 6 | Uji resiliensi SchemaHarmonizer: zero-crash dataset minimal, aliasing bahasa Indonesia, derivasi LOS deterministik, circuit breaker weight re-normalization, provenance tagging, dan empty DataFrame |
 | `test_streaming_preprocessing_memory.py` | 2 | Uji batasan pemakaian RAM (<100MB peak) pada pemrosesan streaming skala besar |
 | `test_visualization_helpers.py` | 4 | Uji sampling bounded, deterministik, chart valid, dan input kosong |
 | `test_windows_event_loop.py` | 2 | Uji Windows Selector event loop pada proses utama dan subprocess Streamlit |
-| **Total Test Suite** | **111 (111 Passed)** | **100% Passed (Green)** |
+| **Total Test Suite** | **122 (122 Passed pada validasi terakhir)** | **100% Passed (Green)** |
 
 ---
 

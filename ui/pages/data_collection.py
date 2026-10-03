@@ -4,6 +4,7 @@ import numpy as np
 import os
 from ui.utils import *
 from state_manager import *
+from data_validator import validate_parquet_dataset
 from rate_limit import check_upload_quota, increment_quota
 from cache_manager import get_file_hash
 
@@ -35,6 +36,13 @@ def load_and_validate_raw_data(uploaded_file):
         df_sample = get_parquet_sample(raw_parquet_path, n=sample_size)
         df_sample = DataSanitizer.sanitize_dataframe(df_sample)
         is_valid, validation_results = comprehensive_validation(df_sample)
+        full_validation = validate_parquet_dataset(raw_parquet_path)
+        validation_results["full_dataset"] = full_validation
+        if not full_validation["is_valid"]:
+            is_valid = False
+            validation_results.setdefault("basic_integrity", {}).setdefault("issues", []).append(
+                "Validasi seluruh dataset gagal: tidak ditemukan baris data."
+            )
         memory_info = {
             'original_memory_mb': uploaded_file.size / (1024 * 1024),
             'optimized_memory_mb': (df_sample.memory_usage(deep=True).sum() / 1024**2),
@@ -406,6 +414,23 @@ def show_data_collection_page():
                             preprocessing_metadata,
                         )
                         set_default_feature_selection(feature_columns)
+                        if isinstance(df_processed, pd.DataFrame) and len(df_processed) >= 10:
+                            (
+                                training_frame,
+                                validation_frame,
+                                test_frame,
+                                stratify_label,
+                            ) = split_processed_dataset_with_validation(df_processed)
+                            st.session_state["train_df"] = training_frame
+                            st.session_state["validation_df"] = validation_frame
+                            st.session_state["test_df"] = test_frame
+                            st.session_state["split_test_size"] = 0.2
+                            st.session_state["feature_selection_scope"] = "train"
+                            st.info(
+                                "Praproses selesai. Seleksi fitur interaktif untuk dataset "
+                                "yang muat di memori menggunakan partisi train saja; "
+                                f"validasi/test ditahan terpisah (stratifikasi: {stratify_label or 'tidak tersedia'})."
+                            )
 
                         preprocessing_success = True
                         st.success("✅ Data berhasil diproses dengan encoding canggih!")
@@ -1146,4 +1171,3 @@ def show_data_collection_page():
                 st.code(traceback.format_exc())
             if st.button("🔁 Coba Muat Ulang", key="btn_reload_data_collection"):
                 st.rerun()
-

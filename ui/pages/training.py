@@ -2,6 +2,10 @@ import streamlit as st
 import plotly.express as px
 import numpy as np
 import pandas as pd
+import threading
+import uuid
+import json
+import os
 try:
     import torch
     _TORCH_AVAILABLE = True
@@ -12,10 +16,27 @@ except (ImportError, OSError, Exception):
     _TORCH_AVAILABLE = False
 from ui.utils import *
 from state_manager import *
+
+_TRAINING_JOB_LOCK = threading.Lock()
+
+
+def _write_training_status(status_path, payload):
+    os.makedirs(os.path.dirname(status_path), exist_ok=True)
+    temp_path = f"{status_path}.{uuid.uuid4().hex}.tmp"
+    try:
+        with open(temp_path, "w", encoding="utf-8") as status_file:
+            json.dump(payload, status_file)
+        os.replace(temp_path, status_path)
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+
+
 def show_training_page():
     X_train = None
     edge_index = None
     node_features = None   # declared here so Python never treats it as unbound
+    training_status_path = None
     st.title("Pelatihan Model Deteksi Anomali")
     st.info("Training mempelajari pola dataset yang sudah diproses. Pilih algoritma sesuai kebutuhan: model tabular untuk pola fitur dan GNN untuk hubungan antar klaim.")
 
@@ -114,14 +135,19 @@ def show_training_page():
         and 'train_df' not in st.session_state
     ):
         try:
-            train_df, test_df, stratify_label = split_processed_dataset(df_processed, test_size=0.2)
+            train_df, validation_df, test_df, stratify_label = split_processed_dataset_with_validation(
+                df_processed, test_size=0.2
+            )
             st.session_state['train_df'] = train_df
+            st.session_state['validation_df'] = validation_df
             st.session_state['test_df'] = test_df
+            st.session_state['split_test_size'] = 0.2
             if stratify_label:
                 st.info(f"🔀 Pembagian data otomatis menggunakan stratified split berdasarkan kolom '{stratify_label}'")
             st.success(
                 f"✅ Data hasil praproses langsung disiapkan untuk pelatihan: "
-                f"data latih ({len(train_df)} baris), data uji ({len(test_df)} baris)"
+                f"data latih ({len(train_df)} baris), validasi ({len(validation_df)} baris), "
+                f"data uji ({len(test_df)} baris)"
             )
         except Exception as e:
             st.error(f"❌ Gagal membagi data otomatis: {str(e)}")
@@ -135,13 +161,31 @@ def show_training_page():
     
     if st.button("Bagi Data"):
         try:
-            train_df, test_df, stratify_label = split_processed_dataset(df_processed, test_size=test_size)
+            train_df, validation_df, test_df, stratify_label = split_processed_dataset_with_validation(
+                df_processed, test_size=test_size
+            )
             st.session_state['train_df'] = train_df
+            st.session_state['validation_df'] = validation_df
             st.session_state['test_df'] = test_df
+            previous_test_size = st.session_state.get("split_test_size")
+            if previous_test_size is not None and previous_test_size != test_size:
+                st.session_state["selected_features"] = list(feature_columns)
+                st.session_state["feature_selection_method"] = "Semua Fitur (Bawaan)"
+                st.session_state["final_feature_count"] = len(feature_columns)
+                selected_features = list(feature_columns)
+                feature_selection_method = "Semua Fitur (Bawaan)"
+                st.warning(
+                    "Pembagian data berubah. Seleksi fitur sebelumnya dibatalkan agar "
+                    "fitur tidak membawa informasi dari partisi evaluasi."
+                )
+            st.session_state['split_test_size'] = test_size
             if stratify_label:
                 st.info(f"🔀 Menggunakan stratified split berdasarkan kolom '{stratify_label}'")
             
-            st.success(f"Data berhasil dibagi: Data latih ({len(train_df)} baris), data uji ({len(test_df)} baris)")
+            st.success(
+                f"Data berhasil dibagi: latih ({len(train_df)}), "
+                f"validasi ({len(validation_df)}), uji ({len(test_df)}) baris"
+            )
             
             # Show data distribution
             col1, col2 = st.columns(2)
@@ -763,14 +807,15 @@ def show_training_page():
             # Progress callback for Autoencoder
             def autoencoder_progress_callback(epoch, total_epochs, loss):
                 progress = 0.2 + 0.6 * (epoch + 1) / total_epochs  # 20% to 80% progress
-                try:
-                    import json, os
-                    os.makedirs("cache", exist_ok=True)
-                    with open("cache/training_status.json", "w") as f:
-                        json.dump({"status": "running", "progress": progress, "message": f"Training Autoencoder: Epoch {epoch+1}/{total_epochs}, Loss: {loss:.4f}"}, f)
-                except Exception:
-                    pass
-                # No longer directly call Streamlit elements from background thread
+                if training_status_path:
+                    _write_training_status(
+                        training_status_path,
+                        {
+                            "status": "running",
+                            "progress": progress,
+                            "message": f"Training Autoencoder: Epoch {epoch+1}/{total_epochs}, Loss: {loss:.4f}",
+                        },
+                    )
 
             
             detector = CombinedAnomalyDetector(
@@ -846,34 +891,66 @@ def show_training_page():
                 label_column if training_mode == TRAINING_MODE_SUPERVISED else None
             )
             
-            import threading
-            import json
-            import os
-            
-            def train_worker(detector_obj, X, e_idx, e_type, y, dev, mode, opt_ensemble, opt_hyper):
+            training_job_id = uuid.uuid4().hex
+            training_status_path = os.path.join(
+                "cache", "training_jobs", f"{training_job_id}.json"
+            )
+            st.session_state["training_job_id"] = training_job_id
+            st.session_state["training_status_path"] = training_status_path
+            training_metadata = {
+                "training_features": selected_features,
+                "feature_selection_method": st.session_state.get(
+                    "feature_selection_method", "Semua Fitur (Bawaan)"
+                ),
+                "training_mode": training_mode,
+                "label_column": label_column if training_mode == TRAINING_MODE_SUPERVISED else None,
+                "graph_method": st.session_state.get("graph_method", "star"),
+                "graph_k": st.session_state.get(
+                    "graph_k", graph_k if "graph_k" in locals() else None
+                ),
+                "graph_node_count": st.session_state.get("graph_node_count", 0),
+                "graph_edge_count": st.session_state.get("graph_edge_count", 0),
+            }
+
+            def train_worker(
+                detector_obj, X, e_idx, e_type, y, dev, mode,
+                opt_ensemble, opt_hyper, status_path, model_metadata,
+            ):
                 try:
-                    os.makedirs("cache", exist_ok=True)
-                    with open("cache/training_status.json", "w") as f:
-                        json.dump({"status": "running", "progress": 0.1, "message": "Memulai pelatihan model ensemble..."}, f)
-                    
-                    if mode == TRAINING_MODE_SUPERVISED:
-                        detector_obj.fit(
-                            X, edge_index=e_idx, edge_type=e_type, labels=y, device=dev,
-                            optimize_hyperparams=opt_hyper,
-                            optimize_ensemble_weights=opt_ensemble
+                    _write_training_status(
+                        status_path,
+                        {"status": "running", "progress": 0.1, "message": "Menunggu slot pelatihan..."},
+                    )
+                    with _TRAINING_JOB_LOCK:
+                        _write_training_status(
+                            status_path,
+                            {"status": "running", "progress": 0.1, "message": "Memulai pelatihan model ensemble..."},
                         )
-                    else:
                         detector_obj.fit(
-                            X, edge_index=e_idx, edge_type=e_type, labels=None, device=dev,
+                            X,
+                            edge_index=e_idx,
+                            edge_type=e_type,
+                            labels=y if mode == TRAINING_MODE_SUPERVISED else None,
+                            device=dev,
                             optimize_hyperparams=opt_hyper,
-                            optimize_ensemble_weights=opt_ensemble
+                            optimize_ensemble_weights=opt_ensemble,
                         )
-                        
-                    with open("cache/training_status.json", "w") as f:
-                        json.dump({"status": "completed", "progress": 1.0, "message": "Training selesai!"}, f)
+                        detector_obj.save_models(MODEL_PREFIX, training_metadata=model_metadata)
+                        version = save_model_version(MODEL_PREFIX)
+                    _write_training_status(
+                        status_path,
+                        {
+                            "status": "completed",
+                            "progress": 1.0,
+                            "message": "Training selesai dan model tersimpan.",
+                            "version": version,
+                        },
+                    )
                 except Exception as e:
-                    with open("cache/training_status.json", "w") as f:
-                        json.dump({"status": "error", "progress": 0.0, "message": str(e)}, f)
+                    _write_training_status(
+                        status_path,
+                        {"status": "error", "progress": 0.0, "message": str(e)},
+                    )
 
             st.session_state['training_in_progress'] = True
             
@@ -884,26 +961,35 @@ def show_training_page():
                       y_train if training_mode == TRAINING_MODE_SUPERVISED else None,
                       device, training_mode,
                       enable_optuna_ensemble_weights,
-                      enable_hyperparameter_tuning)
+                      enable_hyperparameter_tuning,
+                      training_status_path,
+                      training_metadata)
             )
             t.start()
             
-            # Give it a tiny sleep so the thread creates the json file before rerun
-            import time
-            time.sleep(0.5)
             st.rerun()
 
     # Polling logic outside the button context
     if st.session_state.get('training_in_progress', False):
         import time
-        import json
         
         st.warning("⚠️ Proses pelatihan sedang berjalan di background. Anda bisa membiarkan halaman ini terbuka.")
         progress_bar = st.progress(0)
         status_text = st.empty()
         
+        training_status_path = st.session_state.get("training_status_path")
+        if not training_status_path:
+            st.session_state["training_in_progress"] = False
+            st.error("Status job training tidak ditemukan. Silakan mulai job baru.")
+            return
+
+        if not os.path.exists(training_status_path):
+            status_text.text("Menyiapkan worker training...")
+            time.sleep(2)
+            st.rerun()
+
         try:
-            with open("cache/training_status.json", "r") as f:
+            with open(training_status_path, "r", encoding="utf-8") as f:
                 status = json.load(f)
                 
             progress_bar.progress(min(status.get("progress", 0.0), 1.0))
@@ -923,24 +1009,11 @@ def show_training_page():
                 st.session_state['training_features'] = selected_features
                 st.session_state['training_mode'] = training_mode
                 st.session_state['training_label_column'] = label_column
+                st.session_state['model_version'] = version
                 
-                feature_selection_method = st.session_state.get('feature_selection_method', 'Semua Fitur (Bawaan)')
-                
-                detector.save_models(
-                    MODEL_PREFIX,
-                    training_metadata={
-                        'training_features': selected_features,
-                        'feature_selection_method': feature_selection_method,
-                        'training_mode': training_mode,
-                        'label_column': label_column,
-                        'graph_method': st.session_state.get('graph_method', 'star'),
-                        'graph_k': st.session_state.get('graph_k', graph_k if 'graph_k' in locals() else None),
-                        'graph_node_count': st.session_state.get('graph_node_count', 0),
-                        'graph_edge_count': st.session_state.get('graph_edge_count', 0),
-                    }
-                )
-                
-                version = save_model_version(MODEL_PREFIX)
+                version = status.get("version")
+                if not version:
+                    raise RuntimeError("Job selesai tanpa versi model tersimpan.")
                 st.success(f"✅ Model training completed and saved as version {version}!")
 
                 # ── Persist anomaly subgraph to session_state for visualization ──
@@ -955,8 +1028,8 @@ def show_training_page():
                 
                 # We can remove the temp json
                 import os
-                if os.path.exists("cache/training_status.json"):
-                    os.remove("cache/training_status.json")
+                if os.path.exists(training_status_path):
+                    os.remove(training_status_path)
                     
                 # Clean up session state for UI flow
                 st.session_state.pop('current_training_detector', None)
@@ -964,15 +1037,16 @@ def show_training_page():
             elif status.get("status") == "error":
                 st.session_state['training_in_progress'] = False
                 st.error(f"❌ Error saat training: {status.get('message')}")
+                if os.path.exists(training_status_path):
+                    os.remove(training_status_path)
             else:
                 # Still running
                 time.sleep(2)
                 st.rerun()
                 
-        except Exception as e:
-            # File might not be created yet, retry
-            time.sleep(2)
-            st.rerun()
+        except (OSError, json.JSONDecodeError) as e:
+            st.session_state["training_in_progress"] = False
+            st.error(f"Gagal membaca status job training: {e}")
 
     if st.session_state.get('model_trained', False) and not st.session_state.get('training_in_progress', False):
         # We only show the download buttons and summary if it's completely done
@@ -1439,4 +1513,3 @@ def show_training_page():
             with col2:
                 if st.button("🔍 Lanjut ke Deteksi Anomali", key="proceed_to_detection", type="primary"):
                     navigate_to_page('detect')
-

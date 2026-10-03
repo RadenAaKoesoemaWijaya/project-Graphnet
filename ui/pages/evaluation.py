@@ -78,26 +78,24 @@ def show_evaluation_page():
         test_size = st.slider("Ukuran Test Set (%)", min_value=10, max_value=40, value=20, step=5)
         if st.button("🔄 Split Data untuk Evaluasi", key="split_eval_data"):
             try:
-                stratify_data = None
-                if training_mode == TRAINING_MODE_SUPERVISED and label_column in df_processed.columns:
-                    label_series = pd.Series(df_processed[label_column]).fillna(0)
-                    if label_series.nunique() == 2:
-                        stratify_data = label_series
-
-                train_df, test_df = train_test_split(
+                train_df, validation_df, test_df, stratify_label = split_processed_dataset_with_validation(
                     df_processed,
                     test_size=test_size / 100,
-                    random_state=42,
-                    stratify=stratify_data
                 )
                 st.session_state['train_df'] = train_df
+                st.session_state['validation_df'] = validation_df
                 st.session_state['test_df'] = test_df
-                st.success(f"✅ Data evaluasi siap: Data latih ({len(train_df)}), data uji ({len(test_df)})")
+                st.success(
+                    f"✅ Data terbagi: latih ({len(train_df)}), validasi "
+                    f"({len(validation_df)}), test ({len(test_df)}); "
+                    f"stratifikasi: {stratify_label or 'tidak tersedia'}"
+                )
             except Exception as e:
                 st.error(f"❌ Gagal membagi data evaluasi: {str(e)}")
                 st.info("💡 Tips: Pastikan dataset memiliki cukup data dan label valid untuk stratified split.")
                 # Clear invalid state
                 st.session_state.pop('train_df', None)
+                st.session_state.pop('validation_df', None)
                 st.session_state.pop('test_df', None)
 
     if 'test_df' not in st.session_state:
@@ -136,11 +134,31 @@ def show_evaluation_page():
         st.session_state['eval_threshold'] = eval_threshold
     with threshold_col2:
         st.metric("Threshold Aktif", f"{eval_threshold:.2f}")
-        if st.button("🧠 Auto-Optimasi (ImbalanceHandler)", key="optimize_thr_btn", disabled=(training_mode != TRAINING_MODE_SUPERVISED or label_column not in eval_df.columns)):
+        validation_df = st.session_state.get("validation_df")
+        validation_available = isinstance(validation_df, pd.DataFrame) and not validation_df.empty
+        if not validation_available:
+            st.warning(
+                "Threshold tuning tidak tersedia: dataset validasi independen tidak ditemukan. "
+                "Latih ulang model dengan pembagian train/validation/test."
+            )
+        if st.button(
+            "🧠 Auto-Optimasi (ImbalanceHandler)",
+            key="optimize_thr_btn",
+            disabled=(
+                training_mode != TRAINING_MODE_SUPERVISED
+                or label_column not in eval_df.columns
+                or not validation_available
+            ),
+        ):
             try:
                 if hasattr(detector, 'imbalance_handler') and detector.imbalance_handler is not None:
-                    _X_temp = X_eval_df.values
-                    _y_temp = pd.Series(eval_df[label_column]).fillna(0).astype(int).values
+                    X_validation, _ = build_aligned_inference_features(
+                        validation_df, training_features
+                    )
+                    _X_temp = X_validation.values
+                    _y_temp = pd.Series(validation_df[label_column]).fillna(0).astype(int).values
+                    if len(np.unique(_y_temp)) != 2:
+                        raise ValueError("Data validasi harus memiliki kedua kelas label.")
                     _prob_temp, _ = detector.predict_anomaly_probability(_X_temp, edge_index=None, edge_type=None, device=device)
                     best_thr, _ = detector.imbalance_handler.optimize_threshold(_y_temp, _prob_temp)
                     st.session_state['eval_threshold'] = float(best_thr)
@@ -570,4 +588,3 @@ def show_evaluation_page():
     with col2:
         if st.button("🧠 Kembali ke Training", key="eval_to_training"):
             navigate_to_page('train')
-

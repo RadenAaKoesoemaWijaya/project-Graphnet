@@ -15,12 +15,20 @@ def ensure_cache_dir():
 
 def get_file_hash(file_or_name, file_size=None, sample_size=4096):
     """
-    Generate a stable hash for cache lookup.
-    Uses file metadata plus small head/tail samples to avoid false cache hits
-    from different files that happen to share the same name and size.
+    Generate a content-addressed SHA-256 cache key for an uploaded file.
     """
     if hasattr(file_or_name, 'read') and hasattr(file_or_name, 'seek'):
         uploaded_file = file_or_name
+        upload_id = getattr(uploaded_file, "file_id", None)
+        cache_key = f"_astina_upload_digest_{upload_id}" if upload_id else None
+        if cache_key:
+            try:
+                cached_digest = st.session_state.get(cache_key)
+                if cached_digest:
+                    return cached_digest
+            except Exception:
+                pass
+
         current_pos = 0
 
         try:
@@ -29,29 +37,41 @@ def get_file_hash(file_or_name, file_size=None, sample_size=4096):
             current_pos = 0
 
         try:
+            digest = hashlib.sha256()
             uploaded_file.seek(0)
-            head = uploaded_file.read(sample_size) or b''
-
-            tail = b''
-            total_size = getattr(uploaded_file, 'size', file_size) or 0
-            if total_size > sample_size:
-                uploaded_file.seek(max(total_size - sample_size, 0))
-                tail = uploaded_file.read(sample_size) or b''
-
+            while True:
+                block = uploaded_file.read(8 * 1024 * 1024)
+                if not block:
+                    break
+                digest.update(block if isinstance(block, bytes) else bytes(block))
             uploaded_file.seek(current_pos)
+            result = digest.hexdigest()
         except Exception:
-            head = b''
-            tail = b''
+            try:
+                uploaded_file.seek(current_pos)
+            except Exception:
+                pass
+            raise
 
-        digest = hashlib.md5()
-        digest.update(str(getattr(uploaded_file, 'name', '')).encode('utf-8', errors='ignore'))
-        digest.update(str(total_size).encode('utf-8'))
-        digest.update(head if isinstance(head, (bytes, bytearray)) else bytes(head))
-        digest.update(tail if isinstance(tail, (bytes, bytearray)) else bytes(tail))
-        return digest.hexdigest()
+        if cache_key:
+            try:
+                st.session_state[cache_key] = result
+            except Exception:
+                pass
+        return result
 
     hash_str = f"{file_or_name}_{file_size}"
-    return hashlib.md5(hash_str.encode()).hexdigest()
+    return hashlib.sha256(hash_str.encode()).hexdigest()
+
+
+def get_dataframe_hash(dataframe):
+    """Return a content hash that distinguishes frames with the same shape."""
+    digest = hashlib.sha256()
+    digest.update(repr(tuple(dataframe.columns)).encode("utf-8"))
+    digest.update(repr(tuple(str(dtype) for dtype in dataframe.dtypes)).encode("utf-8"))
+    row_hashes = pd.util.hash_pandas_object(dataframe, index=False, categorize=True)
+    digest.update(row_hashes.to_numpy(dtype="uint64", copy=False).tobytes())
+    return digest.hexdigest()
 
 def save_to_cache(df, file_hash, final_features, metadata):
     """Save processed dataframe and its metadata to disk"""

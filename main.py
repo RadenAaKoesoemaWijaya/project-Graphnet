@@ -45,9 +45,16 @@ from ui.pages.detection import show_detection_page
 from ui.pages.status import show_status_page
 from ui.pages.settings import show_settings_page
 
-from auth_manager import AuthManager
+from auth_manager import AuthManager, validate_production_auth_configuration
 
 def main():
+    try:
+        validate_production_auth_configuration()
+    except RuntimeError as exc:
+        logger.critical("%s", exc)
+        st.error(str(exc))
+        st.stop()
+
     # Initialize session state
     if 'page' not in st.session_state:
         st.session_state['page'] = 'home'

@@ -31,6 +31,31 @@ _DEV_DEFAULT_PASSWORDS: Dict[str, str] = {
 }
 
 
+def validate_production_auth_configuration() -> None:
+    """Fail closed when a production deployment lacks mandatory authentication."""
+    environment = os.getenv(
+        "ASTINA_ENVIRONMENT",
+        os.getenv("ENVIRONMENT", "development"),
+    ).strip().lower()
+    if environment not in {"production", "prod"}:
+        return
+
+    if not AuthManager.is_auth_enforced():
+        raise RuntimeError(
+            "Deployment produksi ditolak: AUTH_ENABLED harus bernilai true."
+        )
+
+    missing = [
+        env_key for env_key in _AUTH_PASSWORD_ENV_MAP.values()
+        if len(os.getenv(env_key, "").strip()) < 12
+    ]
+    if missing:
+        raise RuntimeError(
+            "Deployment produksi ditolak: kredensial minimum 12 karakter belum "
+            f"dikonfigurasi untuk: {', '.join(missing)}."
+        )
+
+
 def _build_default_users() -> Dict[str, Dict[str, Any]]:
     """
     Build DEFAULT_USERS at import-time from environment variables.

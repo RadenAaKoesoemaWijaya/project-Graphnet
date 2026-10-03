@@ -162,6 +162,24 @@ gcloud services enable cloudbuild.googleapis.com
 gcloud services enable storage.googleapis.com
 ```
 
+Production deployments require `AUTH_ENABLED=true`, `ASTINA_ENVIRONMENT=production`,
+and four Secret Manager entries: `astina-admin-password`,
+`astina-auditor-password`, `astina-analyst-password`, and
+`astina-viewer-password`. Each password must be at least 12 characters. Grant
+the Cloud Run runtime service account `roles/secretmanager.secretAccessor` on
+those secrets. The Cloud Build deployer must also be allowed to configure the
+secret references.
+
+Create each secret from a protected local file (do not put secret values in
+shell history or repository files):
+
+```bash
+gcloud secrets create astina-admin-password --data-file=admin-password.txt
+gcloud secrets create astina-auditor-password --data-file=auditor-password.txt
+gcloud secrets create astina-analyst-password --data-file=analyst-password.txt
+gcloud secrets create astina-viewer-password --data-file=viewer-password.txt
+```
+
 #### Automated Deployment (Bash, WSL, or Git Bash)
 ```powershell
 # Navigate to project directory
@@ -227,7 +245,8 @@ gcloud run deploy $SERVICE_NAME \
     --timeout 3600 \
     --no-allow-unauthenticated \
     --max-request-body-size 3Gi \
-    --set-env-vars="GOOGLE_CLOUD_BUCKET=astina-models-$PROJECT_ID,ASTINA_LOG_FORMAT=json,STREAMLIT_SERVER_MAX_UPLOAD_SIZE=3072,LLM_PROVIDER=heuristic,LLM_MODEL_NAME=gemini-1.5-flash,AUTH_ENABLED=false" \
+    --set-env-vars="GOOGLE_CLOUD_BUCKET=astina-models-$PROJECT_ID,ASTINA_LOG_FORMAT=json,STREAMLIT_SERVER_MAX_UPLOAD_SIZE=3072,LLM_PROVIDER=heuristic,LLM_MODEL_NAME=gemini-1.5-flash,AUTH_ENABLED=true,ASTINA_ENVIRONMENT=production" \
+    --set-secrets="ASTINA_ADMIN_PASSWORD=astina-admin-password:latest,ASTINA_AUDITOR_PASSWORD=astina-auditor-password:latest,ASTINA_ANALYST_PASSWORD=astina-analyst-password:latest,ASTINA_VIEWER_PASSWORD=astina-viewer-password:latest" \
     --min-instances 1 \
     --max-instances 5 \
     --project=$PROJECT_ID
@@ -275,16 +294,13 @@ ASTINA_LOG_FORMAT=json
 STREAMLIT_SERVER_MAX_UPLOAD_SIZE=3072
 LLM_PROVIDER=heuristic
 LLM_MODEL_NAME=gemini-1.5-flash
-AUTH_ENABLED=false
+AUTH_ENABLED=true
+ASTINA_ENVIRONMENT=production
 ```
 
-Optional variables for production:
-```bash
-GEMINI_API_KEY=your-production-api-key
-OPENAI_API_KEY=your-production-api-key
-AUTH_ENABLED=true
-ASTINA_ADMIN_PASSWORD=secure-admin-password
-```
+Optional API keys must also be mounted from Secret Manager. Never pass
+passwords or API keys through `--set-env-vars`. The service fails startup when
+the production authentication configuration or any required credential is absent.
 
 #### Cloud Run Monitoring
 
@@ -307,54 +323,7 @@ gcloud run services describe astina --region=us-central1 --project=PROJECT_ID --
 ```
 
 **Health Checks:**
-Cloud Run automatically checks the health endpoint:
-- Health check: `/_stcore/health`
-- Interval: 30 seconds
-- Timeout: 10 seconds
-- Retries: 3
-
----
-
-## 🔧 Post-Deployment Configuration
-
-### 1. Authentication Setup (Production)
-
-**Enable Authentication:**
-```bash
-# In Cloud Run deployment
-gcloud run services update astina \
-    --region=us-central1 \
-    --project=PROJECT_ID \
-    --set-env-vars="AUTH_ENABLED=true"
-```
-
-**Set Secure Passwords:**
-```bash
-# Update with secure passwords
-gcloud run services update astina \
-    --region=us-central1 \
-    --project=PROJECT_ID \
-    --set-env-vars="ASTINA_ADMIN_PASSWORD=SecurePass123!,ASTINA_AUDITOR_PASSWORD=SecurePass123!,ASTINA_ANALYST_PASSWORD=SecurePass123!,ASTINA_VIEWER_PASSWORD=SecurePass123!"
-```
-
-**Configure Secret Manager (Recommended):**
-```bash
-# Create secrets
-echo "your-api-key" | gcloud secrets create gemini-api-key --project=PROJECT_ID
-echo "your-password" | gcloud secrets create admin-password --project=PROJECT_ID
-
-# Grant access
-gcloud secrets add-iam-policy-binding gemini-api-key \
-    --member="serviceAccount:PROJECT_NUMBER-compute@developer.gserviceaccount.com" \
-    --role="roles/secretmanager.secretAccessor" \
-    --project=PROJECT_ID
-
-# Update service to use secrets
-gcloud run services update astina \
-    --region=us-central1 \
-    --project=PROJECT_ID \
-    --set-secrets="GEMINI_API_KEY=gemini-api-key:latest,ASTINA_ADMIN_PASSWORD=admin-password:latest"
-```
+Cloud Run automatically checks `/_stcore/health` every 30 seconds.
 
 ### 2. LLM Configuration (Production)
 

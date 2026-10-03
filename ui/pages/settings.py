@@ -323,6 +323,10 @@ def show_settings_page():
                                     if loaded_det:
                                         st.success(f"✅ Berhasil memuat model: {selected_version}")
                                         st.session_state['model_trained'] = True
+                                        st.session_state['model_version'] = selected_version
+                                        st.session_state.pop('detection_results', None)
+                                        st.session_state.pop('detection_executed', None)
+                                        st.session_state.pop('detection_result_signature', None)
                                     else:
                                         st.error("❌ Model korup atau tidak lengkap.")
                                 else:

@@ -13,6 +13,7 @@ from provider_capacity_validator import ProviderCapacityValidator
 from repeat_billing_detector import RepeatBillingDetector
 from claim_status_validator import ClaimStatusValidator
 from medication_device_fraud_rules import detect_medication_and_device_fraud
+from state_manager import split_processed_dataset_with_validation
 
 
 def test_normalize_claims_dataframe_empty():
@@ -87,6 +88,54 @@ def test_run_integrated_claim_risk_pipeline_without_ml_model():
     assert "final_risk_flag" in result.columns
     assert "risk_category" in result.columns
     assert summary["total_claims"] == 2
+
+
+def test_final_risk_score_includes_ml_and_uses_configured_threshold():
+    df = pd.DataFrame([
+        {
+            "claim_id": "ML-ONLY",
+            "patient_id": "P-ML",
+            "provider_id": "PR-ML",
+            "service_code": "CONS001",
+            "amount": 100.0,
+            "billing_date": "2026-01-10",
+            "service_date": "2026-01-10",
+        }
+    ])
+    result, summary = run_integrated_claim_risk_pipeline(
+        df,
+        ml_scores=np.array([0.9]),
+        risk_threshold=0.85,
+    )
+    assert result.loc[0, "ml_anomaly_score"] == pytest.approx(0.9)
+    assert result.loc[0, "final_risk_score"] == pytest.approx(0.9)
+    assert result.loc[0, "final_risk_score"] >= 0.85
+    assert result.loc[0, "final_risk_flag"] == 1
+    assert summary["final_high_risk_claims"] == 1
+
+
+def test_risk_pipeline_rejects_ml_score_shape_and_threshold_mismatch():
+    df = pd.DataFrame([{"claim_id": "C1", "amount": 100.0}])
+    with pytest.raises(ValueError, match="Jumlah skor ML"):
+        run_integrated_claim_risk_pipeline(df, ml_scores=[0.1, 0.2])
+    with pytest.raises(ValueError, match="risk_threshold"):
+        run_integrated_claim_risk_pipeline(df, risk_threshold=1.1)
+
+
+def test_train_validation_test_split_is_deterministic_and_disjoint():
+    frame = pd.DataFrame({
+        "claim_id": [f"C{i}" for i in range(100)],
+        "fraud_label": [i % 2 for i in range(100)],
+    })
+    first = split_processed_dataset_with_validation(frame)
+    second = split_processed_dataset_with_validation(frame)
+    train_df, validation_df, test_df, label = first
+    assert label == "fraud_label"
+    assert len(train_df) + len(validation_df) + len(test_df) == len(frame)
+    assert set(train_df.index).isdisjoint(validation_df.index)
+    assert set(train_df.index).isdisjoint(test_df.index)
+    assert set(validation_df.index).isdisjoint(test_df.index)
+    assert train_df.index.tolist() == second[0].index.tolist()
 
 
 def test_pipeline_result_is_independent_of_chunk_size():
