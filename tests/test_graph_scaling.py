@@ -39,7 +39,7 @@ def test_star_graph_resets_index_and_enforces_edge_limit():
 # ── Tests for build_anomaly_subgraph ─────────────────────────────────────────
 
 import pytest
-from model import build_anomaly_subgraph, TORCH_AVAILABLE
+from model import CombinedAnomalyDetector, build_anomaly_subgraph, TORCH_AVAILABLE
 
 # Import real torch only when available (TORCH_AVAILABLE is set by model.py after
 # trying to import the genuine package). Otherwise the sys.modules entry is the
@@ -139,6 +139,89 @@ def test_build_anomaly_subgraph_with_edge_type():
     sub_ei = result['sub_edge_index']
     assert sub_et is not None, "sub_edge_type must be set when edge_type supplied"
     assert sub_et.shape[0] == sub_ei.shape[1], "edge_type len must match edge count"
+
+
+def test_build_anomaly_subgraph_limits_edges_and_keeps_claim_labels():
+    node_features, ei, scores = _make_star_graph(60)
+    labels = [f"Claim ID: CLM-{node_id:03}" for node_id in range(60)]
+    edge_types = np.arange(ei.shape[1], dtype=np.int64) % 3
+
+    result = build_anomaly_subgraph(
+        node_features=node_features,
+        edge_index=ei,
+        gnn_scores=scores,
+        node_labels=labels,
+        edge_type=edge_types,
+        top_k_anomalies=10,
+        max_viz_nodes=30,
+        max_viz_edges=12,
+    )
+
+    assert len(result['node_labels']) == len(result['sub_node_ids'])
+    assert all(label.startswith("Claim ID: CLM-") for label in result['node_labels'])
+    assert result['n_candidate_edges'] >= result['n_visualized_edges']
+    assert result['n_visualized_edges'] <= 12
+    assert result['sub_edge_type'].shape[0] == result['n_visualized_edges']
+
+
+def test_build_anomaly_subgraph_empty_edge_budget_keeps_seed_nodes():
+    node_features, ei, scores = _make_star_graph(40)
+
+    result = build_anomaly_subgraph(
+        node_features=node_features,
+        edge_index=ei,
+        gnn_scores=scores,
+        top_k_anomalies=5,
+        max_viz_edges=0,
+    )
+
+    assert result['sub_edge_index'].shape == (2, 0)
+    assert result['n_visualized_edges'] == 0
+    assert len(result['sub_node_ids']) > 0
+
+
+def test_anomaly_subgraph_survives_model_save_and_reload(tmp_path, monkeypatch):
+    import json
+
+    monkeypatch.setenv("ASTINA_ENVIRONMENT", "development")
+    monkeypatch.delenv("GOOGLE_CLOUD_BUCKET", raising=False)
+    detector = CombinedAnomalyDetector(
+        algorithms=["isolation_forest"],
+        use_dynamic_weights=False,
+    )
+    detector.gnn_anomaly_subgraph = {
+        "sub_node_ids": [4, 9],
+        "node_labels": ["Claim ID: CLM-004", "Claim ID: CLM-009"],
+        "sub_edge_index": np.array([[0], [1]], dtype=np.int64),
+        "sub_edge_type": None,
+        "sub_scores": np.array([0.9, 0.8]),
+        "is_seed": np.array([True, False]),
+        "n_total_nodes": 10,
+        "n_total_edges": 2,
+        "n_candidate_edges": 1,
+        "n_visualized_edges": 1,
+        "top_k_used": 1,
+        "performance": {"score_seconds": 0.25, "subgraph_seconds": 0.01},
+    }
+
+    prefix = str(tmp_path / "fraud_detector")
+    detector.save_models(prefix, training_metadata={"training_features": ["amount"]})
+
+    with open(f"{prefix}_params.json", encoding="utf-8") as params_file:
+        saved_params = json.load(params_file)
+    restored = CombinedAnomalyDetector(
+        algorithms=["isolation_forest"],
+        use_dynamic_weights=False,
+    )
+    restored.load_models(prefix, num_features=1)
+
+    assert saved_params["gnn_anomaly_subgraph"]["node_labels"] == [
+        "Claim ID: CLM-004",
+        "Claim ID: CLM-009",
+    ]
+    assert restored.gnn_anomaly_subgraph["sub_node_ids"] == [4, 9]
+    assert restored.gnn_anomaly_subgraph["sub_edge_index"].tolist() == [[0], [1]]
+    assert restored.gnn_anomaly_subgraph["performance"]["score_seconds"] == 0.25
 
 
 def test_build_anomaly_subgraph_torch_tensor_input():

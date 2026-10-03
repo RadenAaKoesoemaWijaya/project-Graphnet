@@ -569,6 +569,8 @@ def load_persisted_detector():
         )
 
         st.session_state['detector'] = detector
+        if detector.gnn_anomaly_subgraph is not None:
+            st.session_state['gnn_anomaly_subgraph'] = detector.gnn_anomaly_subgraph
         st.session_state['model_trained'] = True
         st.session_state['training_features'] = training_features
         st.session_state['feature_selection_method'] = training_metadata.get(

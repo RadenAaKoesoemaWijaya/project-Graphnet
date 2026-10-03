@@ -780,7 +780,9 @@ def show_training_page():
             st.session_state.pop('graph_node_count', None)
             st.session_state.pop('graph_edge_count', None)
             st.session_state.pop('graph_node_features', None)
+            st.session_state.pop('graph_identity_column', None)
             st.session_state.pop('gnn_anomaly_subgraph', None)
+            graph_node_identifiers = None
             
             # Build graph for GNN if selected
             if "GNN" in algo_options and training_mode == TRAINING_MODE_UNSUPERVISED:
@@ -807,6 +809,17 @@ def show_training_page():
                                 st.session_state['edge_type'] = edge_type
                             else:
                                 node_features, edge_index = graph_result
+
+                            identity_column = next(
+                                (
+                                    column for column in ("claim_id", "_astina_row_id")
+                                    if column in train_df.columns
+                                ),
+                                None,
+                            )
+                            if identity_column:
+                                graph_node_identifiers = train_df[identity_column].reset_index(drop=True)
+                            st.session_state['graph_identity_column'] = identity_column
                                 
                             st.session_state['edge_index'] = edge_index
                             # Persist node_features so the visualization block can
@@ -952,6 +965,7 @@ def show_training_page():
             def train_worker(
                 detector_obj, X, e_idx, e_type, y, dev, mode,
                 opt_ensemble, opt_hyper, status_path, model_metadata,
+                node_identifiers, identity_column,
             ):
                 try:
                     _write_training_status(
@@ -972,6 +986,21 @@ def show_training_page():
                             optimize_hyperparams=opt_hyper,
                             optimize_ensemble_weights=opt_ensemble,
                         )
+                        subgraph = getattr(detector_obj, 'gnn_anomaly_subgraph', None)
+                        if subgraph is not None and node_identifiers is not None:
+                            subgraph['node_labels'] = [
+                                (
+                                    f"Graph node {node_id}"
+                                    if node_id >= len(node_identifiers)
+                                    or pd.isna(node_identifiers.iloc[node_id])
+                                    else (
+                                        f"Claim ID: {node_identifiers.iloc[node_id]}"
+                                        if identity_column == "claim_id"
+                                        else f"Row ID: {node_identifiers.iloc[node_id]}"
+                                    )
+                                )
+                                for node_id in subgraph['sub_node_ids']
+                            ]
                         detector_obj.save_models(MODEL_PREFIX, training_metadata=model_metadata)
                         version = save_model_version(MODEL_PREFIX)
                     _write_training_status(
@@ -1000,7 +1029,9 @@ def show_training_page():
                       enable_optuna_ensemble_weights,
                       enable_hyperparameter_tuning,
                       training_status_path,
-                      training_metadata)
+                      training_metadata,
+                      graph_node_identifiers,
+                      identity_column if graph_node_identifiers is not None else None)
             )
             t.start()
             
@@ -1229,11 +1260,16 @@ def show_training_page():
                     st.subheader("🕸️ Visualisasi Jaringan Anomali GNN")
 
                     try:
+                        import time
                         import networkx as nx
                         import plotly.graph_objects as go
 
+                        visualization_started = time.perf_counter()
                         # ── Unpack pre-computed subgraph ──────────────────────
                         sub_node_ids  = _sub['sub_node_ids']      # list[int] ID asli
+                        sub_node_labels = _sub.get('node_labels') or [
+                            f"Graph node {node_id}" for node_id in sub_node_ids
+                        ]
                         sub_ei        = _sub['sub_edge_index']     # np (2, E_sub) ID baru
                         sub_et        = _sub['sub_edge_type']      # np (E_sub,) atau None
                         sub_scores    = _sub['sub_scores']         # np (N_sub,) skor GNN
@@ -1249,15 +1285,21 @@ def show_training_page():
                         mc2.metric("Total Edge (Dataset)", f"{n_total_edges:,}")
                         mc3.metric("Node Anomali Seed", f"{int(is_seed.sum())}")
                         mc4.metric("Node Divisualisasikan", f"{n_sub}")
+                        st.caption(
+                            "Edge visualisasi: "
+                            f"{_sub.get('n_visualized_edges', sub_ei.shape[1]):,} dari "
+                            f"{_sub.get('n_candidate_edges', sub_ei.shape[1]):,} edge kandidat "
+                            "(maksimum 5.000 untuk menjaga respons UI)."
+                        )
 
                         # ── Optional: user controls how many seeds to show ─────
                         with st.expander("⚙️ Pengaturan Visualisasi", expanded=False):
                             viz_top_k = st.slider(
                                 "Jumlah node anomali teratas (seed)",
-                                min_value=5,
-                                max_value=min(200, n_sub),
-                                value=min(50, n_sub),
-                                step=5,
+                                min_value=1,
+                                max_value=max(1, min(200, n_sub)),
+                                value=max(1, min(50, n_sub)),
+                                step=1,
                                 key="gnn_viz_top_k_slider",
                                 help="Hanya tampilkan N node dengan skor anomali GNN tertinggi beserta tetangga 1-hop-nya.",
                             )
@@ -1331,15 +1373,17 @@ def show_training_page():
                                 viz_et = None
 
                             # ── Layout ─────────────────────────────────────────
-                            # kamada_kawai gives better cluster separation than
-                            # spring for small anomaly-focused graphs (< 300 nodes)
+                            # Kamada-Kawai is reserved for small graphs; spring
+                            # layout is cheaper for the larger visualization cap.
                             try:
-                                if n_viz <= 150:
+                                if n_viz <= 60:
                                     pos = nx.kamada_kawai_layout(G_viz)
                                 else:
-                                    pos = nx.spring_layout(G_viz, seed=42, k=0.5)
+                                    pos = nx.spring_layout(
+                                        G_viz, seed=42, k=0.5, iterations=30
+                                    )
                             except Exception:
-                                pos = nx.spring_layout(G_viz, seed=42)
+                                pos = nx.spring_layout(G_viz, seed=42, iterations=30)
 
                             # ── Edge traces (heterogeneous relation colours) ───
                             relation_colors = {
@@ -1389,11 +1433,14 @@ def show_training_page():
                                       for i in range(n_viz) if mask[i]]
                                 orig_ids = [sub_node_ids[keep_list[i]]
                                             for i in range(n_viz) if mask[i]]
+                                claim_labels = [sub_node_labels[keep_list[i]]
+                                                for i in range(n_viz) if mask[i]]
                                 hover = [
-                                    f"Node asli: {oid}<br>"
+                                    f"{claim_label}<br>"
+                                    f"ID node graf: {oid}<br>"
                                     f"GNN Score: {sc:.3f}<br>"
                                     f"Tipe: {name_label}"
-                                    for oid, sc in zip(orig_ids, cv)
+                                    for claim_label, oid, sc in zip(claim_labels, orig_ids, cv)
                                 ]
                                 return go.Scatter(
                                     x=xv, y=yv,
@@ -1466,6 +1513,17 @@ def show_training_page():
                                 )
                             )
                             st.plotly_chart(fig, width='stretch')
+                            performance = _sub.get('performance', {})
+                            score_seconds = performance.get('score_seconds')
+                            subgraph_seconds = performance.get('subgraph_seconds')
+                            timing_parts = [
+                                f"visualisasi UI {time.perf_counter() - visualization_started:.2f} dtk"
+                            ]
+                            if score_seconds is not None:
+                                timing_parts.append(f"scoring GNN {score_seconds:.2f} dtk")
+                            if subgraph_seconds is not None:
+                                timing_parts.append(f"seleksi subgraf {subgraph_seconds:.2f} dtk")
+                            st.caption("Waktu jalur visualisasi: " + " · ".join(timing_parts))
 
                             # ── Insight summary below chart ────────────────────
                             pct_anomaly = float(is_seed_viz.sum()) / max(n_viz, 1) * 100

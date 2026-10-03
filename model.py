@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import time
 
 try:
     import torch
@@ -2518,6 +2519,7 @@ class CombinedAnomalyDetector:
         self.imputer = SimpleImputer(strategy='median')  # Impute missing values with median
         self.scaler = StandardScaler()
         self.training_metadata = {}
+        self.gnn_anomaly_subgraph = None
 
         # QW3: rank-normalize per-algorithm scores before weighted sum
         # (default True; can be disabled by setting ``rank_ensemble=False``).
@@ -3988,9 +3990,12 @@ class CombinedAnomalyDetector:
         self.gnn_anomaly_subgraph = None
         try:
             self.gnn_model.eval()
+            score_started = time.perf_counter()
             with torch.no_grad():
                 out_full = self.gnn_model(x, edge_index_tensor, batch_tensor, edge_attr_device)
                 gnn_scores_full = torch.softmax(out_full, dim=1)[:, 1].cpu().numpy()
+            score_seconds = time.perf_counter() - score_started
+            subgraph_started = time.perf_counter()
             self.gnn_anomaly_subgraph = build_anomaly_subgraph(
                 node_features=node_features,
                 edge_index=edge_index_tensor,
@@ -3999,8 +4004,13 @@ class CombinedAnomalyDetector:
                 top_k_anomalies=50,
                 hop=1,
                 max_viz_nodes=300,
+                max_viz_edges=5000,
                 anomaly_threshold=0.5,
             )
+            self.gnn_anomaly_subgraph['performance'] = {
+                'score_seconds': score_seconds,
+                'subgraph_seconds': time.perf_counter() - subgraph_started,
+            }
             logger.info(
                 "GNN anomaly subgraph built: %d nodes, %d edges (from %d total nodes, %d total edges)",
                 len(self.gnn_anomaly_subgraph['sub_node_ids']),
@@ -4554,6 +4564,7 @@ class CombinedAnomalyDetector:
             'dbscan_params': self.dbscan_params,
             'algorithms': self.algorithms,
             'training_metadata': self.training_metadata,
+            'gnn_anomaly_subgraph': self.gnn_anomaly_subgraph,
             'gnn_architecture': {
                 'num_layers': self.gnn_params.get('num_layers', 1),
                 'dropout': self.gnn_params.get('dropout', 0.2),
@@ -4622,6 +4633,21 @@ class CombinedAnomalyDetector:
         self.dbscan_params = params.get('dbscan_params', {})
         self.algorithms = params.get('algorithms', ['isolation_forest', 'autoencoder', 'xgboost'])
         self.training_metadata = params.get('training_metadata', {})
+        self.gnn_anomaly_subgraph = params.get('gnn_anomaly_subgraph')
+        if self.gnn_anomaly_subgraph is not None:
+            self.gnn_anomaly_subgraph['sub_edge_index'] = np.asarray(
+                self.gnn_anomaly_subgraph['sub_edge_index'], dtype=np.int64
+            )
+            self.gnn_anomaly_subgraph['sub_scores'] = np.asarray(
+                self.gnn_anomaly_subgraph['sub_scores'], dtype=np.float64
+            )
+            self.gnn_anomaly_subgraph['is_seed'] = np.asarray(
+                self.gnn_anomaly_subgraph['is_seed'], dtype=bool
+            )
+            if self.gnn_anomaly_subgraph.get('sub_edge_type') is not None:
+                self.gnn_anomaly_subgraph['sub_edge_type'] = np.asarray(
+                    self.gnn_anomaly_subgraph['sub_edge_type'], dtype=np.int64
+                )
 
         # Load Isolation Forest
         self.isolation_forest = joblib.load(f"{path_prefix}_isolation_forest.pkl")
@@ -4934,6 +4960,8 @@ def build_anomaly_subgraph(
     hop: int = 1,
     max_viz_nodes: int = 300,
     anomaly_threshold: float = 0.5,
+    max_viz_edges: int = 5000,
+    node_labels=None,
 ) -> dict:
     """Bangun subgraph kecil yang terfokus pada node paling mencurigai.
 
@@ -5040,6 +5068,22 @@ def build_anomaly_subgraph(
     both_in_sub = np.isin(src, list(sub_node_set)) & np.isin(dst, list(sub_node_set))
     sub_src_orig = src[both_in_sub]
     sub_dst_orig = dst[both_in_sub]
+    sub_et = et_np[both_in_sub].astype(np.int64) if et_np is not None else None
+    n_candidate_edges = len(sub_src_orig)
+    edge_limit = max(0, int(max_viz_edges))
+    if n_candidate_edges > edge_limit:
+        if edge_limit == 0:
+            selected_edges = np.empty(0, dtype=np.int64)
+        else:
+            endpoint_scores = np.maximum(scores[sub_src_orig], scores[sub_dst_orig])
+            seed_incident = np.isin(sub_src_orig, seed_array) | np.isin(sub_dst_orig, seed_array)
+            priority = endpoint_scores + seed_incident.astype(np.float64) * 2.0
+            selected_edges = np.argpartition(priority, -edge_limit)[-edge_limit:]
+            selected_edges.sort()
+        sub_src_orig = sub_src_orig[selected_edges]
+        sub_dst_orig = sub_dst_orig[selected_edges]
+        if sub_et is not None:
+            sub_et = sub_et[selected_edges]
 
     # Remap menggunakan vectorized lookup
     remap_keys = np.array(list(node_remap.keys()), dtype=np.int64)
@@ -5058,23 +5102,25 @@ def build_anomaly_subgraph(
     sub_dst = _remap_vec(sub_dst_orig)
     sub_edge_index = np.stack([sub_src, sub_dst], axis=0)  # (2, E_sub)
 
-    # Remap edge_type jika tersedia
-    sub_et = None
-    if et_np is not None:
-        sub_et = et_np[both_in_sub].astype(np.int64)
-
     # ── Kumpulkan hasil ───────────────────────────────────────────────────────
     sub_scores = scores[sub_node_ids]
     is_seed = np.array([n in seed_nodes for n in sub_node_ids], dtype=bool)
+    if node_labels is not None and len(node_labels) == n_total_nodes:
+        sub_node_labels = [str(node_labels[node_id]) for node_id in sub_node_ids]
+    else:
+        sub_node_labels = [f"Graph node {node_id}" for node_id in sub_node_ids]
 
     return {
         'sub_node_ids': sub_node_ids,          # ID asli
+        'node_labels': sub_node_labels,        # safe, bounded display labels
         'sub_edge_index': sub_edge_index,       # (2, E_sub) dalam ID baru
         'sub_edge_type': sub_et,                # (E_sub,) atau None
         'sub_scores': sub_scores,               # skor GNN tiap node subgraph
         'is_seed': is_seed,                     # mask node seed anomali
         'n_total_nodes': n_total_nodes,
         'n_total_edges': n_total_edges,
+        'n_candidate_edges': n_candidate_edges,
+        'n_visualized_edges': int(sub_edge_index.shape[1]),
         'top_k_used': len(seed_nodes),
     }
 
