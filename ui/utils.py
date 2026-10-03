@@ -466,7 +466,10 @@ def make_json_serializable(obj):
     else:
         return obj
 
-MODEL_PREFIX = "models/fraud_detector"
+MODEL_PREFIX = os.path.join(
+    os.environ.get("MODELS_DIR") or "models",
+    "fraud_detector",
+)
 
 def zip_model_artifacts():
     """Zip all model artifacts into a single file for sharing.
@@ -498,7 +501,21 @@ def zip_model_artifacts():
     return zip_buffer
 
 def persisted_model_artifacts_exist():
-    """Check whether a persisted detector can be loaded from disk."""
+    """Check local storage and hydrate any persisted artifacts from GCS."""
+    import cloud_storage
+
+    model_dir = os.path.dirname(MODEL_PREFIX)
+    artifact_names = [
+        f"{os.path.basename(MODEL_PREFIX)}_params.json",
+        f"{os.path.basename(MODEL_PREFIX)}_scaler.pkl",
+        f"{os.path.basename(MODEL_PREFIX)}_isolation_forest.pkl",
+        f"{os.path.basename(MODEL_PREFIX)}_autoencoder.pt",
+        f"{os.path.basename(MODEL_PREFIX)}_xgboost.pkl",
+        f"{os.path.basename(MODEL_PREFIX)}_dbscan.pkl",
+        f"{os.path.basename(MODEL_PREFIX)}_gnn.pt",
+    ]
+    cloud_storage.ensure_artefacts_loaded(model_dir, artifact_names)
+
     required_files = [
         f"{MODEL_PREFIX}_params.json",
         f"{MODEL_PREFIX}_scaler.pkl"

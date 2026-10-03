@@ -10,16 +10,16 @@ when two environment variables are present:
 * ``GOOGLE_CLOUD_BUCKET_PREFIX`` — optional key prefix, defaults to
   ``models``. Useful for separating dev/staging/prod paths.
 
-If either variable is missing the adapter becomes a no-op and all
-operations stay local. The adapter is also robust to ``google-cloud-
-storage`` not being installed at runtime — it logs a single warning and
-falls back to local-only.
+Outside production, a missing bucket keeps operations local. Production
+requires a working bucket and fails startup or model persistence explicitly
+when GCS is unavailable.
 """
 import io
 import logging
 import os
 import shutil
 import tempfile
+import uuid
 from typing import Iterable, List, Optional
 from concurrent.futures import ThreadPoolExecutor
 
@@ -59,6 +59,40 @@ def is_enabled() -> bool:
     return bool(_bucket_name()) and _gcs_available()
 
 
+def validate_production_storage_configuration() -> None:
+    """Fail startup if production cannot use its configured durable model store."""
+    environment = os.getenv(
+        "ASTINA_ENVIRONMENT",
+        os.getenv("ENVIRONMENT", "development"),
+    ).strip().lower()
+    if environment not in {"production", "prod"}:
+        return
+
+    bucket_name = _bucket_name()
+    if not bucket_name:
+        raise RuntimeError(
+            "Deployment produksi ditolak: GOOGLE_CLOUD_BUCKET wajib dikonfigurasi."
+        )
+    if not _gcs_available():
+        raise RuntimeError(
+            "Deployment produksi ditolak: dependency google-cloud-storage tidak tersedia."
+        )
+
+    try:
+        probe = _client().bucket(bucket_name).blob(
+            f"{_prefix()}/.healthchecks/{uuid.uuid4().hex}"
+        )
+        probe.upload_from_string(b"")
+        probe.delete()
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        raise RuntimeError(
+            "Deployment produksi tidak dapat mengakses bucket GCS "
+            f"'{bucket_name}': {exc}"
+        ) from exc
+
+
 def _client():
     """Return an authenticated GCS client (uses ADC on Cloud Run)."""
     import google.cloud.storage as gcs
@@ -88,6 +122,10 @@ def upload_files(local_paths: Iterable[str], destination_prefix: Optional[str] =
             return 1
         except Exception as e:
             logger.warning("GCS upload failed for %s: %s", local, e)
+            if os.getenv("ASTINA_ENVIRONMENT", "").strip().lower() in {"production", "prod"}:
+                raise RuntimeError(
+                    f"GCS model artefact upload failed for {os.path.basename(local)}."
+                ) from e
             return 0
     
     # Use parallel uploads for multiple files
@@ -129,14 +167,25 @@ def download_files(names: Iterable[str], local_dir: str,
             paths.append(local)
         except Exception as e:
             logger.warning("GCS download failed for %s: %s", key, e)
+            if os.getenv("ASTINA_ENVIRONMENT", "").strip().lower() in {"production", "prod"}:
+                raise RuntimeError(
+                    f"GCS model artefact download failed for {os.path.basename(name)}."
+                ) from e
     return paths
 
 
 def sync_artefacts_after_save(local_paths: Iterable[str]) -> None:
     """Convenience hook: upload after a successful local save."""
     if not is_enabled():
+        if os.getenv("ASTINA_ENVIRONMENT", "").strip().lower() in {"production", "prod"}:
+            raise RuntimeError("Model persistence is unavailable in production.")
         return
-    upload_files(local_paths)
+    expected = [path for path in local_paths if path and os.path.isfile(path)]
+    uploaded = upload_files(expected)
+    if uploaded != len(expected):
+        raise RuntimeError(
+            f"Persistensi model tidak lengkap: {uploaded}/{len(expected)} artefak tersimpan di GCS."
+        )
 
 
 def ensure_artefacts_loaded(local_dir: str, basenames: Iterable[str]) -> None:
@@ -191,4 +240,3 @@ def generate_signed_upload_url(blob_name: str, expiration_minutes: int = 30) -> 
     except Exception as e:
         logger.warning("Failed to generate GCS signed upload URL: %s", e)
         return None
-

@@ -75,16 +75,16 @@ python run.py
 #### Build and Run with Docker Compose
 ```bash
 # Build and start container
-docker-compose up --build -d
+docker compose up --build -d
 
 # View logs
-docker-compose logs -f
+docker compose logs -f
 
 # Stop container
-docker-compose down
+docker compose down
 
 # Rebuild after code changes
-docker-compose up --build -d
+docker compose up --build -d
 ```
 
 #### Environment Configuration
@@ -93,6 +93,8 @@ Create `.env` file in project root:
 # Server Configuration
 PORT=8501
 STREAMLIT_SERVER_MAX_UPLOAD_SIZE=3072
+ASTINA_CONTAINER_MEMORY_LIMIT=8g
+ASTINA_CONTAINER_CPUS=4
 
 # LLM Configuration (Optional)
 LLM_PROVIDER=heuristic
@@ -101,6 +103,13 @@ GEMINI_API_KEY=your-api-key-here
 # Authentication
 AUTH_ENABLED=false
 ```
+
+The Compose defaults are for local development only. For a production-like
+Docker Desktop run, set `ASTINA_ENVIRONMENT=production`, `AUTH_ENABLED=true`,
+four unique passwords of at least 12 characters, `GOOGLE_CLOUD_BUCKET`, and
+`GOOGLE_CLOUD_BUCKET_PREFIX` in the untracked `.env` file. Production startup
+fails if the model bucket is missing or inaccessible. Do not publish port 8501
+to an untrusted network without authentication.
 
 #### Volume Persistence
 Docker Compose automatically mounts:
@@ -115,7 +124,7 @@ These directories persist across container restarts.
 **Issue: Container fails to start**
 ```bash
 # Check container logs
-docker-compose logs astina-app
+docker compose logs graphnet-app
 
 # Check if port 8501 is already in use
 netstat -ano | findstr :8501  # Windows
@@ -127,10 +136,8 @@ ports:
 ```
 
 **Issue: Permission errors on cache/models directories**
-```bash
-# Fix directory permissions
-chmod -R 777 cache models logs
-```
+Ensure the project directories are writable by Docker Desktop and check the
+container logs; avoid broad `chmod 777` permissions.
 
 **Issue: Out of memory errors**
 ```bash
@@ -170,6 +177,36 @@ the Cloud Run runtime service account `roles/secretmanager.secretAccessor` on
 those secrets. The Cloud Build deployer must also be allowed to configure the
 secret references.
 
+Cloud Run is configured for **30 MiB maximum app upload**, below the platform
+request-size ceiling to leave room for multipart overhead. The Docker Desktop
+profile can accept larger files, but Cloud Run cannot receive multi-GB files
+through the Streamlit upload request. Large Cloud Run datasets need a
+resumable direct-to-GCS upload and a separate processing workflow; the current
+signed-URL helper is not yet connected to the UI (see [Cloud Run quotas](https://cloud.google.com/run/quotas)).
+Cloud Run's `/tmp` is
+ephemeral and memory-backed, so it is not durable dataset storage.
+
+Create a dedicated runtime identity, and grant it access only to the model
+bucket and required secrets:
+
+```bash
+gcloud iam service-accounts create astina-runtime --project=YOUR_PROJECT_ID
+gcloud storage buckets add-iam-policy-binding gs://YOUR_MODEL_BUCKET \
+  --member="serviceAccount:astina-runtime@YOUR_PROJECT_ID.iam.gserviceaccount.com" \
+  --role="roles/storage.objectAdmin"
+for secret in astina-admin-password astina-auditor-password astina-analyst-password astina-viewer-password; do
+  gcloud secrets add-iam-policy-binding "$secret" \
+    --project=YOUR_PROJECT_ID \
+    --member="serviceAccount:astina-runtime@YOUR_PROJECT_ID.iam.gserviceaccount.com" \
+    --role="roles/secretmanager.secretAccessor"
+done
+```
+
+The Cloud Build identity must be able to read the bucket/secrets for preflight,
+push to Artifact Registry, deploy Cloud Run, and attach the runtime service
+account. Grant the required roles to the identity configured on the Cloud
+Build trigger rather than granting broad project roles to the runtime account.
+
 Create each secret from a protected local file (do not put secret values in
 shell history or repository files):
 
@@ -185,18 +222,19 @@ gcloud secrets create astina-viewer-password --data-file=viewer-password.txt
 # Navigate to project directory
 cd C:\project-Graphnet
 
-# Run deployment script: PROJECT_ID REGION SERVICE GCS_BUCKET
-./deploy.sh YOUR_PROJECT_ID asia-southeast2 astina astina-models-YOUR_PROJECT_ID
+# Run deployment script: PROJECT_ID REGION SERVICE GCS_BUCKET [RUNTIME_SERVICE_ACCOUNT]
+./deploy.sh YOUR_PROJECT_ID asia-southeast2 astina astina-models-YOUR_PROJECT_ID \
+  astina-runtime@YOUR_PROJECT_ID.iam.gserviceaccount.com
 
 # Defaults: region asia-southeast2, service astina, repository astina-images.
-# The fourth argument is optional; omit it when model persistence is not needed.
+# The bucket, runtime service account, and four password secrets are required.
 ```
 
 Windows PowerShell can submit the same Cloud Build directly:
 
 ```powershell
 gcloud builds submit --config=cloudbuild.yaml `
-    --substitutions="_REGION=asia-southeast2,_SERVICE=astina,_GCS_BUCKET=astina-models-YOUR_PROJECT_ID"
+    --substitutions="_REGION=asia-southeast2,_SERVICE=astina,_GCS_BUCKET=astina-models-YOUR_PROJECT_ID,_RUNTIME_SERVICE_ACCOUNT=astina-runtime@YOUR_PROJECT_ID.iam.gserviceaccount.com"
 ```
 
 #### Manual Deployment Steps
@@ -206,8 +244,11 @@ gcloud builds submit --config=cloudbuild.yaml `
 # Create bucket
 gsutil mb -p YOUR_PROJECT_ID gs://astina-models-YOUR_PROJECT_ID
 
-# Set bucket permissions
-gsutil iam ch serviceAccount:PROJECT_NUMBER-compute@developer.gserviceaccount.com:objectAdmin gs://astina-models-YOUR_PROJECT_ID
+# Create a dedicated runtime service account and grant bucket access.
+gcloud iam service-accounts create astina-runtime --project=YOUR_PROJECT_ID
+gcloud storage buckets add-iam-policy-binding gs://astina-models-YOUR_PROJECT_ID \
+  --member="serviceAccount:astina-runtime@YOUR_PROJECT_ID.iam.gserviceaccount.com" \
+  --role="roles/storage.objectAdmin"
 ```
 
 **2. Build and Push Docker Image**
@@ -229,13 +270,18 @@ docker build -t $REGION-docker.pkg.dev/$PROJECT_ID/$REPO_NAME/$SERVICE_NAME:late
 
 # Push image
 docker push $REGION-docker.pkg.dev/$PROJECT_ID/$REPO_NAME/$SERVICE_NAME:latest
+
+# Resolve its digest and deploy by digest.
+IMAGE_DIGEST=$(gcloud artifacts docker images describe \
+  $REGION-docker.pkg.dev/$PROJECT_ID/$REPO_NAME/$SERVICE_NAME:latest \
+  --format="value(image_summary.digest)" --project=$PROJECT_ID)
 ```
 
 **3. Deploy to Cloud Run**
 ```bash
 # Deploy service
 gcloud run deploy $SERVICE_NAME \
-    --image $REGION-docker.pkg.dev/$PROJECT_ID/$REPO_NAME/$SERVICE_NAME:latest \
+    --image $REGION-docker.pkg.dev/$PROJECT_ID/$REPO_NAME/$SERVICE_NAME@$IMAGE_DIGEST \
     --platform managed \
     --region $REGION \
     --memory 16Gi \
@@ -244,11 +290,11 @@ gcloud run deploy $SERVICE_NAME \
     --concurrency 1 \
     --timeout 3600 \
     --no-allow-unauthenticated \
-    --max-request-body-size 3Gi \
-    --set-env-vars="GOOGLE_CLOUD_BUCKET=astina-models-$PROJECT_ID,ASTINA_LOG_FORMAT=json,STREAMLIT_SERVER_MAX_UPLOAD_SIZE=3072,LLM_PROVIDER=heuristic,LLM_MODEL_NAME=gemini-1.5-flash,AUTH_ENABLED=true,ASTINA_ENVIRONMENT=production" \
+    --service-account="astina-runtime@$PROJECT_ID.iam.gserviceaccount.com" \
+    --set-env-vars="GOOGLE_CLOUD_BUCKET=astina-models-$PROJECT_ID,GOOGLE_CLOUD_BUCKET_PREFIX=production/models,MODELS_DIR=/tmp/astina_models,CACHE_DIR=/tmp/astina_cache,TEMP_DATA_DIR=/tmp/astina_temp_data,ASTINA_LOG_FORMAT=json,STREAMLIT_SERVER_MAX_UPLOAD_SIZE=30,STREAMLIT_SERVER_MAX_MESSAGE_SIZE=32,AUTH_ENABLED=true,ASTINA_ENVIRONMENT=production" \
     --set-secrets="ASTINA_ADMIN_PASSWORD=astina-admin-password:latest,ASTINA_AUDITOR_PASSWORD=astina-auditor-password:latest,ASTINA_ANALYST_PASSWORD=astina-analyst-password:latest,ASTINA_VIEWER_PASSWORD=astina-viewer-password:latest" \
     --min-instances 1 \
-    --max-instances 5 \
+    --max-instances 1 \
     --project=$PROJECT_ID
 ```
 
@@ -278,8 +324,12 @@ gcloud run services add-iam-policy-binding $SERVICE_NAME \
 
 **Scaling Settings:**
 - Min instances: 1 (always available)
-- Max instances: 5 (auto-scaling)
+- Max instances: 1 (safe default while training coordination is process-local)
 - Concurrency: 1 (per instance)
+
+Do not raise the instance cap until training locks and job state are coordinated
+across instances; each instance otherwise has independent in-memory state and
+can overwrite the shared model artifacts in GCS.
 
 **Timeout Configuration:**
 - Default: 3600 seconds (60 minutes)
@@ -290,8 +340,12 @@ gcloud run services add-iam-policy-binding $SERVICE_NAME \
 Essential environment variables for Cloud Run:
 ```bash
 GOOGLE_CLOUD_BUCKET=astina-models-PROJECT_ID
+GOOGLE_CLOUD_BUCKET_PREFIX=production/models
 ASTINA_LOG_FORMAT=json
-STREAMLIT_SERVER_MAX_UPLOAD_SIZE=3072
+MODELS_DIR=/tmp/astina_models
+CACHE_DIR=/tmp/astina_cache
+TEMP_DATA_DIR=/tmp/astina_temp_data
+STREAMLIT_SERVER_MAX_UPLOAD_SIZE=30
 LLM_PROVIDER=heuristic
 LLM_MODEL_NAME=gemini-1.5-flash
 AUTH_ENABLED=true
@@ -324,6 +378,15 @@ gcloud run services describe astina --region=us-central1 --project=PROJECT_ID --
 
 **Health Checks:**
 Cloud Run automatically checks `/_stcore/health` every 30 seconds.
+
+**Rollback:** deploys retain prior revisions. If the new revision is unhealthy,
+route traffic back to the previous ready revision:
+
+```bash
+gcloud run services update-traffic astina \
+  --region=asia-southeast2 --project=PROJECT_ID \
+  --to-revisions=PREVIOUS_READY_REVISION=100
+```
 
 ### 2. LLM Configuration (Production)
 
@@ -757,8 +820,8 @@ gcloud run deploy astina \
 # Local Development
 python run.py
 
-# Docker Local
-docker-compose up --build -d
+# Docker Desktop
+docker compose up --build -d
 
 # Cloud Run Deploy (Bash/WSL/Git Bash)
 ./deploy.sh YOUR_PROJECT_ID asia-southeast2 astina GCS_BUCKET

@@ -1,5 +1,7 @@
 # Cloud Run configuration for ASTINA
-# Deploy with: gcloud run deploy astina --source . --config .cloudrun/app.yaml
+# Reference configuration only. Replace all PROJECT_ID / bucket / service
+# account placeholders before deploying; Cloud Build (cloudbuild.yaml) is the
+# recommended deployment path and deploys by image digest.
 #
 # NOTE: Replace REGION, PROJECT_ID, and REPOSITORY with actual values before use.
 # Defaults match the cloudbuild.yaml substitutions:
@@ -17,12 +19,12 @@ spec:
     metadata:
       annotations:
         autoscaling.knative.dev/min-scale: "1"
-        autoscaling.knative.dev/max-scale: "5"
+        autoscaling.knative.dev/max-scale: "1"
     spec:
       containers:
         # Use Artifact Registry (not deprecated gcr.io).
         # Replace REGION / PROJECT_ID / REPOSITORY with actual values.
-      - image: REGION-docker.pkg.dev/PROJECT_ID/REPOSITORY/astina:latest
+      - image: REGION-docker.pkg.dev/PROJECT_ID/REPOSITORY/astina:IMAGE_DIGEST
         ports:
         - containerPort: 8501
         env:
@@ -69,15 +71,21 @@ spec:
         - name: STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION
           value: "true"
         - name: STREAMLIT_SERVER_MAX_UPLOAD_SIZE
-          value: "3072"
+          value: "30"
         - name: STREAMLIT_SERVER_MAX_MESSAGE_SIZE
-          value: "3072"
+          value: "32"
         - name: TEMP_DATA_DIR
           value: "/tmp/astina_temp_data"
+        - name: CACHE_DIR
+          value: "/tmp/astina_cache"
+        - name: MODELS_DIR
+          value: "/tmp/astina_models"
         - name: ASTINA_LOG_FORMAT
           value: "json"
         - name: GOOGLE_CLOUD_BUCKET
-          value: "astina-models-PROJECT_ID"
+          value: "REQUIRED_GCS_BUCKET"
+        - name: GOOGLE_CLOUD_BUCKET_PREFIX
+          value: "production/models"
         - name: POLARS_SKIP_CPU_CHECK
           value: "1"
         - name: OPTUNA_N_JOBS
@@ -97,4 +105,4 @@ spec:
           timeoutSeconds: 10
           failureThreshold: 3
       timeoutSeconds: 3600
-      serviceAccountName: default
+      serviceAccountName: astina-runtime@PROJECT_ID.iam.gserviceaccount.com

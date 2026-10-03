@@ -1,19 +1,19 @@
 # =============================================================================
 # Google Cloud Build configuration for ASTINA
 # -----------------------------------------------------------------------------
-# This file builds the container image and (optionally) deploys it to
-# Cloud Run in a single step.
+# This file validates prerequisites, builds the image, and deploys it to Cloud Run.
 #
 # Triggered manually:
 #   gcloud builds submit --config=cloudbuild.yaml \
-#       --substitutions=_REGION=asia-southeast2,_SERVICE=astina
+#       --substitutions=_REGION=asia-southeast2,_SERVICE=astina,
+#       _GCS_BUCKET=MODEL_BUCKET,_RUNTIME_SERVICE_ACCOUNT=astina-runtime@PROJECT.iam.gserviceaccount.com
 #
 # Connected to a GitHub trigger:
 #   When Cloud Build is connected to the repository, a push to the main
 #   branch will execute this file automatically.
 #
 # R6: --no-allow-unauthenticated by default (require IAM auth).
-# R7: --min-instances=1 by default, --max-request-body-size=3GiB.
+# Cloud Run upload limits are intentionally conservative; large files must use GCS.
 # R8: Cloud Logging only; JSON-formatted logs from the app.
 # =============================================================================
 
@@ -32,9 +32,11 @@ substitutions:
   _TIMEOUT: "3600s"
   # R7: keep one warm instance to avoid 20-60s cold starts on first request.
   _MIN_INSTANCES: "1"
-  _MAX_INSTANCES: "5"
-  # R7: cap request body at 3GiB so the Streamlit upload limit actually works.
-  _MAX_REQUEST_BODY_SIZE: "3Gi"
+  # Training/model state is process-local; do not scale out until distributed
+  # training coordination is implemented.
+  _MAX_INSTANCES: "1"
+  # Cloud Run requests must stay below the platform's request-size limit.
+  _MAX_UPLOAD_SIZE_MB: "30"
   # R6: keep the service private. Users must be granted
   # ``roles/run.invoker`` explicitly (or front it with IAP / a load
   # balancer). Override with --substitutions=_ALLOW_UNAUTH=true for
@@ -42,18 +44,35 @@ substitutions:
   _ALLOW_UNAUTH: "false"
   # SECURITY: Always enforce authentication in production
   _AUTH_ENABLED: "true"
-  # R4: optional GCS bucket for persistent model artefacts. When set
-  # ``cloud_storage`` mirrors uploads/downloads automatically.
-  # IMPORTANT: Set this to your GCS bucket name for production to persist
-  # models across Cloud Run instance restarts. Example: "my-astina-models-bucket"
+  # Required for production model persistence.
   _GCS_BUCKET: ""
+  _GCS_PREFIX: "production/models"
+  # Required: a dedicated runtime identity with Secret Accessor and bucket access.
+  _RUNTIME_SERVICE_ACCOUNT: ""
 
 steps:
+  # Validate all durable-storage and identity prerequisites before building.
+  - id: validate-deployment
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        test -n "${_GCS_BUCKET}" || { echo "ERROR: _GCS_BUCKET is required."; exit 1; }
+        test -n "${_RUNTIME_SERVICE_ACCOUNT}" || { echo "ERROR: _RUNTIME_SERVICE_ACCOUNT is required."; exit 1; }
+        gcloud storage buckets describe "gs://${_GCS_BUCKET}" --project="${PROJECT_ID}" >/dev/null
+        gcloud iam service-accounts describe "${_RUNTIME_SERVICE_ACCOUNT}" --project="${PROJECT_ID}" >/dev/null
+        for secret in astina-admin-password astina-auditor-password astina-analyst-password astina-viewer-password; do
+          gcloud secrets describe "$${secret}" --project="${PROJECT_ID}" >/dev/null
+        done
+
   # ---------------------------------------------------------------------------
   # 1. Build the container image with Cloud Build's Docker support.
   # ---------------------------------------------------------------------------
   - id: build
     name: gcr.io/cloud-builders/docker
+    waitFor: ["validate-deployment"]
     args:
       - build
       - --tag=${_AR_HOST}/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE}:${SHORT_SHA}
@@ -63,7 +82,7 @@ steps:
       - "."
 
   # ---------------------------------------------------------------------------
-  # 2. Push both tags (immutable SHA + rolling "latest") to Artifact Registry.
+  # 2. Push a commit tag for traceability and a rolling "latest" tag.
   # ---------------------------------------------------------------------------
   - id: push
     name: gcr.io/cloud-builders/docker
@@ -81,30 +100,33 @@ steps:
   - id: deploy
     name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
     waitFor: ["push"]
-    entrypoint: gcloud
+    entrypoint: bash
     args:
-      - run
-      - deploy
-      - ${_SERVICE}
-      - --image=${_AR_HOST}/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE}:${SHORT_SHA}
-      - --region=${_REGION}
-      - --platform=managed
-      - --memory=${_MEMORY}
-      - --cpu=${_CPU}
-      - --concurrency=${_CONCURRENCY}
-      - --timeout=${_TIMEOUT}
-      - --min-instances=${_MIN_INSTANCES}
-      - --max-instances=${_MAX_INSTANCES}
-      - --port=8501
-      # R7: allow uploads up to 3GiB on the Cloud Run side.
-      - --max-request-body-size=${_MAX_REQUEST_BODY_SIZE}
-      # R6: deny anonymous traffic by default. Override per environment.
-      - --allow-unauthenticated=${_ALLOW_UNAUTH}
-      # R3: structured (JSON) logs are picked up by Cloud Logging.
-      # R4: optional GCS bucket for model persistence.
-      # SECURITY: Enforce authentication in production
-      - --set-env-vars=POLARS_SKIP_CPU_CHECK=1,STREAMLIT_SERVER_MAX_UPLOAD_SIZE=3072,STREAMLIT_SERVER_MAX_MESSAGE_SIZE=3072,TEMP_DATA_DIR=/tmp/astina_temp_data,ASTINA_LOG_FORMAT=json,CACHE_DIR=/tmp/astina_cache,MODELS_DIR=/tmp/astina_models,GOOGLE_CLOUD_BUCKET=${_GCS_BUCKET},AUTH_ENABLED=${_AUTH_ENABLED},ASTINA_ENVIRONMENT=production
-      - --set-secrets=ASTINA_ADMIN_PASSWORD=astina-admin-password:latest,ASTINA_AUDITOR_PASSWORD=astina-auditor-password:latest,ASTINA_ANALYST_PASSWORD=astina-analyst-password:latest,ASTINA_VIEWER_PASSWORD=astina-viewer-password:latest
+      - -c
+      - |
+        set -euo pipefail
+        image="${_AR_HOST}/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE}:${SHORT_SHA}"
+        digest="$(gcloud artifacts docker images describe "$${image}" --format='value(image_summary.digest)' --project="${PROJECT_ID}")"
+        test -n "$${digest}" || { echo "ERROR: Could not resolve pushed image digest."; exit 1; }
+        auth_flag=(--no-allow-unauthenticated)
+        if [[ "${_ALLOW_UNAUTH}" == "true" ]]; then
+          auth_flag=(--allow-unauthenticated)
+        fi
+        gcloud run deploy "${_SERVICE}" \
+          --image="${_AR_HOST}/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE}@$${digest}" \
+          --region="${_REGION}" \
+          --platform=managed \
+          --memory="${_MEMORY}" \
+          --cpu="${_CPU}" \
+          --concurrency="${_CONCURRENCY}" \
+          --timeout="${_TIMEOUT}" \
+          --min-instances="${_MIN_INSTANCES}" \
+          --max-instances="${_MAX_INSTANCES}" \
+          --port=8501 \
+          "$${auth_flag[@]}" \
+          --service-account="${_RUNTIME_SERVICE_ACCOUNT}" \
+          --set-env-vars="POLARS_SKIP_CPU_CHECK=1,STREAMLIT_SERVER_MAX_UPLOAD_SIZE=${_MAX_UPLOAD_SIZE_MB},STREAMLIT_SERVER_MAX_MESSAGE_SIZE=32,TEMP_DATA_DIR=/tmp/astina_temp_data,CACHE_DIR=/tmp/astina_cache,MODELS_DIR=/tmp/astina_models,ASTINA_LOG_FORMAT=json,GOOGLE_CLOUD_BUCKET=${_GCS_BUCKET},GOOGLE_CLOUD_BUCKET_PREFIX=${_GCS_PREFIX},AUTH_ENABLED=${_AUTH_ENABLED},ASTINA_ENVIRONMENT=production" \
+          --set-secrets="ASTINA_ADMIN_PASSWORD=astina-admin-password:latest,ASTINA_AUDITOR_PASSWORD=astina-auditor-password:latest,ASTINA_ANALYST_PASSWORD=astina-analyst-password:latest,ASTINA_VIEWER_PASSWORD=astina-viewer-password:latest"
 
 # Store the built image so it can be inspected later.
 images:

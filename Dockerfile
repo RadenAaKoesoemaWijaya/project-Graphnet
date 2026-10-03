@@ -91,4 +91,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
     CMD sh -c "curl --fail http://localhost:${PORT:-8501}/_stcore/health || exit 1"
 
 # Streamlit config supports Docker Desktop and Cloud Run through PORT.
-CMD ["sh", "-c", "streamlit run main.py --server.port=${PORT:-8501} --server.address=0.0.0.0 --server.headless=true --server.enableCORS=true --server.enableXsrfProtection=true --server.fileWatcherType=none --browser.gatherUsageStats=false --server.maxUploadSize=3072 --server.maxMessageSize=3072"]
+CMD ["sh", "-c", "streamlit run main.py --server.port=${PORT:-8501} --server.address=0.0.0.0 --server.headless=true --server.enableCORS=true --server.enableXsrfProtection=true --server.fileWatcherType=none --browser.gatherUsageStats=false"]

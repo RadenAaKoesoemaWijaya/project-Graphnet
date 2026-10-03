@@ -50,6 +50,8 @@ from auth_manager import AuthManager, validate_production_auth_configuration
 def main():
     try:
         validate_production_auth_configuration()
+        import cloud_storage
+        cloud_storage.validate_production_storage_configuration()
     except RuntimeError as exc:
         logger.critical("%s", exc)
         st.error(str(exc))

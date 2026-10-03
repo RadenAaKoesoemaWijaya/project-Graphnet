@@ -256,18 +256,18 @@ Aplikasi dilengkapi **Multi-stage Dockerfile** dan **Docker Compose** yang mengi
 1. **Jalankan build dan container**:
    ```bash
    mkdir -p tmp-data
-   docker-compose up --build -d
+   docker compose up --build -d
    ```
 2. **Periksa status container & log real-time**:
    ```bash
-   docker-compose ps
-   docker-compose logs -f
+   docker compose ps
+   docker compose logs -f
    ```
 3. **Buka aplikasi**:
    Akses [http://localhost:8501](http://localhost:8501).
 4. **Menghentikan container**:
    ```bash
-   docker-compose down
+   docker compose down
    ```
 
 *Catatan: Direktori `./cache`, `./models`, dan `./logs` di-mount ke host. `./tmp-data` digunakan untuk temporary Parquet agar file besar tidak memenuhi container layer. Pastikan folder tersebut dibuat sebelum menjalankan Compose.*
@@ -286,20 +286,21 @@ ASTINA mendukung continuous serverless deployment ke Cloud Run via Artifact Regi
 - **Windows PowerShell tanpa wrapper Bash**:
    ```powershell
    gcloud builds submit --config=cloudbuild.yaml `
-         --substitutions="_REGION=asia-southeast2,_SERVICE=astina,_GCS_BUCKET=nama-bucket-anda"
+         --substitutions="_REGION=asia-southeast2,_SERVICE=astina,_GCS_BUCKET=nama-bucket-anda,_RUNTIME_SERVICE_ACCOUNT=astina-runtime@PROJECT_ID.iam.gserviceaccount.com"
    ```
 - **CI/CD via Cloud Build** (push ke main branch):
   ```bash
   gcloud builds submit --config=cloudbuild.yaml \
-      --substitutions=_REGION=asia-southeast2,_SERVICE=astina,_GCS_BUCKET=nama-bucket-anda
+      --substitutions=_REGION=asia-southeast2,_SERVICE=astina,_GCS_BUCKET=nama-bucket-anda,_RUNTIME_SERVICE_ACCOUNT=astina-runtime@PROJECT_ID.iam.gserviceaccount.com
   ```
 
 *Catatan penting deployment:*
-- *Cloud Run menggunakan memory 16 GiB, 4 CPU, concurrency 1, timeout 3600 detik, minimum 1 instance, dan maksimum 5 instance. Concurrency 1 dipilih karena ingestion dan preprocessing dataset menggunakan memory besar.*
-- *Batas upload aplikasi dan request Cloud Run adalah 3 GiB. Dataset besar tetap membutuhkan temporary disk yang memadai; upload CSV/Parquet lebih disarankan daripada Excel.*
-- *Upload Excel (`.xlsx`/`.xls`) dibatasi 100 MiB karena parser Excel menggunakan memory penuh. Untuk dataset lebih besar, konversi terlebih dahulu ke CSV atau Parquet.*
-- *Untuk persistensi model, tetapkan `_GCS_BUCKET` dan berikan service account minimal role `roles/storage.objectAdmin` pada bucket. Cache dan `/tmp` Cloud Run bersifat ephemeral.*
+- *Cloud Run default dibatasi satu instance (16 GiB, 4 CPU, concurrency 1) karena koordinasi training/model saat ini bersifat process-local. Scale-out sebaiknya diaktifkan setelah distributed training lock dan state bersama tersedia.*
+- *Docker Desktop menerima upload hingga 3 GiB secara default; Cloud Run dibatasi 30 MiB pada jalur upload aplikasi karena batas request platform. Upload multi-GB melalui Streamlit di Cloud Run tidak didukung; gunakan alur resumable direct-to-GCS yang terpisah.*
+- *Di Docker Desktop, upload Excel (`.xlsx`/`.xls`) dibatasi 100 MiB karena parser menggunakan memory penuh. Cloud Run tetap memiliki batas upload keseluruhan 30 MiB. Untuk dataset besar, gunakan CSV/Parquet dan alur transfer GCS.*
+- *Cloud Run mewajibkan bucket model GCS dan service account runtime khusus; persistensi model gagal secara eksplisit jika bucket tidak tersedia. Cache, `/tmp`, dan dataset sementara Cloud Run bersifat ephemeral.*
 - *Deployment default bersifat privat (`_ALLOW_UNAUTH=false`). Gunakan Secret Manager untuk API key dan password production; jangan menaruh secret di `cloudbuild.yaml` atau source control.*
+- *Cloud Build memvalidasi bucket, service account, dan empat secret password sebelum build; revision dideploy memakai image digest. Berikan Cloud Build IAM minimum untuk preflight, Artifact Registry, Cloud Run, dan impersonasi service account runtime.*
 - *Untuk setup security dan monitoring production lengkap, jalankan: `python scripts/setup_production_env.py`, `python scripts/setup_secrets_manager.py`, dan `python scripts/monitoring_setup.py` sebelum deployment.*
 - *Setelah deploy, verifikasi health endpoint dan URL service sebelum menerima traffic.*
 
@@ -703,9 +704,10 @@ Konfigurasi opsional dapat disetel melalui file `.env` di direktori utama:
 | Variabel | Default | Keterangan |
 | :--- | :--- | :--- |
 | `PORT` | `8501` | Port listen aplikasi Streamlit |
-| `STREAMLIT_SERVER_MAX_UPLOAD_SIZE` | `3072` | Batas maksimum upload dataset (MiB) |
+| `STREAMLIT_SERVER_MAX_UPLOAD_SIZE` | `3072` (Docker Desktop), `30` (Cloud Run) | Batas upload aplikasi dalam MiB; Cloud Run dibatasi untuk request HTTP |
 | `ASTINA_LOG_FORMAT` | `json` | Format logging (`json` / `text`) |
-| `GOOGLE_CLOUD_BUCKET` | *(Opsional)* | Nama GCS Bucket untuk sinkronisasi model & artefak |
+| `GOOGLE_CLOUD_BUCKET` | *(Opsional lokal; wajib production)* | Nama GCS bucket persisten untuk model |
+| `GOOGLE_CLOUD_BUCKET_PREFIX` | `models` | Prefix objek model untuk memisahkan lingkungan |
 | `OPTUNA_N_JOBS` | `4` | Jumlah thread paralel optimasi hyperparameter |
 | `CV_N_JOBS` | `4` | Jumlah thread paralel Cross Validation |
 | `AUDIT_TRAIL_LOG_PATH` | `logs/audit_trail.jsonl` | Lokasi berkas penyimpanan chained audit trail |
@@ -1197,10 +1199,10 @@ Hasil verifikasi memastikan:
 - **Error PyTorch / CUDA di Local**:
   Pastikan versi PyTorch sesuai dengan versi driver CUDA Anda. Untuk mode CPU murni, instalasi standar dari `requirements.txt` langsung siap digunakan.
 - **Docker Desktop permission / volume mount**:
-   Pastikan folder `cache/`, `models/`, `logs/`, dan `tmp-data/` ada di root project sebelum menjalankan `docker-compose up`. Jika belum ada, buat terlebih dahulu:
+   Pastikan folder `cache/`, `models/`, `logs/`, dan `tmp-data/` ada di root project sebelum menjalankan `docker compose up`. Jika belum ada, buat terlebih dahulu:
   ```powershell
    New-Item -ItemType Directory -Force cache, models, logs, tmp-data
-  docker-compose up --build -d
+  docker compose up --build -d
   ```
 - **GNN visualization tidak muncul / semua node berwarna seragam**:
   Subgraf anomali dibangun otomatis saat training selesai dan disimpan ke `session_state['gnn_anomaly_subgraph']`. Jika tidak muncul setelah training, latih ulang model — subgraf hanya tersedia dari sesi training aktif (tidak dari model yang dimuat dari disk).
