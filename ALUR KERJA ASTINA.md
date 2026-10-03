@@ -36,20 +36,21 @@ flowchart TD
     end
 
     subgraph PREPROCESSING["2. Preprocessing, Feature Engineering & Selection"]
-        F --> G[enhanced_missing_handling & Outlier Capping]
-        G --> H[Domain Feature Engineering payment_ratio, zscore, dll]
-        H --> I[Categorical Encoding Target/Frequency/One-Hot]
+        F --> SPL[Deterministic Train / Validation / Test Split on Raw Data]
+        SPL --> G[Fit imputasi, outlier, kategori & fitur pada Train]
+        G --> H[Transform semua partisi dengan statistik Train]
+        H --> I[Domain Features & Categorical Encoding]
         I --> J[Intelligent Feature Selection & Filtering]
         J --> K[SelectKBest / Tree Importance / Corr Filter / PCA]
-        K --> L[Simpan ke Parquet Cache & State Manager]
+        K --> L[Simpan partisi dan metadata fit ke Parquet]
     end
 
     subgraph TRAINING["3. Multi-Model Training Engine"]
-        L --> M[Train / Test Split Stratified]
-        M --> N[Smart Training Profiles Cepat / Seimbang / Lengkap / Kustom]
-        N --> O[ML Ensemble IF, Autoencoder, XGBoost]
-        N --> P[Graph Construction Star, Hetero, k-NN]
-        P --> Q[GNN Training GATConv + Mini-Batch NeighborLoader]
+        L --> N[Training memakai partisi yang sudah ditetapkan]
+        N --> O[Smart Training Profiles Cepat / Seimbang / Lengkap / Kustom]
+        O --> P[ML Ensemble IF, Autoencoder, XGBoost]
+        O --> GRA[Graph Construction Star, Hetero, k-NN]
+        GRA --> Q[GNN Training GATConv + Mini-Batch NeighborLoader]
         O --> R[Optuna Hyperparameter & Weight Tuning]
         Q --> R
         R --> S[Model Checkpoints & Model Registry]
@@ -76,7 +77,7 @@ flowchart TD
         Z --> AB[Explainable AI SHAP Summary & LIME Local]
         Z --> AC[Agentic AI Copilot & FAISS RAG Query]
         Z --> AD[Cryptographic Audit Trail SHA-256 Chaining]
-        S -. Sync .-> AE[Google Cloud Storage GCS]
+        S -. Persist model artefacts .-> AE[Google Cloud Storage GCS]
     end
 ```
 
@@ -103,7 +104,7 @@ flowchart TD
 | **State Manager** | `state_manager.py` | Manajemen transisi halaman, session state Streamlit, caching path |
 | **Cache Manager** | `cache_manager.py` | Multi-tier Parquet & session cache, eviction policy |
 | **Model Registry** | `model_registry.py` | Versi model, schema metadata, dynamic model loader |
-| **Cloud Storage** | `cloud_storage.py` | Sinkronisasi model dan checkpoint ke Google Cloud Storage (GCS) |
+| **Cloud Storage** | `cloud_storage.py` | Persistensi dan pemuatan model/checkpoint melalui Google Cloud Storage (GCS); wajib pada production Cloud Run |
 | **System Telemetry** | `system_status.py` | Monitoring utilisasi CPU, RAM, GPU/VRAM, dan hardware specs |
 || **Security Validator** | scripts/security_validator.py | Automated security validation sebelum deployment |
 || **Production Setup** | scripts/setup_production_env.py | Interactive production environment setup dengan secure passwords |
@@ -167,7 +168,7 @@ browser menutup koneksi WebSocket.
 - Menyediakan tombol aksi cepat menuju modul *Data Collection* atau *Detection*.
 
 ### 4.2 Data Collection & Preprocessing (`ui/pages/data_collection.py`)
-- **File Uploader Multi-Format**: Menerima `.csv`, `.xlsx`, `.xls`, dan `.parquet`. CSV/Parquet mengikuti batas upload 3 GiB; Excel dibatasi 100 MiB karena parser Excel menggunakan memory penuh.
+- **File Uploader Multi-Format**: Menerima `.csv`, `.xlsx`, `.xls`, dan `.parquet`. Docker Desktop secara default menerima upload hingga 3 GiB; Cloud Run membatasi upload Streamlit hingga 30 MiB karena batas request platform. Excel di Docker Desktop dibatasi 100 MiB karena parser menggunakan memory penuh; pada Cloud Run berlaku batas keseluruhan 30 MiB.
 - **Excel Ingestion Aman**: Upload Excel dibuffer ke temporary file satu kali, dibaca dengan `pandas.read_excel`, divalidasi agar tidak kosong, lalu dikonversi ke Parquet. Dataset Excel di atas 100 MiB diarahkan ke CSV/Parquet untuk mencegah OOM.
 - **Large Dataset Path**: CSV ditulis bertahap ke raw Parquet; preprocessing besar tetap memakai path Parquet dan Polars lazy. Preview serta chart menggunakan sample maksimum 5.000 baris.
 - **Deduplikasi Out-of-Core**: Opsi penghapusan duplikasi pada input Parquet menggunakan Polars lazy dan mempertahankan metadata jumlah baris yang dihapus.
@@ -183,8 +184,9 @@ browser menutup koneksi WebSocket.
 - **Exploratory Data Analysis (EDA)**: Distribusi nilai numerik, visualisasi *missing value*, dan analisis korelasi awal.
 - **Visualisasi Bounded**: Histogram, distribusi probabilitas, dan chart kategori tidak mengirim DataFrame besar langsung ke Plotly cache; visualisasi memakai sample deterministik, sedangkan angka agregat tetap dihitung dari seluruh dataset.
 - **Opsi Preprocessing Terpadu**:
-  - Split deterministik disimpan pada data mentah sebelum fit; statistik missing value, kategori, outlier, dan daftar fitur dihitung hanya dari partisi train lalu digunakan sama untuk validation/test.
+  - Split deterministik train/validation/test dilakukan pada data mentah **sebelum** preprocessing yang mempelajari statistik. Statistik missing value, kategori, outlier, dan daftar fitur dihitung hanya dari partisi train lalu digunakan tanpa refit pada validation/test.
   - Statistik fit disertakan pada metadata model dan digunakan kembali saat inference untuk menjaga transformasi tetap konsisten.
+  - Dataset lama tanpa kontrak train-only tidak digunakan untuk training/evaluasi; unggah ulang data mentah dan proses ulang untuk mencegah preprocessing leakage.
   - Deteksi dan capping outlier berbasis IQR.
   - Ekstraksi fitur tanggal (*day_of_week*, *month*, *quarter*).
   - Pembentukan rasio domain asuransi (*payment_ratio*, *allowance_ratio*, *zscore*, *high_amount_quick_submit*).
@@ -202,7 +204,7 @@ browser menutup koneksi WebSocket.
 - **Simpan & Downstream State**: Menulis DataFrame hasil ke file Parquet terkompresi Zstandard dan memperbarui `state_manager.py`.
 
 ### 4.3 Training Model (`ui/pages/training.py`)
-- **Data Splitting**: Memakai partisi train/validation/test yang telah ditetapkan dari data mentah sebelum preprocessing. Dataset lama tanpa kontrak ini harus diproses ulang sebelum training.
+- **Data Splitting**: Memakai partisi train/validation/test yang telah ditetapkan dari data mentah sebelum preprocessing. Training tidak melakukan split ulang. Dataset lama tanpa kontrak ini harus diproses ulang sebelum training.
 - **Visualisasi Anomaly-Focused Subgraph (Post-Training)**: Setelah training GNN selesai, sistem secara otomatis membangun subgraf terfokus anomali menggunakan fungsi `build_anomaly_subgraph()` (`model.py`) — **model di-score satu kali selagi masih warm**, hasilnya disimpan ke `st.session_state['gnn_anomaly_subgraph']`. UI tidak perlu memanggil ulang inferensi penuh saat render. Subgraf yang ditampilkan terdiri dari:
   - **Top-K node seed anomali** — klaim dengan skor GNN tertinggi (default 50, dapat diatur via slider 5–200).
   - **Tetangga 1-hop** dari node seed — memperlihatkan koneksi langsung (faskes / pasien / diagnosis yang sama), visualisasi sindikat kolusi.
@@ -715,7 +717,7 @@ Tab ini menyediakan monitoring dan konfigurasi parameter sistem:
 - **Memory Configuration**:
   - Memory limit (default: 4GB)
   - Chunk size untuk processing
-  - Max file size untuk upload (default: 3GB)
+  - Batas upload default Docker Desktop: 3 GiB; Cloud Run: 30 MiB (lihat §12.3)
 
 - **System Information**:
   - Platform OS dan version
@@ -938,22 +940,32 @@ python run.py
 ### 12.2 Docker Desktop
 ```bash
 # Build dan jalankan container dengan Docker Compose
-docker-compose up --build -d
+docker compose up --build -d
 
 # Pantau status dan log
-docker-compose ps
-docker-compose logs -f
+docker compose ps
+docker compose logs -f
 ```
+
+Konfigurasi Compose membatasi resource secara default (8 GiB RAM, 4 CPU), menyediakan health check, dan menyimpan cache, model, log, serta file sementara melalui volume. Nilai resource dan batas upload dapat disesuaikan melalui environment. Konfigurasi default ditujukan untuk development lokal (`AUTH_ENABLED=false`); sebelum mengekspos service ke jaringan yang tidak dipercaya, aktifkan autentikasi dan set empat password unik minimal 12 karakter melalui `.env` yang tidak di-commit.
 
 ### 12.3 Google Cloud Run Serverless
 ```powershell
 # Deploy otomatis melalui Bash, WSL, atau Git Bash
-./deploy.sh PROJECT_ID asia-southeast2 astina GCS_BUCKET
+./deploy.sh PROJECT_ID asia-southeast2 astina GCS_BUCKET astina-runtime@PROJECT_ID.iam.gserviceaccount.com
 
 # Alternatif PowerShell langsung melalui Cloud Build
 gcloud builds submit --config=cloudbuild.yaml `
-  --substitutions="_REGION=asia-southeast2,_SERVICE=astina,_GCS_BUCKET=GCS_BUCKET"
+  --substitutions="_REGION=asia-southeast2,_SERVICE=astina,_GCS_BUCKET=GCS_BUCKET,_RUNTIME_SERVICE_ACCOUNT=astina-runtime@PROJECT_ID.iam.gserviceaccount.com"
 ```
+
+Cloud Build memeriksa prasyarat sebelum membangun: bucket GCS model, service account runtime, dan empat Secret Manager secrets (`astina-admin-password`, `astina-auditor-password`, `astina-analyst-password`, `astina-viewer-password`). Service account runtime memerlukan akses tulis/baca pada bucket dan `roles/secretmanager.secretAccessor` pada secrets. Identitas Cloud Build memerlukan izin preflight, deploy Cloud Run, push Artifact Registry, dan melampirkan service account runtime. Nilai rahasia tidak boleh dikirim sebagai environment variable biasa.
+
+Deploy menggunakan image digest, bukan tag `latest`. Konfigurasi production memaksa autentikasi aplikasi, membatasi akses Cloud Run ke IAM secara default, menyimpan artefak model di GCS, dan membatasi service menjadi satu instance serta concurrency satu karena state dan lock training belum terdistribusi. Instance tambahan tidak boleh diaktifkan sebelum koordinasi training/model bersama diterapkan. GCS menjadi storage durable; filesystem lokal dan `/tmp` Cloud Run bersifat ephemeral.
+
+**Batas upload Cloud Run:** upload Streamlit dibatasi menjadi 30 MiB untuk berada di bawah batas request platform termasuk overhead multipart. Upload 3 GiB hanya berlaku untuk Docker Desktop lokal, bukan Cloud Run. Dataset multi-GB perlu diunggah langsung ke GCS menggunakan resumable upload dan diproses melalui workflow terpisah; helper signed URL yang tersedia belum terhubung ke UI. Jangan menganggap alur upload besar Cloud Run sudah tersedia.
+
+Setelah deploy, periksa status revision terbaru dan health endpoint `/_stcore/health`. Jika revision baru tidak sehat, alihkan traffic ke revision ready sebelumnya dengan `gcloud run services update-traffic`. Deployment wrapper melaporkan jika revision tidak ready; health check terautentikasi hanya dapat berhasil bila identitas deploy memiliki hak invoker.
 
 **Catatan penting:** Untuk deployment production yang aman dan termonitor, jalankan script automation berikut sebelum deployment:
 - `python scripts/setup_production_env.py` - Setup environment production
