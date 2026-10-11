@@ -7,7 +7,7 @@ Includes PII masking to protect sensitive health data.
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Optional, List
 from pathlib import Path
 try:
@@ -76,7 +76,7 @@ class AuditTrail:
     def _get_client_info(self) -> Dict[str, str]:
         """Get client information for audit records"""
         client_info = {
-            'timestamp': datetime.utcnow().isoformat(),
+            'timestamp': datetime.now(timezone.utc).isoformat(),
             'user_agent': 'unknown',
             'session_id': 'unknown'
         }
@@ -92,34 +92,29 @@ class AuditTrail:
     def log_event(
         self,
         event_type: str,
-        action: str,
-        resource: str,
+        action: str = "execute",
+        resource: str = "system",
         details: Optional[Dict[str, Any]] = None,
         user_id: Optional[str] = None,
-        severity: str = "INFO"
+        severity: str = "INFO",
+        actor: Optional[str] = None,
     ) -> None:
         """
         Log an audit event to both local storage and Cloud Logging.
-        
-        Args:
-            event_type: Type of event (e.g., 'data_upload', 'model_training', 'anomaly_detection')
-            action: Action performed (e.g., 'upload', 'train', 'detect')
-            resource: Resource affected (e.g., file name, model name)
-            details: Additional event details
-            user_id: User identifier
-            severity: Event severity (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+        Supports both (action, resource) and (actor, details) signatures.
         """
         # Mask sensitive details if PII masking is available
         if details and PII_MASKING_AVAILABLE and PIIMasker:
             details = PIIMasker.mask_dict(details, strategy='mask')
-        
+
+        effective_user = actor or user_id or 'anonymous'
         event = {
             **self._get_client_info(),
             'event_type': event_type,
             'action': action,
             'resource': resource,
             'details': details or {},
-            'user_id': user_id or 'anonymous',
+            'user_id': effective_user,
             'severity': severity,
             'environment': 'cloud_run' if self.is_cloud_run else 'local'
         }
@@ -161,6 +156,12 @@ class AuditTrail:
         }.get(severity, logger.info)
         
         log_method(f"Audit: {event_type} - {action} on {resource} by {user_id}")
+
+        # P1-2.3: Periodic GCS WORM sync — every 50 events or on critical events
+        _WORM_SYNC_INTERVAL = 50
+        _CRITICAL_EVENTS = {"USER_LOGIN_LOCKED", "PII_UNMASK_ACCESSED", "USER_LOGOUT"}
+        if len(self.recent_events) % _WORM_SYNC_INTERVAL == 0 or event_type in _CRITICAL_EVENTS:
+            self.sync_to_cloud_storage()
     
     def log_data_upload(
         self,
@@ -413,6 +414,24 @@ class AuditTrail:
         
         return deleted_count
 
+    def sync_to_cloud_storage(self, destination_prefix: str = "audit_logs") -> int:
+        """
+        Mirror local audit log files to Google Cloud Storage (WORM / Cloud Persistence).
+        Silently no-ops when GCS is not enabled.
+        """
+        try:
+            import cloud_storage
+            if cloud_storage.is_enabled():
+                log_files = [str(p) for p in self.log_dir.glob("audit_*.log") if p.is_file()]
+                if log_files:
+                    count = cloud_storage.upload_files(log_files, destination_prefix=destination_prefix)
+                    logger.info("Synchronized %d audit log file(s) to GCS prefix '%s'", count, destination_prefix)
+                    return count
+        except Exception as e:
+            logger.debug("Cloud storage audit sync skipped/failed: %s", e)
+        return 0
+
+
 # Global audit trail instance
 _audit_trail: Optional[AuditTrail] = None
 
@@ -422,6 +441,10 @@ def get_audit_trail() -> AuditTrail:
     if _audit_trail is None:
         _audit_trail = AuditTrail()
     return _audit_trail
+
+# Backward-compatible alias
+get_audit_logger = get_audit_trail
+
 
 def log_data_upload(file_name: str, file_size: int, row_count: int, column_count: int, 
                     success: bool = True, error_message: Optional[str] = None) -> None:
@@ -450,5 +473,3 @@ def log_anomaly_detection(detection_samples: int, anomaly_count: int, anomaly_ra
     """Convenience function to log anomaly detection"""
     get_audit_trail().log_anomaly_detection(detection_samples, anomaly_count, anomaly_rate,
                                             detection_time, success, error_message)
-
-from datetime import timedelta

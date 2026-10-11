@@ -14,7 +14,7 @@ import os
 import time
 import json
 from collections import defaultdict, deque
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Tuple, Optional
 import logging
 from functools import wraps
@@ -147,7 +147,7 @@ class RateLimiter:
         Returns:
             (is_limited, error_message)
         """
-        today = datetime.utcnow().date().isoformat()
+        today = datetime.now(timezone.utc).date().isoformat()
         current_count = self.daily_usage[today][user_id][action]
         
         if current_count >= limit:
@@ -157,7 +157,7 @@ class RateLimiter:
     
     def increment_daily_quota(self, user_id: str, action: str):
         """Increment daily quota counter"""
-        today = datetime.utcnow().date().isoformat()
+        today = datetime.now(timezone.utc).date().isoformat()
         self.daily_usage[today][user_id][action] += 1
     
     def check_concurrent_limit(
@@ -194,7 +194,7 @@ class RateLimiter:
     
     def get_user_stats(self, user_id: str) -> Dict:
         """Get rate limit statistics for user"""
-        today = datetime.utcnow().date().isoformat()
+        today = datetime.now(timezone.utc).date().isoformat()
         
         return {
             'user_id': user_id,

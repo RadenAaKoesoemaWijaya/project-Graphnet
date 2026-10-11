@@ -7,7 +7,7 @@ import threading
 import logging
 from typing import Dict, Any, List, Optional, Callable
 from collections import defaultdict, deque
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
 
 logger = logging.getLogger("graphnet.enhanced_metrics")
@@ -39,7 +39,7 @@ class PerformanceMetrics:
         """
         with self.lock:
             self.metrics[f"{operation}_timing"].append({
-                'timestamp': datetime.utcnow().isoformat(),
+                'timestamp': datetime.now(timezone.utc).isoformat(),
                 'duration': duration,
                 'metadata': metadata or {}
             })
@@ -156,7 +156,7 @@ class HealthChecker:
                 'name': name,
                 'status': 'healthy' if result else 'unhealthy',
                 'duration': duration,
-                'timestamp': datetime.utcnow().isoformat()
+                'timestamp': datetime.now(timezone.utc).isoformat()
             }
             
             self.last_results[name] = check_result
@@ -169,7 +169,7 @@ class HealthChecker:
                 'status': 'error',
                 'error': str(e),
                 'duration': duration,
-                'timestamp': datetime.utcnow().isoformat()
+                'timestamp': datetime.now(timezone.utc).isoformat()
             }
             
             self.last_results[name] = check_result
@@ -194,7 +194,7 @@ class HealthChecker:
         return {
             'overall_status': 'healthy' if overall_healthy else 'unhealthy',
             'checks': results,
-            'timestamp': datetime.utcnow().isoformat()
+            'timestamp': datetime.now(timezone.utc).isoformat()
         }
 
 class AlertManager:
@@ -260,7 +260,7 @@ class AlertManager:
                 'threshold_value': threshold_value,
                 'operator': operator,
                 'severity': threshold['severity'],
-                'timestamp': datetime.utcnow().isoformat()
+                'timestamp': datetime.now(timezone.utc).isoformat()
             }
             
             self.alerts.append(alert)
@@ -374,7 +374,7 @@ class MetricsCollector:
             'health': health_status,
             'performance': performance_metrics,
             'recent_alerts': recent_alerts,
-            'timestamp': datetime.utcnow().isoformat()
+            'timestamp': datetime.now(timezone.utc).isoformat()
         }
 
 # Global metrics collector instance

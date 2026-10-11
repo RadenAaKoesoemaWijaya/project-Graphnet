@@ -34,6 +34,8 @@ from ui_components import (
 from cache_manager import get_file_hash, get_dataframe_hash
 from large_file_processor import transform_dataframe_with_fitted_stats
 import shutil
+from pii_masker import PIIMasker
+from auth_manager import AuthManager
 
 
 def show_repeat_phantom_insights(df: pd.DataFrame):
@@ -887,7 +889,36 @@ def show_detection_page():
             with t_info_col:
                 st.caption(f"Menampilkan **{min(len(display_df), preview_limit)}** dari total **{len(display_df):,}** klaim terfilter.")
 
+            # ── Role-Based Dynamic PII Masking (UU No. 27/2022 & HIPAA) ──
+            current_user_role = AuthManager.get_current_role()
+            can_unmask_pii = current_user_role in ('admin', 'auditor')
+
+            unmask_pii_toggle = False
+            if can_unmask_pii:
+                pii_col1, pii_col2 = st.columns([3, 1])
+                with pii_col2:
+                    unmask_pii_toggle = st.toggle("🔓 Buka Masking Forensik", value=False, key="toggle_unmask_pii_audit")
+                if unmask_pii_toggle:
+                    st.info("⚠️ **Mode Audit Forensik Aktif**: Akses identitas rekam medis tidak tersensor terekam dalam Audit Trail kriptografis.")
+                    if not st.session_state.get('pii_unmask_audit_logged'):
+                        try:
+                            from audit_trail import get_audit_logger
+                            audit = get_audit_logger()
+                            audit.log_event(
+                                event_type="PII_UNMASK_ACCESSED",
+                                actor=AuthManager.get_current_user().get('username', 'auditor'),
+                                details={"role": current_user_role, "context": "detection_review_table"}
+                            )
+                            st.session_state['pii_unmask_audit_logged'] = True
+                        except Exception:
+                            pass
+                else:
+                    st.session_state['pii_unmask_audit_logged'] = False
+            else:
+                st.caption("🔒 *Privasi Data Aktif (UU No. 27/2022)*: Kolom identitas pasien dimasking untuk peran pengguna Anda.")
+
             fraud_table = display_df[display_columns].head(preview_limit).copy()
+            fraud_table = PIIMasker.mask_dataframe_for_ui(fraud_table, role=current_user_role, unmask=unmask_pii_toggle)
 
             def highlight_fraud(row):
                 sev = row.get('severity', 'Low')

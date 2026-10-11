@@ -270,6 +270,71 @@ class PIIMasker:
             logger.warning(f"Failed to mask dataframe columns: {e}")
             return df
 
+    @staticmethod
+    def mask_dataframe_for_ui(df, role: str = 'viewer', unmask: bool = False):
+        """
+        Apply role-based dynamic PII masking for UI preview tables under UU PDP No. 27/2022.
+        - If unmask=True AND role in ('admin', 'auditor'): data is displayed unmasked.
+        - Otherwise (role in ('viewer', 'analyst') or unmask=False):
+          Sensitive personal identity fields (patient_id, no_peserta, nik, nama, mrn, phone, address, etc.)
+          are dynamically masked with partial reveal. Financial amounts and statistical indicators are kept intact.
+        """
+        if df is None:
+            return df
+
+        if unmask and str(role).lower() in ('admin', 'auditor'):
+            return df
+
+        try:
+            import pandas as pd
+            df = df.copy()
+            identity_keywords = (
+                'patient_id', 'no_peserta', 'peserta', 'nik', 'ktp', 'ssn',
+                'nama', 'name', 'patient_name', 'mrn', 'rekam_medis', 'medical_record',
+                'phone', 'telepon', 'hp', 'mobile', 'email', 'address', 'alamat',
+                'dob', 'tgl_lahir', 'birthdate'
+            )
+
+            def _mask_identity_val(val, col_name: str) -> str:
+                if val is None or pd.isna(val):
+                    return ""
+                s = str(val).strip()
+                if not s:
+                    return ""
+                c = col_name.lower()
+                if any(k in c for k in ('nik', 'ktp', 'ssn')):
+                    if len(s) >= 8:
+                        return f"{s[:4]}{'*' * (len(s) - 8)}{s[-4:]}"
+                    return f"{s[:2]}****"
+                elif any(k in c for k in ('nama', 'name')):
+                    parts = s.split()
+                    if len(parts) > 1:
+                        return f"{parts[0]} " + " ".join([p[0] + "****" for p in parts[1:]])
+                    if len(s) > 3:
+                        return f"{s[:3]}****"
+                    return f"{s[:1]}***"
+                elif any(k in c for k in ('patient', 'peserta', 'mrn')):
+                    if len(s) > 4:
+                        prefix = s[:3] if '-' in s[:4] else s[:2]
+                        return f"{prefix}****{s[-3:]}"
+                    return "****"
+                else:
+                    if len(s) > 4:
+                        return f"{s[:2]}****{s[-2:]}"
+                    return "****"
+
+            for col in df.columns:
+                col_lower = str(col).lower()
+                if any(col_lower.endswith(sfx) for sfx in ('_flag', '_score', '_probability', '_amount', '_cost')):
+                    continue
+                if any(k in col_lower for k in identity_keywords):
+                    df[col] = df[col].apply(lambda x: _mask_identity_val(x, col_lower))
+
+            return df
+        except Exception as e:
+            logger.warning(f"Failed to apply role-based UI PII masking: {e}")
+            return df
+
 # ============================================================================
 # ERROR MESSAGE SANITIZATION
 # ============================================================================

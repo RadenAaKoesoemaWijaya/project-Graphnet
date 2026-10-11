@@ -9,8 +9,10 @@ Complies with:
 
 import os
 import hashlib
+import hmac
+import time
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 import streamlit as st
 
 logger = logging.getLogger(__name__)
@@ -155,9 +157,59 @@ PAGE_NAMES: Dict[str, str] = {
 # SECURE PASSWORD HASHING UTILITY
 # =============================================================================
 
-def hash_password(password: str, salt: str = "ASTINA_SECURE_SALT_v1") -> str:
-    """Hash password using SHA-256 with cryptographic salt."""
-    return hashlib.sha256(f"{salt}:{password}:{salt}".encode('utf-8')).hexdigest()
+def hash_password(password: str, salt: str = "ASTINA_SECURE_SALT_v1", iterations: int = 100_000) -> str:
+    """
+    Hash password using PBKDF2-HMAC-SHA256 key derivation with salt.
+    Format: $pbkdf2-sha256$i=100000$salt$hex_digest
+    """
+    digest = hashlib.pbkdf2_hmac(
+        'sha256',
+        password.encode('utf-8'),
+        f"{salt}".encode('utf-8'),
+        iterations
+    ).hex()
+    return f"$pbkdf2-sha256$i={iterations}${salt}${digest}"
+
+
+def verify_password(password: str, stored_hash: str) -> bool:
+    """
+    Verify password against stored hash with timing attack resistance.
+    Supports modern PBKDF2-HMAC-SHA256 and legacy salted SHA-256 hashes.
+    """
+    if not password or not stored_hash:
+        return False
+
+    # 1. PBKDF2-HMAC-SHA256 format
+    if stored_hash.startswith("$pbkdf2-sha256$"):
+        try:
+            parts = stored_hash.split("$")
+            iter_part = parts[2]
+            iterations = int(iter_part.split("=")[1])
+            salt = parts[3]
+            expected_digest = parts[4]
+            calc_digest = hashlib.pbkdf2_hmac(
+                'sha256',
+                password.encode('utf-8'),
+                salt.encode('utf-8'),
+                iterations
+            ).hex()
+            return hmac.compare_digest(calc_digest, expected_digest)
+        except Exception as e:
+            logger.error(f"Error parsing PBKDF2 hash: {e}")
+            return False
+
+    # 2. Legacy salted SHA-256 fallback (ASTINA_SECURE_SALT_v1)
+    legacy_salt = "ASTINA_SECURE_SALT_v1"
+    legacy_hash = hashlib.sha256(f"{legacy_salt}:{password}:{legacy_salt}".encode('utf-8')).hexdigest()
+    if hmac.compare_digest(legacy_hash, stored_hash):
+        return True
+
+    return False
+
+
+MAX_LOGIN_ATTEMPTS = 5
+LOCKOUT_DURATION_SECONDS = 900  # 15 minutes
+_LOGIN_ATTEMPTS: Dict[str, Dict[str, Any]] = {}
 
 
 DEFAULT_USERS: Dict[str, Dict[str, Any]] = _build_default_users()
@@ -165,6 +217,60 @@ DEFAULT_USERS: Dict[str, Dict[str, Any]] = _build_default_users()
 
 class AuthManager:
     """Manages user authentication, sessions, and RBAC authorization."""
+
+    @classmethod
+    def get_lockout_status(cls, username: str) -> Tuple[bool, int]:
+        """
+        Check if account is temporarily locked due to failed attempts.
+        Returns: (is_locked: bool, remaining_seconds: int)
+        """
+        username = username.strip().lower()
+        record = _LOGIN_ATTEMPTS.get(username)
+        if not record:
+            return False, 0
+
+        locked_until = record.get("locked_until")
+        if locked_until:
+            remaining = int(locked_until - time.time())
+            if remaining > 0:
+                return True, remaining
+            else:
+                # Lockout period expired
+                record["count"] = 0
+                record["locked_until"] = None
+                return False, 0
+
+        return False, 0
+
+    @classmethod
+    def record_failed_login(cls, username: str) -> Tuple[bool, int, int]:
+        """
+        Record a failed login attempt and evaluate lockout threshold.
+        Returns: (now_locked: bool, remaining_attempts: int, lockout_seconds: int)
+        """
+        username = username.strip().lower()
+        now = time.time()
+        record = _LOGIN_ATTEMPTS.setdefault(username, {"count": 0, "locked_until": None, "last_attempt": now})
+
+        if record.get("locked_until") and record["locked_until"] > now:
+            return True, 0, int(record["locked_until"] - now)
+
+        record["count"] += 1
+        record["last_attempt"] = now
+
+        if record["count"] >= MAX_LOGIN_ATTEMPTS:
+            record["locked_until"] = now + LOCKOUT_DURATION_SECONDS
+            return True, 0, LOCKOUT_DURATION_SECONDS
+
+        remaining = MAX_LOGIN_ATTEMPTS - record["count"]
+        return False, remaining, 0
+
+    @classmethod
+    def reset_login_attempts(cls, username: str) -> None:
+        """Reset failed login count upon successful authentication."""
+        username = username.strip().lower()
+        if username in _LOGIN_ATTEMPTS:
+            _LOGIN_ATTEMPTS.pop(username, None)
 
     @staticmethod
     def is_auth_enforced() -> bool:
@@ -211,15 +317,32 @@ class AuthManager:
 
     @staticmethod
     def authenticate(username: str, password: str) -> bool:
-        """Verify username and password against credentials store."""
+        """Verify username and password against credentials store with lockout protection."""
         username = username.strip().lower()
+
+        # 1. Check account lockout status
+        is_locked, remaining_secs = AuthManager.get_lockout_status(username)
+        if is_locked:
+            logger.warning(
+                f"Blocked login attempt for locked account '{username}'. Remaining lockout: {remaining_secs}s."
+            )
+            return False
+
         user = DEFAULT_USERS.get(username)
         if not user:
             logger.warning(f"Failed authentication attempt: user '{username}' not found.")
+            AuthManager.record_failed_login(username)
             return False
 
-        input_hash = hash_password(password)
-        if input_hash == user['hash']:
+        # 2. Verify password via PBKDF2 or legacy hash
+        if verify_password(password, user.get('hash', '')):
+            # Reset failed login count
+            AuthManager.reset_login_attempts(username)
+
+            # Auto-upgrade legacy hash if needed
+            if not user['hash'].startswith("$pbkdf2-sha256$"):
+                user['hash'] = hash_password(password)
+
             # Set session variables
             st.session_state['authenticated'] = True
             st.session_state['username'] = username
@@ -235,7 +358,7 @@ class AuthManager:
                 audit.log_event(
                     event_type="USER_LOGIN_SUCCESS",
                     actor=username,
-                    details={"role": user["role"], "auth_type": "PASSWORD"}
+                    details={"role": user["role"], "auth_type": "PASSWORD_PBKDF2"}
                 )
             except Exception as e:
                 logger.debug(f"Audit log on login skipped: {e}")
@@ -243,7 +366,26 @@ class AuthManager:
             logger.info(f"User '{username}' successfully authenticated with role '{user['role']}'.")
             return True
 
-        logger.warning(f"Failed authentication attempt: invalid password for '{username}'.")
+        # 3. Failed attempt: record and evaluate lockout
+        is_locked_now, remaining_tries, lock_secs = AuthManager.record_failed_login(username)
+        if is_locked_now:
+            try:
+                from audit_trail import get_audit_logger
+                audit = get_audit_logger()
+                audit.log_event(
+                    event_type="USER_LOGIN_LOCKED",
+                    actor=username,
+                    details={
+                        "reason": f"Exceeded maximum failed attempts ({MAX_LOGIN_ATTEMPTS})",
+                        "lockout_duration_seconds": lock_secs,
+                    }
+                )
+            except Exception as e:
+                logger.debug(f"Audit log on lockout skipped: {e}")
+            logger.warning(f"Account '{username}' is now locked for {lock_secs}s due to consecutive failures.")
+        else:
+            logger.warning(f"Failed authentication attempt: invalid password for '{username}'. Remaining attempts: {remaining_tries}.")
+
         return False
 
     @staticmethod
@@ -298,12 +440,24 @@ class AuthManager:
 
                 if st.button("🔐 Masuk ke Sistem (Log In)", type="primary", key="login_btn_submit"):
                     if username_input and password_input:
-                        success = AuthManager.authenticate(username_input, password_input)
-                        if success:
-                            st.success(f"✅ Berhasil masuk! Selamat datang, {st.session_state['user_fullname']}.")
-                            st.rerun()
+                        clean_u = username_input.strip().lower()
+                        is_locked, rem_secs = AuthManager.get_lockout_status(clean_u)
+                        if is_locked:
+                            rem_mins = max(1, (rem_secs + 59) // 60)
+                            st.error(f"⛔ Akun `{clean_u}` terkunci sementara karena terlalu banyak percobaan gagal. Silakan coba lagi dalam {rem_mins} menit ({rem_secs} detik).")
                         else:
-                            st.error("❌ Nama pengguna atau kata sandi tidak valid. Akses ditolak.")
+                            success = AuthManager.authenticate(username_input, password_input)
+                            if success:
+                                st.success(f"✅ Berhasil masuk! Selamat datang, {st.session_state['user_fullname']}.")
+                                st.rerun()
+                            else:
+                                is_locked_now, rem_tries, _ = AuthManager.get_lockout_status(clean_u)
+                                if is_locked_now:
+                                    st.error(f"⛔ Akun `{clean_u}` telah dikunci selama 15 menit karena mencapai batas 5 kali kesalahan kata sandi.")
+                                else:
+                                    rec = _LOGIN_ATTEMPTS.get(clean_u, {})
+                                    rem = MAX_LOGIN_ATTEMPTS - rec.get("count", 0)
+                                    st.error(f"❌ Nama pengguna atau kata sandi tidak valid. Sisa percobaan sebelum akun dikunci: {max(0, rem)}.")
                     else:
                         st.warning("⚠️ Harap lengkapi nama pengguna dan kata sandi.")
 

@@ -171,14 +171,15 @@ def enrich_claims_with_business_risk_features(df: pd.DataFrame) -> Tuple[pd.Data
         repeat_lookup[first_key] = max(repeat_lookup.get(first_key, 0.0), score)
         repeat_lookup[repeat_key] = max(repeat_lookup.get(repeat_key, 0.0), score)
 
-    clean["repeat_billing_flag"] = clean["claim_id"].astype(str).map(lambda claim_id: 1 if str(claim_id) in repeat_lookup else 0).astype(int)
-    clean["repeat_billing_score"] = clean["claim_id"].astype(str).map(lambda claim_id: float(repeat_lookup.get(str(claim_id), 0.0))).fillna(0.0)
+    claim_id_str_series = clean["claim_id"].astype(str)
+    clean["repeat_billing_score"] = claim_id_str_series.map(repeat_lookup).fillna(0.0).astype(float)
+    clean["repeat_billing_flag"] = (clean["repeat_billing_score"] > 0.0).astype(int)
 
     # Phantom service mapping
     clean["phantom_service_flag"] = 0
     if not phantom_df.empty:
         phantom_lookup = {str(claim_id): 1 for claim_id in phantom_df["claim_id"].astype(str).dropna().unique()}
-        clean["phantom_service_flag"] = clean["claim_id"].astype(str).map(phantom_lookup).fillna(0).astype(int)
+        clean["phantom_service_flag"] = claim_id_str_series.map(phantom_lookup).fillna(0).astype(int)
     clean["phantom_service_score"] = clean["phantom_service_flag"].astype(float) * 0.9
 
     # Provider capacity mapping
@@ -211,8 +212,8 @@ def enrich_claims_with_business_risk_features(df: pd.DataFrame) -> Tuple[pd.Data
         module_flags = module_df.groupby("claim_id", dropna=False)["risk_score"].max().to_dict()
         score_lookup = {str(claim_id): float(score) for claim_id, score in module_flags.items()}
 
-        clean[f"{module_name}_flag"] = clean["claim_id"].map(lambda claim_id: int(score_lookup.get(str(claim_id), 0.0) > 0.0)).fillna(0).astype(int)
-        clean[f"{module_name}_score"] = clean["claim_id"].map(lambda claim_id: float(score_lookup.get(str(claim_id), 0.0))).fillna(0.0)
+        clean[f"{module_name}_score"] = claim_id_str_series.map(score_lookup).fillna(0.0).astype(float)
+        clean[f"{module_name}_flag"] = (clean[f"{module_name}_score"] > 0.0).astype(int)
 
     additional_columns = [
         col for col in [
