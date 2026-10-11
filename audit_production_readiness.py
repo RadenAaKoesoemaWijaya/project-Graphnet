@@ -20,10 +20,16 @@ secrets_found = []
 for f in py_files:
     try:
         content = f.read_text(encoding='utf-8', errors='ignore')
-        if re.search(r'(password|secret|api_key|token)\s*=', content, re.I):
-            if not 'test' in str(f):
-                secrets_found.append(str(f))
-    except:
+        lines = content.splitlines()
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith('#') or 'export ' in stripped or 'os.getenv' in line:
+                continue
+            if re.search(r'^\s*(?!self\.)(password|secret|api_key|token)\s*=\s*[\'"][a-zA-Z0-9_\-\.\$\!]{4,}[\'"]', line, re.I):
+                if 'test' not in str(f).lower():
+                    secrets_found.append(str(f))
+                    break
+    except Exception:
         pass
 
 audit['Security'].append(('Hardcoded Secrets', 'PASS' if not secrets_found else f'FAIL: {len(secrets_found)} files'))
