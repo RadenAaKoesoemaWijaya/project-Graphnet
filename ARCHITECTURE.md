@@ -118,6 +118,10 @@ flowchart TD
    - *Out-of-Core Diagonal Merge*: Menggunakan engine Polars streaming (`pl.concat(..., how="diagonal").sink_parquet(...)`) yang menyatukan skema secara adaptif dan mengisi `null` untuk kolom yang tidak identik tanpa memicu exception.
    - *Provenance Tagging*: Injeksi otomatis metadata asal berkas (`source_file`) pada setiap baris untuk transparansi audit investigasi forensik.
    - *Zero-RAM Spike*: Tiap file di-stream ke partisi disk terlebih dahulu dan file sementara otomatis di-unlink segera setelah master Parquet terbentuk.
+5. **Tiered RAM & Disk Resource Guard**:
+   - *Intelligent Ingest Gating*: Menghilangkan pemblokiran kaku (sebelumnya flat 256MB) yang rentan menggagalkan upload pada workstation/container dengan RAM terbatas.
+   - *Soft Warning Layer*: Jika RAM tersedia < 128 MB (`ASTINA_MIN_AVAILABLE_RAM_MB`), proses ingestion tetap diizinkan berjalan menggunakan mode streaming hemat memori dengan peringatan non-destruktif di antarmuka UI.
+   - *Critical Fail-Safe*: Penolakan unggahan (*hard-block*) dikhususkan hanya untuk kondisi kritis (RAM < 64 MB `ASTINA_CRITICAL_RAM_MB` **dan** total berkas > 500 MB) demi mencegah crash OOM fatal.
 
 ---
 

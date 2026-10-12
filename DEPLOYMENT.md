@@ -130,9 +130,14 @@ Sistem ASTINA mendukung penggabungan banyak berkas sekaligus (*multi-dataset bat
 | `ASTINA_MAX_EXCEL_MB` | `150` (150 MB) | Batas maksimal file Excel (`.xlsx`, `.xls`) untuk membatasi lonjakan memori parser DOM. |
 | `STREAMLIT_SERVER_MAX_UPLOAD_SIZE` | `3072` (3 GiB) | Konfigurasi server Streamlit untuk batas payload request. |
 | `TEMP_DATA_DIR` | `/tmp/astina_temp_data` | Direktori partisi disk sementara saat streaming convert & merge. |
+| `ASTINA_MIN_AVAILABLE_RAM_MB` | `128` (128 MB) | Ambang batas RAM tersedia untuk menampilkan *soft warning* pada berkas >100 MB tanpa memblokir unggahan. |
+| `ASTINA_CRITICAL_RAM_MB` | `64` (64 MB) | Ambang batas RAM kritis (*hard block*) hanya untuk berkas sangat besar (>500 MB) demi mencegah crash OOM. |
 
-**Aturan Alokasi Ruang Disk:**
-- Sistem menerapkan *fail-fast disk check* (`check_ingest_resources`): Memerlukan minimal `3.0x` total ukuran berkas yang diunggah + `256 MB` ruang bebas di `TEMP_DATA_DIR`.
+**Aturan Alokasi Ruang Disk & Tiered RAM Protection:**
+- Sistem menerapkan **Tiered Resource Guard** (`check_ingest_resources`):
+  1. *Disk Capacity Check*: Memerlukan minimal `3.0x` total ukuran berkas yang diunggah + `256 MB` ruang bebas di `TEMP_DATA_DIR` (fail-fast jika disk penuh).
+  2. *Low RAM Soft Warning*: Jika RAM tersedia < 128 MB (`ASTINA_MIN_AVAILABLE_RAM_MB`) dan berkas > 100 MB, sistem memunculkan banner peringatan di UI namun tetap melanjutkan pemrosesan streaming ke Parquet.
+  3. *Critical RAM Protection*: Pemblokiran ketat hanya diberlakukan jika RAM tersedia < 64 MB (`ASTINA_CRITICAL_RAM_MB`) **dan** total berkas > 500 MB, mencegah OOM fatal pada lingkungan berkapasitas memori terbatas.
 - Untuk deployment kontainer yang sering memproses multi-file besar (misal batch 10 file @ 200MB = 2GB total), pastikan volume mount disk sementara memiliki sisa kapasitas minimal 10GB.
 - Penggabungan multi-dataset menggunakan engine **Polars Lazy Diagonal Concatenation**, menjaga penggunaan RAM tetap stabil di bawah **1GB RAM** selama proses penggabungan berkas.
 

@@ -1172,6 +1172,7 @@ Hasil verifikasi memastikan:
 - ✅ **131+ tes otomatis lulus (100% pass rate)** pada seluruh suite validasi; stabilitas zero-regression terjamin.
 - ✅ **Multi-Dataset Ingestion & Streaming Merge** — Penggabungan multi-berkas (CSV, Excel, Parquet, CSV.GZ) teruji otomatis lulus 100% dengan *out-of-core diagonal concat* Polars dan pelacakan kolom asal `source_file`.
 - ✅ **Type-Safe Streaming Ingestion** — Parser `pd.read_csv` dan `pl.read_csv` beroperasi dengan spesifikasi tipe data eksplisit, eliminasi parameter usang, dan zero runtime overload mismatch pada file CSV, Excel, dan Parquet.
+- ✅ **Tiered RAM & Resource Guard** — Proteksi memori adaptif bertingkat (*soft warning* di bawah 128 MB RAM, *hard block* hanya bila RAM < 64 MB dan berkas > 500 MB) mencegah kegagalan upload pada workstation dan container berkapasitas memori terbatas.
 - ✅ **Rate Limiting & Quota Integrity** — Penegakan kuota per-peran (maks 3 GiB per file, batas upload/training/inference) tervalidasi bebas dari error casting numerik dan `NoneType`.
 - ✅ **Audit Trail Preprocessing Robustness** — Pencatatan metrik praproses (`log_preprocessing`) terverifikasi deterministik dengan sanitasi tipe aman sebelum pembaruan rantai SHA-256.
 - ✅ **Schema Harmonizer & Semantic Aliasing** — Penyelarasan transparan 13+ sinonim kolom bahasa Indonesia/industri ke nama kanonikal terverifikasi akurat.
