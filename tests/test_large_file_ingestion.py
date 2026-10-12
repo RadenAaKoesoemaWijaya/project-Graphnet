@@ -305,3 +305,54 @@ def test_streaming_excel_ingestion_to_parquet(tmp_path):
     assert total_rows == 3
     assert len(actual) == 3
     assert list(actual["claim_id"]) == ["C101", "C102", "C103"]
+
+
+def test_merge_multiple_raw_parquets(tmp_path):
+    from file_handler import merge_multiple_raw_parquets
+
+    df1 = pd.DataFrame({"claim_id": ["C1", "C2"], "amount": [100.0, 200.0]})
+    df2 = pd.DataFrame({"claim_id": ["C3", "C4"], "amount": [300.0, 400.0]})
+
+    p1 = tmp_path / "part1.parquet"
+    p2 = tmp_path / "part2.parquet"
+    df1.to_parquet(p1, index=False)
+    df2.to_parquet(p2, index=False)
+
+    merged_path = merge_multiple_raw_parquets(
+        [str(p1), str(p2)],
+        output_path=str(tmp_path / "merged.parquet"),
+        add_source_column=True,
+        file_names=["file_jan.parquet", "file_feb.parquet"],
+    )
+
+    result = pd.read_parquet(merged_path)
+    assert len(result) == 4
+    assert list(result["claim_id"]) == ["C1", "C2", "C3", "C4"]
+    assert "source_file" in result.columns
+    assert list(result["source_file"]) == ["file_jan.parquet", "file_jan.parquet", "file_feb.parquet", "file_feb.parquet"]
+
+
+def test_ingest_multiple_files_to_raw_parquet(tmp_path):
+    from file_handler import ingest_multiple_files_to_raw_parquet
+
+    csv_data1 = b"claim_id,amount\nC10,500.0\nC11,600.0\n"
+    csv_data2 = b"claim_id,amount\nC12,700.0\nC13,800.0\n"
+
+    up1 = UploadedBytes(csv_data1, name="batch1.csv")
+    up2 = UploadedBytes(csv_data2, name="batch2.csv")
+
+    master_path, total_rows, schema_dict, summaries = ingest_multiple_files_to_raw_parquet(
+        [up1, up2],
+        add_source_column=True,
+    )
+
+    assert total_rows == 4
+    assert len(summaries) == 2
+    assert summaries[0]["file_name"] == "batch1.csv"
+    assert summaries[1]["file_name"] == "batch2.csv"
+
+    merged = pd.read_parquet(master_path)
+    assert len(merged) == 4
+    assert "source_file" in merged.columns
+    assert list(merged["claim_id"]) == ["C10", "C11", "C12", "C13"]
+    assert list(merged["source_file"]) == ["batch1.csv", "batch1.csv", "batch2.csv", "batch2.csv"]

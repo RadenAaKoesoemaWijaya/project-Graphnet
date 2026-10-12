@@ -811,6 +811,145 @@ def ingest_file_to_raw_parquet(uploaded_file, file_type='csv', progress_callback
                 pass
 
 
+def merge_multiple_raw_parquets(
+    parquet_paths,
+    output_path=None,
+    add_source_column=True,
+    file_names=None,
+    progress_callback=None,
+):
+    """
+    Merge multiple raw Parquet files into a single master Parquet file
+    using Polars diagonal lazy concatenation (zero RAM spike).
+    """
+    if not parquet_paths:
+        raise ValueError("Tidak ada file Parquet yang diberikan untuk digabungkan.")
+
+    os.makedirs(TEMP_DATA_DIR, exist_ok=True)
+    if output_path is None:
+        unique_id = uuid.uuid4().hex
+        output_path = os.path.join(TEMP_DATA_DIR, f"merged_raw_{unique_id}.parquet")
+
+    _report_progress(progress_callback, "merge_start", 10.0, "Menyiapkan penggabungan dataset...")
+
+    lfs = []
+    file_names = file_names or [os.path.basename(p) for p in parquet_paths]
+    for p, fname in zip(parquet_paths, file_names):
+        if not os.path.exists(p):
+            continue
+        lf = pl.scan_parquet(p)
+        if add_source_column:
+            lf = lf.with_columns(pl.lit(str(fname)).alias("source_file"))
+        lfs.append(lf)
+
+    if not lfs:
+        raise ValueError("Seluruh file Parquet yang akan digabungkan tidak ditemukan atau kosong.")
+
+    _report_progress(progress_callback, "merging", 50.0, f"Menggabungkan {len(lfs)} dataset via Polars streaming...")
+
+    merged_lf = pl.concat(lfs, how="diagonal")
+    merged_lf.sink_parquet(output_path, compression="zstd")
+
+    _report_progress(progress_callback, "merge_done", 90.0, "Penggabungan dataset selesai.")
+    return output_path
+
+
+def ingest_multiple_files_to_raw_parquet(
+    uploaded_files,
+    add_source_column=True,
+    progress_callback=None,
+):
+    """
+    Ingest multiple uploaded files (CSV/Excel/Parquet/GZ) streaming to disk,
+    then merge them into a single master raw Parquet file.
+    Returns (master_parquet_path, total_rows, schema_dict, summaries).
+    """
+    if not uploaded_files:
+        raise ValueError("Tidak ada file yang diunggah.")
+
+    total_size = sum(int(getattr(f, "size", 0) or 0) for f in uploaded_files)
+    check_ingest_resources(total_size)
+
+    raw_paths = []
+    file_names = []
+    summaries = []
+    total_files = len(uploaded_files)
+
+    try:
+        for idx, uploaded_file in enumerate(uploaded_files, 1):
+            fname = getattr(uploaded_file, "name", f"file_{idx}")
+            ftype = normalize_upload_type("", fname)
+            fsize = int(getattr(uploaded_file, "size", 0) or 0)
+
+            check_file_size(fsize, ftype)
+
+            def sub_callback(stage, pct, msg, _idx=idx, _fname=fname):
+                overall_pct = ((_idx - 1) / total_files) * 75.0 + (pct / 100.0) * (75.0 / total_files)
+                _report_progress(progress_callback, "sub_ingest", overall_pct, f"[{_idx}/{total_files}] {_fname}: {msg}")
+
+            raw_path, rows, schema = ingest_file_to_raw_parquet(
+                uploaded_file, ftype, progress_callback=sub_callback
+            )
+            raw_paths.append(raw_path)
+            file_names.append(fname)
+            summaries.append({
+                "file_name": fname,
+                "file_type": ftype,
+                "size_bytes": fsize,
+                "size_mb": fsize / (1024 * 1024),
+                "rows": rows,
+                "raw_path": raw_path,
+                "columns": schema.get("columns", []),
+            })
+
+        if len(raw_paths) == 1 and not add_source_column:
+            master_path = raw_paths[0]
+        else:
+            def merge_cb(stage, pct, msg):
+                overall_pct = 75.0 + (pct / 100.0) * 23.0
+                _report_progress(progress_callback, "merge", overall_pct, msg)
+
+            master_path = merge_multiple_raw_parquets(
+                raw_paths,
+                add_source_column=add_source_column,
+                file_names=file_names,
+                progress_callback=merge_cb,
+            )
+            # Remove intermediate raw parquets if merged into new master
+            for p in raw_paths:
+                if p != master_path and os.path.exists(p):
+                    try:
+                        os.unlink(p)
+                    except Exception:
+                        pass
+
+        lf = pl.scan_parquet(master_path)
+        total_rows = int(lf.select(pl.len()).collect().item())
+        schema = lf.collect_schema()
+        schema_dict = {
+            "columns": list(schema.names()),
+            "dtypes": {name: str(dtype) for name, dtype in schema.items()},
+            "total_rows": total_rows,
+        }
+
+        _report_progress(
+            progress_callback,
+            "complete",
+            100.0,
+            f"Seluruh {total_files} dataset berhasil digabungkan ({total_rows:,} baris).",
+        )
+        return master_path, total_rows, schema_dict, summaries
+
+    except Exception:
+        for p in raw_paths:
+            if os.path.exists(p):
+                try:
+                    os.unlink(p)
+                except Exception:
+                    pass
+        raise
+
+
 def load_parquet_bounded(parquet_path, max_rows=100000):
     """Load parquet fully only when RAM is safe; otherwise return a head sample."""
     if not os.path.exists(parquet_path):

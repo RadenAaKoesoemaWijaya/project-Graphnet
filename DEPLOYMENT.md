@@ -119,6 +119,23 @@ Docker Compose automatically mounts:
 
 These directories persist across container restarts.
 
+#### Multi-Dataset Ingestion & Storage Capacity Planning
+
+Sistem ASTINA mendukung penggabungan banyak berkas sekaligus (*multi-dataset batch ingestion*) dengan proteksi memori streaming *out-of-core*.
+
+| Parameter / Env Var | Default | Deskripsi & Rekomendasi |
+| :--- | :--- | :--- |
+| `ASTINA_MAX_CSV_MB` | `3072` (3 GiB) | Batas maksimal file CSV / CSV.GZ per file. |
+| `ASTINA_MAX_PARQUET_MB` | `1024` (1 GiB) | Batas maksimal file Parquet per file. |
+| `ASTINA_MAX_EXCEL_MB` | `150` (150 MB) | Batas maksimal file Excel (`.xlsx`, `.xls`) untuk membatasi lonjakan memori parser DOM. |
+| `STREAMLIT_SERVER_MAX_UPLOAD_SIZE` | `3072` (3 GiB) | Konfigurasi server Streamlit untuk batas payload request. |
+| `TEMP_DATA_DIR` | `/tmp/astina_temp_data` | Direktori partisi disk sementara saat streaming convert & merge. |
+
+**Aturan Alokasi Ruang Disk:**
+- Sistem menerapkan *fail-fast disk check* (`check_ingest_resources`): Memerlukan minimal `3.0x` total ukuran berkas yang diunggah + `256 MB` ruang bebas di `TEMP_DATA_DIR`.
+- Untuk deployment kontainer yang sering memproses multi-file besar (misal batch 10 file @ 200MB = 2GB total), pastikan volume mount disk sementara memiliki sisa kapasitas minimal 10GB.
+- Penggabungan multi-dataset menggunakan engine **Polars Lazy Diagonal Concatenation**, menjaga penggunaan RAM tetap stabil di bawah **1GB RAM** selama proses penggabungan berkas.
+
 #### Troubleshooting Docker Issues
 
 **Issue: Container fails to start**

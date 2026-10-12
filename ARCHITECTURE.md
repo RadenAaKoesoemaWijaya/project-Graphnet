@@ -113,6 +113,11 @@ flowchart TD
 3. **Dual Execution Mode**:
    - *Mode Eksplorasi Cepat*: Sampling interaktif 10.000 baris untuk visualisasi instan di UI Streamlit.
    - *Mode Batch Forensik*: Pipeline streaming Parquet menyeluruh untuk audit puluhan ribu hingga jutaan baris tanpa membebani browser.
+4. **Multi-Dataset Batch Ingestion & Streaming Diagonal Concatenation**:
+   - *Simultaneous Multi-Upload*: Pengguna dapat mengunggah beberapa berkas transaksi sekaligus (CSV, CSV.GZ, Excel, Parquet) untuk menggabungkan batch data bulanan atau antar-cabang.
+   - *Out-of-Core Diagonal Merge*: Menggunakan engine Polars streaming (`pl.concat(..., how="diagonal").sink_parquet(...)`) yang menyatukan skema secara adaptif dan mengisi `null` untuk kolom yang tidak identik tanpa memicu exception.
+   - *Provenance Tagging*: Injeksi otomatis metadata asal berkas (`source_file`) pada setiap baris untuk transparansi audit investigasi forensik.
+   - *Zero-RAM Spike*: Tiap file di-stream ke partisi disk terlebih dahulu dan file sementara otomatis di-unlink segera setelah master Parquet terbentuk.
 
 ---
 
@@ -126,7 +131,7 @@ flowchart TD
 ## 🔬 5. Code Quality, Type Safety & Automated Verification
 
 - **Static Type Safety Guarantee**: Pematuhan ketat terhadap type stubs Python/Pyright pada modul kritis (`file_handler.py`, `rate_limit.py`, `ui/pages/data_collection.py`), mencegah kegagalan runtime akibat inkonsistensi tipe data atau unpacking dictionary tanpa tipe tetap.
-- **Zero-Regression Test Suite**: Diverifikasi penuh melalui pengujian otomatis dengan 100% pass rate:
+- **Zero-Regression Test Suite (131+ Tests Passed)**: Diverifikasi penuh melalui pengujian otomatis dengan 100% pass rate:
   - `tests/test_cybersecurity_and_auth.py` (Autentikasi KDF, Brute Force, Rate Limiting & PII Masking).
-  - `tests/test_large_file_ingestion.py` (Streaming CSV/Excel/Parquet, Deduping & Disk Ingestion).
+  - `tests/test_large_file_ingestion.py` (Streaming CSV/Excel/Parquet, Multi-Dataset Ingestion & Concatenation, Deduping & Disk Ingestion).
   - `tests/test_streaming_preprocessing_memory.py` & `test_train_only_preprocessing.py` (Transformasi streaming terikat memori & isolasi partisi train).

@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import os
+import hashlib
 from ui.utils import *
 from state_manager import *
 from data_validator import validate_parquet_dataset
@@ -17,14 +18,22 @@ from file_handler import (
     ingest_file_to_raw_parquet, get_parquet_sample, get_file_info,
     show_file_size_warning, save_processed_data, remove_duplicates_from_parquet,
     normalize_upload_type, check_ingest_resources,
+    merge_multiple_raw_parquets, ingest_multiple_files_to_raw_parquet,
 )
 from large_file_processor import (
     prepare_train_validation_test_parquet,
     preprocess_dataset_with_train_only_stats,
 )
 
-def load_and_validate_raw_data(uploaded_file):
-    file_extension = normalize_upload_type("", uploaded_file.name)
+def load_and_validate_raw_data(uploaded_files, add_source_column=True):
+    """
+    Ingest single or multiple uploaded files, merge into a master Parquet dataset,
+    and run comprehensive validation.
+    """
+    if not isinstance(uploaded_files, (list, tuple)):
+        file_list = [uploaded_files]
+    else:
+        file_list = list(uploaded_files)
 
     progress = st.progress(0)
     status = st.empty()
@@ -37,10 +46,15 @@ def load_and_validate_raw_data(uploaded_file):
         status.caption(message)
 
     try:
-        check_ingest_resources(uploaded_file.size)
-        raw_parquet_path, total_rows, schema_dict = ingest_file_to_raw_parquet(
-            uploaded_file, file_extension, progress_callback=on_progress
+        total_size = sum(int(getattr(f, "size", 0) or 0) for f in file_list)
+        check_ingest_resources(total_size)
+
+        raw_parquet_path, total_rows, schema_dict, summaries = ingest_multiple_files_to_raw_parquet(
+            file_list,
+            add_source_column=add_source_column if len(file_list) > 1 else False,
+            progress_callback=on_progress,
         )
+
         sample_size = min(5000, total_rows)
         df_sample = get_parquet_sample(raw_parquet_path, n=sample_size)
         df_sample = DataSanitizer.sanitize_dataframe(df_sample)
@@ -53,12 +67,12 @@ def load_and_validate_raw_data(uploaded_file):
                 "Validasi seluruh dataset gagal: tidak ditemukan baris data."
             )
         memory_info = {
-            'original_memory_mb': uploaded_file.size / (1024 * 1024),
+            'original_memory_mb': total_size / (1024 * 1024),
             'optimized_memory_mb': (df_sample.memory_usage(deep=True).sum() / 1024**2),
-            'memory_saved_mb': max(0.0, (uploaded_file.size / (1024 * 1024)) - 10.0),
-            'memory_saved_percent': 85.0 if uploaded_file.size > 20 * 1024 * 1024 else 0.0
+            'memory_saved_mb': max(0.0, (total_size / (1024 * 1024)) - 10.0),
+            'memory_saved_percent': 85.0 if total_size > 20 * 1024 * 1024 else 0.0
         }
-        return raw_parquet_path, df_sample, total_rows, len(schema_dict['columns']), memory_info, is_valid, validation_results
+        return raw_parquet_path, df_sample, total_rows, len(schema_dict['columns']), memory_info, is_valid, validation_results, summaries
     finally:
         try:
             progress.empty()
@@ -158,10 +172,11 @@ def show_data_collection_page():
         f"• XLS: Hingga {excel_limit_mb:,} MB (proteksi memori parser Excel)"
     )
 
-    uploaded_file = st.file_uploader(
+    uploaded_files = st.file_uploader(
         "Unggah file data transaksi (CSV / CSV.GZ / Excel / Parquet)",
         type=["csv", "xlsx", "xls", "parquet", "gz"],
-        help=upload_help
+        help=upload_help,
+        accept_multiple_files=True
     )
 
     st.caption(
@@ -173,57 +188,101 @@ def show_data_collection_page():
         f"**XLS**: {excel_limit_mb:,} MB"
     )
 
-    if uploaded_file is not None:
+    if uploaded_files:
         try:
-            # Check rate limit for file uploads
+            total_upload_size = sum(int(getattr(f, "size", 0) or 0) for f in uploaded_files)
             user_id = st.session_state.get('username', 'anonymous')
-            allowed, error_msg = check_upload_quota(user_id, file_size_bytes=uploaded_file.size)
+            allowed, error_msg = check_upload_quota(user_id, file_size_bytes=total_upload_size)
             if not allowed:
                 st.error(f"❌ {error_msg}")
                 st.info("💡 Silakan coba lagi nanti atau hubungi administrator untuk meningkatkan kuota.")
                 st.stop()
-            
-            # Get file information
-            file_info = get_file_info(uploaded_file)
-            show_file_size_warning(file_info['size_gb'], file_info.get('file_type'))
 
-            # Show file info
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("Ukuran File", f"{file_info['size_mb']:.1f} MB")
-            with col2:
-                st.metric("Batas Format", f"{file_info['max_allowed_mb']:.0f} MB")
-            with col3:
-                st.metric("Kategori", file_info['size_category'].title())
-            with col4:
-                st.metric("Ukuran Chunk", f"{file_info['recommended_chunk_size']:,}" if file_info['recommended_chunk_size'] else "Muat Penuh")
+            # Check format validity for each file
+            invalid_files = []
+            valid_extensions = ['csv', 'csv.gz', 'xlsx', 'xls', 'parquet']
+            for f in uploaded_files:
+                f_ext = normalize_upload_type("", f.name)
+                if f_ext not in valid_extensions:
+                    invalid_files.append((f.name, f_ext))
+            if invalid_files:
+                st.error(f"❌ Format file tidak didukung: {', '.join(f'{n} (.{ext})' for n, ext in invalid_files)}. Gunakan CSV, .csv.gz, Excel, atau Parquet.")
+                return
 
-            # Clear old processing state if new file is uploaded
-            if st.session_state.get('last_uploaded_filename') != uploaded_file.name:
+            is_multi_file = len(uploaded_files) > 1
+
+            if is_multi_file:
+                st.markdown("#### 🔗 Integrasi & Penggabungan Multi-Dataset")
+                col_m1, col_m2 = st.columns([3, 2])
+                with col_m1:
+                    st.info(f"📂 Terdeteksi **{len(uploaded_files)} file** diunggah. Seluruh berkas akan digabungkan secara streaming (*zero-RAM spike*) menjadi satu dataset master terpadu.")
+                with col_m2:
+                    add_source_col = st.checkbox(
+                        "🏷️ Sertakan kolom 'source_file'",
+                        value=True,
+                        help="Menyertakan nama file sumber pada tiap baris transaksi untuk memudahkan penelusuran asal data pada audit trail."
+                    )
+            else:
+                add_source_col = False
+
+            # Show file info metrics
+            if not is_multi_file:
+                single_file = uploaded_files[0]
+                file_info = get_file_info(single_file)
+                show_file_size_warning(file_info['size_gb'], file_info.get('file_type'))
+
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Ukuran File", f"{file_info['size_mb']:.1f} MB")
+                with col2:
+                    st.metric("Batas Format", f"{file_info['max_allowed_mb']:.0f} MB")
+                with col3:
+                    st.metric("Kategori", file_info['size_category'].title())
+                with col4:
+                    st.metric("Ukuran Chunk", f"{file_info['recommended_chunk_size']:,}" if file_info['recommended_chunk_size'] else "Muat Penuh")
+            else:
+                total_mb = total_upload_size / (1024 * 1024)
+                types_str = ", ".join(sorted(set(normalize_upload_type('', f.name).upper() for f in uploaded_files)))
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Jumlah Berkas", f"{len(uploaded_files)} File")
+                with col2:
+                    st.metric("Total Ukuran", f"{total_mb:.1f} MB")
+                with col3:
+                    st.metric("Format Berkas", types_str)
+                with col4:
+                    st.metric("Mode Integrasi", "Diagonal Concat")
+
+                with st.expander(f"📋 Rincian Berkas yang Digabungkan ({len(uploaded_files)} File)", expanded=False):
+                    file_table_data = []
+                    for f in uploaded_files:
+                        ft = normalize_upload_type("", f.name)
+                        file_table_data.append({
+                            "Nama File": f.name,
+                            "Format": ft.upper(),
+                            "Ukuran": f"{f.size / (1024*1024):.2f} MB",
+                            "Status": "✅ Siap Digabung"
+                        })
+                    st.dataframe(pd.DataFrame(file_table_data), hide_index=True, width='stretch')
+
+            # Clear old processing state if new file selection uploaded
+            current_files_key = ";".join(f"{f.name}:{f.size}" for f in uploaded_files) + f":source={add_source_col}"
+            if st.session_state.get('last_uploaded_filename') != current_files_key:
                 st.session_state.pop('df_processed_path', None)
                 for cache_key in (
                     'raw_data_cache_key', 'raw_data_cache_df',
                     'raw_data_cache_path', 'raw_data_cache_sample',
                     'raw_data_total_rows', 'raw_data_total_cols',
                     'raw_data_cache_memory_info', 'raw_data_cache_is_valid',
-                    'raw_data_cache_validation',
+                    'raw_data_cache_validation', 'raw_data_file_summaries',
                 ):
                     st.session_state.pop(cache_key, None)
-                st.session_state['last_uploaded_filename'] = uploaded_file.name
-                
-            # Determine file type
-            file_extension = normalize_upload_type("", uploaded_file.name)
-            valid_extensions = ['csv', 'csv.gz', 'xlsx', 'xls', 'parquet']
-            if file_extension not in valid_extensions:
-                st.error(f"Format file .{file_extension} tidak didukung. Gunakan CSV, .csv.gz, Excel, atau Parquet.")
-                return
+                st.session_state['last_uploaded_filename'] = current_files_key
 
             import time
             upload_start_time = time.time()
 
-            # Include content samples in the key so same-name, same-size files
-            # cannot reuse an unrelated raw Parquet result.
-            raw_cache_key = get_file_hash(uploaded_file)
+            raw_cache_key = hashlib.sha256(current_files_key.encode()).hexdigest()
             if st.session_state.get('raw_data_cache_key') == raw_cache_key:
                 raw_parquet_path = st.session_state['raw_data_cache_path']
                 df = st.session_state['raw_data_cache_sample']
@@ -233,8 +292,23 @@ def show_data_collection_page():
                 is_valid = st.session_state['raw_data_cache_is_valid']
                 validation_results = st.session_state['raw_data_cache_validation']
             else:
-                with st.spinner(f"Memuat dan memvalidasi file {uploaded_file.name}..."):
-                    raw_parquet_path, df, total_rows, total_cols, memory_info, is_valid, validation_results = load_and_validate_raw_data(uploaded_file)
+                spinner_msg = (
+                    f"Memuat dan menggabungkan {len(uploaded_files)} file dataset..."
+                    if is_multi_file
+                    else f"Memuat dan memvalidasi file {uploaded_files[0].name}..."
+                )
+                with st.spinner(spinner_msg):
+                    (
+                        raw_parquet_path,
+                        df,
+                        total_rows,
+                        total_cols,
+                        memory_info,
+                        is_valid,
+                        validation_results,
+                        summaries,
+                    ) = load_and_validate_raw_data(uploaded_files, add_source_column=add_source_col)
+
                 st.session_state['raw_data_cache_key'] = raw_cache_key
                 st.session_state['raw_data_cache_path'] = raw_parquet_path
                 st.session_state['raw_data_cache_sample'] = df
@@ -244,6 +318,7 @@ def show_data_collection_page():
                 st.session_state['raw_data_cache_memory_info'] = memory_info
                 st.session_state['raw_data_cache_is_valid'] = is_valid
                 st.session_state['raw_data_cache_validation'] = validation_results
+                st.session_state['raw_data_file_summaries'] = summaries
 
             # Show memory optimization info
             if memory_info.get('memory_saved_percent', 0) > 10:
@@ -259,28 +334,37 @@ def show_data_collection_page():
                 st.error("❌ Data tidak valid untuk diproses. Silakan perbaiki data Anda.")
                 logger.error("Data validation failed in data collection page")
                 return
-            
-            st.success(f"✅ File berhasil dimuat dan divalidasi! Jumlah baris: {total_rows:,}, Jumlah kolom: {total_cols}")
-            
+
+            if is_multi_file:
+                st.success(f"✅ Seluruh {len(uploaded_files)} file berhasil digabungkan dan divalidasi! Total baris: {total_rows:,}, Jumlah kolom: {total_cols}")
+            else:
+                st.success(f"✅ File berhasil dimuat dan divalidasi! Jumlah baris: {total_rows:,}, Jumlah kolom: {total_cols}")
+
             # Log data upload to audit trail
             try:
                 upload_duration = time.time() - upload_start_time
+                display_filename = (
+                    f"Merged ({len(uploaded_files)} files): " + ", ".join(f.name for f in uploaded_files[:2]) + ("..." if len(uploaded_files) > 2 else "")
+                    if is_multi_file
+                    else uploaded_files[0].name
+                )
                 log_data_upload(
-                    file_name=uploaded_file.name,
-                    file_size=file_info['size_bytes'],
+                    file_name=display_filename,
+                    file_size=total_upload_size,
                     row_count=total_rows,
                     column_count=total_cols,
                     success=True
                 )
                 # Record metrics
                 record_operation('data_upload', upload_duration, {
-                    'file_name': uploaded_file.name,
-                    'file_size_mb': file_info['size_mb']
+                    'file_name': display_filename,
+                    'file_size_mb': total_upload_size / (1024 * 1024),
+                    'file_count': len(uploaded_files)
                 })
                 increment_counter('total_data_uploads')
                 set_gauge('current_dataset_rows', total_rows)
                 set_gauge('current_dataset_columns', total_cols)
-                
+
                 # Increment upload quota counter
                 increment_quota(user_id, 'upload')
             except Exception as e:
@@ -665,8 +749,12 @@ def show_data_collection_page():
                             'message': error_message,
                             'dataset_rows': dataset_rows,
                             'dataset_cols': dataset_cols,
-                            'file_size_mb': round(uploaded_file.size / (1024 * 1024), 2) if uploaded_file is not None else 0,
-                            'file_name': uploaded_file.name if uploaded_file is not None else 'unknown',
+                            'file_size_mb': round(sum(int(getattr(f, 'size', 0) or 0) for f in uploaded_files) / (1024 * 1024), 2) if uploaded_files else 0,
+                            'file_name': (
+                                f"Merged ({len(uploaded_files)} files): " + ", ".join(f.name for f in uploaded_files[:2]) + ("..." if len(uploaded_files) > 2 else "")
+                                if len(uploaded_files) > 1
+                                else uploaded_files[0].name
+                            ) if uploaded_files else 'unknown',
                             'processed_at': pd.Timestamp.now().isoformat()
                         }
                         logger.error(f"Data processing failed: {error_type}: {error_message}", exc_info=True)
