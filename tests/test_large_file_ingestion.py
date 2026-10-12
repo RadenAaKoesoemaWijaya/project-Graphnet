@@ -1,8 +1,14 @@
+
 import pandas as pd
 import pytest
 
 from cache_manager import get_file_hash
-from config import MAX_EXCEL_FILE_SIZE
+from config import (
+    MAX_EXCEL_FILE_SIZE,
+    MAX_CSV_FILE_SIZE,
+    MAX_PARQUET_FILE_SIZE,
+    get_max_file_size_for_type,
+)
 from file_handler import (
     ingest_file_to_raw_parquet,
     read_file_with_optimization,
@@ -165,7 +171,7 @@ def test_excel_upload_over_limit_fails_before_parsing():
         reported_size=MAX_EXCEL_FILE_SIZE + 1,
     )
 
-    with pytest.raises(ValueError, match="dibatasi 100MB"):
+    with pytest.raises(ValueError, match="exceeds maximum allowed size"):
         read_file_with_optimization(uploaded_file, "xlsx")
 
 
@@ -255,3 +261,47 @@ def test_streaming_validation_checks_rows_after_preview_sample(tmp_path):
     report = validate_parquet_dataset(str(parquet_path))
     assert report["total_rows"] == 5001
     assert report["invalid_numeric_ranges"]["patient_age"]["max"] == 150
+
+
+def test_parquet_upload_over_limit_fails():
+    uploaded_file = UploadedBytes(
+        b"not-a-real-parquet",
+        name="claims.parquet",
+        reported_size=MAX_PARQUET_FILE_SIZE + 1,
+    )
+    with pytest.raises(ValueError, match="exceeds maximum allowed size"):
+        read_file_with_optimization(uploaded_file, "parquet")
+
+
+def test_format_size_limits():
+    assert get_max_file_size_for_type("csv") == MAX_CSV_FILE_SIZE
+    assert get_max_file_size_for_type("csv.gz") == MAX_CSV_FILE_SIZE
+    assert get_max_file_size_for_type("parquet") == MAX_PARQUET_FILE_SIZE
+    assert get_max_file_size_for_type("xlsx") == MAX_EXCEL_FILE_SIZE
+    assert get_max_file_size_for_type("xls") == MAX_EXCEL_FILE_SIZE
+    assert MAX_CSV_FILE_SIZE == 3 * 1024 * 1024 * 1024
+    assert MAX_PARQUET_FILE_SIZE >= 1024 * 1024 * 1024
+    assert MAX_EXCEL_FILE_SIZE >= 100 * 1024 * 1024
+
+
+def test_streaming_excel_ingestion_to_parquet(tmp_path):
+    from file_handler import stream_excel_to_parquet
+
+    df_test = pd.DataFrame({
+        "claim_id": ["C101", "C102", "C103"],
+        "billed_amount": [50000.0, 75000.5, 120000.0],
+        "status": ["PAID", "DENIED", "PENDING"]
+    })
+    excel_path = tmp_path / "stream_test.xlsx"
+    df_test.to_excel(excel_path, index=False, engine="openpyxl")
+
+    parquet_out, total_rows = stream_excel_to_parquet(
+        str(excel_path),
+        output_path=str(tmp_path / "stream_result.parquet"),
+        chunk_size=2
+    )
+
+    actual = pd.read_parquet(parquet_out)
+    assert total_rows == 3
+    assert len(actual) == 3
+    assert list(actual["claim_id"]) == ["C101", "C102", "C103"]

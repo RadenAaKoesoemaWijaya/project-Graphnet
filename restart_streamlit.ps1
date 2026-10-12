@@ -67,4 +67,4 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host "[4/4] Menjalankan Streamlit..." -ForegroundColor Yellow
-& $streamlitExe run main.py --server.address 127.0.0.1 --server.port $port --server.headless true
+& $streamlitExe run main.py --server.address 127.0.0.1 --server.port $port --server.headless true --server.maxUploadSize 3072 --server.maxMessageSize 3072

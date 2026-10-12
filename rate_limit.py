@@ -57,13 +57,13 @@ RATE_LIMITS = {
     }
 }
 
-# Default quota for unauthenticated users (very restrictive)
+# Default quota for unauthenticated users (optimized for local deployment)
 UNAUTHENTICATED_LIMITS = {
-    'uploads_per_day': 1,
-    'training_jobs_per_day': 0,
-    'inference_per_minute': 10,
-    'concurrent_uploads': 1,
-    'max_file_size_gb': 0.5,
+    'uploads_per_day': int(os.getenv('RATE_LIMIT_UNAUTH_UPLOADS', '50')),
+    'training_jobs_per_day': 10,
+    'inference_per_minute': 100,
+    'concurrent_uploads': 2,
+    'max_file_size_gb': float(os.getenv('RATE_LIMIT_MAX_FILE_SIZE_GB', '3.0')),
 }
 
 # ============================================================================
@@ -247,7 +247,7 @@ def check_user_quota(
     
     # Check daily quota
     if daily_limit > 0:
-        is_limited, error = rate_limiter.check_daily_quota(user_id, quota_key, daily_limit)
+        is_limited, error = rate_limiter.check_daily_quota(user_id, quota_key, int(daily_limit))
         if is_limited:
             return False, error
     elif daily_limit == 0:
@@ -281,7 +281,7 @@ def _resolve_user_and_role(user_id: Optional[str] = None) -> Tuple[str, str]:
     except Exception:
         return user_id or "anonymous", "analyst"
 
-def check_upload_quota(user_id: str = None, file_size_bytes: int = None) -> Tuple[bool, Optional[str]]:
+def check_upload_quota(user_id: Optional[str] = None, file_size_bytes: Optional[int] = None) -> Tuple[bool, Optional[str]]:
     """Check upload quota for current user, including per-role max file size."""
     u_id, u_role = _resolve_user_and_role(user_id)
     allowed, error = check_user_quota(u_id, 'upload', u_role)
@@ -301,7 +301,7 @@ def check_upload_quota(user_id: str = None, file_size_bytes: int = None) -> Tupl
     return True, None
 
 
-def check_upload_file_size(file_size_bytes: int, user_id: str = None) -> Tuple[bool, Optional[str]]:
+def check_upload_file_size(file_size_bytes: int, user_id: Optional[str] = None) -> Tuple[bool, Optional[str]]:
     """Enforce per-role upload size quota (aligned with the 3 GiB application cap)."""
     _, u_role = _resolve_user_and_role(user_id)
     limits = RATE_LIMITS.get(u_role, UNAUTHENTICATED_LIMITS)
@@ -317,7 +317,7 @@ def check_upload_file_size(file_size_bytes: int, user_id: str = None) -> Tuple[b
         )
     return True, None
 
-def check_training_quota(user_id: str = None) -> Tuple[bool, Optional[str]]:
+def check_training_quota(user_id: Optional[str] = None) -> Tuple[bool, Optional[str]]:
     """Check training quota for current user"""
     u_id, u_role = _resolve_user_and_role(user_id)
     allowed, error = check_user_quota(u_id, 'training', u_role)
@@ -325,7 +325,7 @@ def check_training_quota(user_id: str = None) -> Tuple[bool, Optional[str]]:
         return False, error
     return True, None
 
-def check_inference_quota(user_id: str = None) -> Tuple[bool, Optional[str]]:
+def check_inference_quota(user_id: Optional[str] = None) -> Tuple[bool, Optional[str]]:
     """Check inference quota for current user"""
     u_id, u_role = _resolve_user_and_role(user_id)
     allowed, error = check_user_quota(u_id, 'inference', u_role)

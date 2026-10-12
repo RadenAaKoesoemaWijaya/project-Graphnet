@@ -1,4 +1,11 @@
-from config import MAX_FILE_SIZE, MAX_DIRECT_DETECTION_FILE_SIZE, LARGE_DATASET_CONFIG
+from config import (
+    MAX_FILE_SIZE,
+    MAX_CSV_FILE_SIZE,
+    MAX_PARQUET_FILE_SIZE,
+    MAX_EXCEL_FILE_SIZE,
+    MAX_DIRECT_DETECTION_FILE_SIZE,
+    LARGE_DATASET_CONFIG,
+)
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -290,7 +297,11 @@ def show_detection_page():
             uploaded_file = st.file_uploader(
                 "Unggah file dataset klaim asuransi:",
                 type=["csv", "xlsx", "xls", "parquet", "gz"],
-                help="CSV/Parquet/.csv.gz hingga 3 GiB (streaming). Excel dibatasi 100 MB. File besar dimuat sebagai Parquet.",
+                help=(
+                    f"CSV/CSV.GZ hingga {MAX_CSV_FILE_SIZE // (1024*1024*1024)} GiB (streaming). "
+                    f"Parquet hingga {MAX_PARQUET_FILE_SIZE // (1024*1024*1024)} GiB ({MAX_PARQUET_FILE_SIZE // (1024*1024)} MB). "
+                    f"Excel dibatasi {MAX_EXCEL_FILE_SIZE // (1024*1024)} MB."
+                ),
                 key="detection_file_uploader"
             )
         with col_up2:
@@ -309,7 +320,8 @@ def show_detection_page():
             try:
                 source_identity = get_file_hash(uploaded_file)
                 file_format = normalize_upload_type("", uploaded_file.name)
-                if uploaded_file.size > MAX_DIRECT_DETECTION_FILE_SIZE:
+                parquet_threshold = 100 * 1024 * 1024 if file_format == "parquet" else MAX_DIRECT_DETECTION_FILE_SIZE
+                if uploaded_file.size > parquet_threshold:
                     parquet_path, total_rows, _schema = ingest_file_to_raw_parquet(
                         uploaded_file, file_format
                     )
@@ -380,7 +392,7 @@ def show_detection_page():
     elif selected_source.startswith("🔄 Gunakan"):
         raw_df = session_df
         source_description = session_label
-        source_is_sampled = "sampel" in session_label.lower()
+        source_is_sampled = "sampel" in (session_label or "").lower()
         if source_is_sampled:
             source_total_rows = st.session_state.get("raw_data_total_rows")
         source_identity = str(
@@ -414,7 +426,7 @@ def show_detection_page():
     # Check if dataset changed to clear previous results
     if not source_identity:
         source_identity = get_dataframe_hash(raw_df)
-    if not source_is_sampled and "sampel" in source_description.lower():
+    if not source_is_sampled and "sampel" in (source_description or "").lower():
         source_is_sampled = True
     current_df_signature = hashlib.sha256(
         json.dumps(
@@ -501,7 +513,7 @@ def show_detection_page():
                 "dataset": current_df_signature,
                 "model": model_identity,
                 "threshold": float(threshold),
-                "gnn": bool(enable_gnn_inf),
+                "gnn": enable_gnn_inf,
                 "preprocessing": {
                     "large_file": bool(st.session_state.get("enable_large_file_handling", True)),
                     "outliers": bool(st.session_state.get("enable_outlier_detection", True)),
@@ -635,13 +647,13 @@ def show_detection_page():
 
                 # 5. Build results DataFrame
                 df_result = raw_df.copy()
-                df_result['anomaly_probability'] = pd.Series(np.asarray(probabilities, dtype=np.float64), index=df_result.index)
-                df_result['anomaly_prediction'] = pd.Series(np.asarray(predictions, dtype=np.int64), index=df_result.index)
-                df_result['isolation_forest_score'] = pd.Series(np.asarray(individual_probs.get('isolation_forest', np.zeros(len(df_result))), dtype=np.float64), index=df_result.index)
-                df_result['autoencoder_score'] = pd.Series(np.asarray(individual_probs.get('autoencoder', np.zeros(len(df_result))), dtype=np.float64), index=df_result.index)
+                df_result['anomaly_probability'] = pd.Series(np.asarray(probabilities, dtype=np.float64).tolist(), index=df_result.index)
+                df_result['anomaly_prediction'] = pd.Series(np.asarray(predictions, dtype=np.int64).tolist(), index=df_result.index)
+                df_result['isolation_forest_score'] = pd.Series(np.asarray(individual_probs.get('isolation_forest', np.zeros(len(df_result))), dtype=np.float64).tolist(), index=df_result.index)
+                df_result['autoencoder_score'] = pd.Series(np.asarray(individual_probs.get('autoencoder', np.zeros(len(df_result))), dtype=np.float64).tolist(), index=df_result.index)
                 if 'dbscan' in individual_probs:
-                    df_result['dbscan_score'] = pd.Series(np.asarray(individual_probs['dbscan'], dtype=np.float64), index=df_result.index)
-                df_result['xgboost_score'] = pd.Series(np.asarray(individual_probs.get('xgboost', np.zeros(len(df_result))), dtype=np.float64), index=df_result.index)
+                    df_result['dbscan_score'] = pd.Series(np.asarray(individual_probs['dbscan'], dtype=np.float64).tolist(), index=df_result.index)
+                df_result['xgboost_score'] = pd.Series(np.asarray(individual_probs.get('xgboost', np.zeros(len(df_result))), dtype=np.float64).tolist(), index=df_result.index)
 
                 # 6. Integrated Claim Risk Pipeline (9 Business Rules + Composite Scoring)
                 from fraud_risk_pipeline import run_integrated_claim_risk_pipeline
@@ -778,8 +790,11 @@ def show_detection_page():
                 category_counts = df_result['risk_category'].value_counts().reset_index()
             else:
                 category_chart_df = sample_dataframe_for_visualization(df_result)
-                category_chart_df['risk_category'] = category_chart_df.apply(_derive_risk_category, axis=1)
-                category_counts = category_chart_df['risk_category'].value_counts().reset_index()
+                if category_chart_df is not None:
+                    category_chart_df['risk_category'] = category_chart_df.apply(_derive_risk_category, axis=1)
+                    category_counts = category_chart_df['risk_category'].value_counts().reset_index()
+                else:
+                    category_counts = df_result[['risk_category']].value_counts().reset_index() if 'risk_category' in df_result.columns else df_result.head(0)[[]].assign(risk_category=[], Count=[]).reset_index(drop=True)
             category_counts.columns = ['Risk Category', 'Count']
             category_counts = category_counts[category_counts['Count'] > 0]
 
@@ -928,7 +943,8 @@ def show_detection_page():
                     return ['background-color: #fff7ed'] * len(row)
                 return [''] * len(row)
 
-            st.dataframe(fraud_table.style.apply(highlight_fraud, axis=1), width='stretch')
+            if fraud_table is not None:
+                st.dataframe(fraud_table.style.apply(highlight_fraud, axis=1), width='stretch')
 
             # Export button
             st.markdown("---")
@@ -1369,11 +1385,13 @@ def show_detection_page():
                             with st.spinner("🤖 Menganalisis respon audit..."):
                                 ans = copilot_engine.answer_investigator_query(context=claim_ctx, user_question=user_question.strip())
                                 _qa_hist = lru_session_get("qa_history", qa_history_key, [])
+                                if _qa_hist is None:
+                                    _qa_hist = []
                                 # ── QA item sekarang menyertakan provider_used ──
                                 _qa_hist.append({
                                     "question": user_question.strip(),
                                     "answer": ans,
-                                    "provider_used": str(copilot_engine.provider if hasattr(copilot_engine, 'provider') else provider_choice).lower()
+                                    "provider_used": (copilot_engine.provider if hasattr(copilot_engine, 'provider') else provider_choice).lower()
                                 })
                                 # Trim to QA_MAX so session state doesn't grow unbounded
                                 if len(_qa_hist) > QA_MAX:

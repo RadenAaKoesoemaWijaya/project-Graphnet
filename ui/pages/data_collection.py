@@ -8,6 +8,11 @@ from data_validator import validate_parquet_dataset
 from rate_limit import check_upload_quota, increment_quota
 from cache_manager import get_file_hash
 
+from config import (
+    MAX_CSV_FILE_SIZE,
+    MAX_PARQUET_FILE_SIZE,
+    MAX_EXCEL_FILE_SIZE,
+)
 from file_handler import (
     ingest_file_to_raw_parquet, get_parquet_sample, get_file_info,
     show_file_size_warning, save_processed_data, remove_duplicates_from_parquet,
@@ -63,7 +68,12 @@ def load_and_validate_raw_data(uploaded_file):
 
 def show_data_collection_page():
     st.title("Unggah Data Transaksi")
-    st.info("Tahap ini memeriksa kualitas data sebelum digunakan model. Upload hingga 3 GiB didukung untuk CSV/Parquet/.csv.gz. Excel dibatasi 100 MB; untuk file besar gunakan Parquet agar ingest tetap streaming.")
+    st.info(
+        f"Tahap ini memeriksa kualitas data sebelum digunakan model. Batas upload optimal deploy lokal: "
+        f"CSV/CSV.GZ hingga {MAX_CSV_FILE_SIZE // (1024*1024*1024)} GiB (streaming partition), "
+        f"Parquet hingga {MAX_PARQUET_FILE_SIZE // (1024*1024*1024)} GiB ({MAX_PARQUET_FILE_SIZE // (1024*1024)} MB), "
+        f"dan Excel (.xlsx/.xls) dibatasi {MAX_EXCEL_FILE_SIZE // (1024*1024)} MB."
+    )
 
     st.markdown("""
     ### Tujuan: Mengumpulkan data transaksi untuk analisis anomali
@@ -95,7 +105,11 @@ def show_data_collection_page():
     uploaded_file = st.file_uploader(
         "Unggah file data transaksi (CSV / CSV.GZ / Excel / Parquet)",
         type=["csv", "xlsx", "xls", "parquet", "gz"],
-        help="CSV, Parquet, dan .csv.gz hingga 3 GiB (streaming). Excel .xlsx/.xls dibatasi 100 MB."
+        help=(
+            f"CSV/CSV.GZ hingga {MAX_CSV_FILE_SIZE // (1024*1024*1024)} GiB (streaming partition). "
+            f"Parquet hingga {MAX_PARQUET_FILE_SIZE // (1024*1024*1024)} GiB ({MAX_PARQUET_FILE_SIZE // (1024*1024)} MB). "
+            f"Excel dibatasi {MAX_EXCEL_FILE_SIZE // (1024*1024)} MB."
+        )
     )
 
     if uploaded_file is not None:
@@ -110,15 +124,17 @@ def show_data_collection_page():
             
             # Get file information
             file_info = get_file_info(uploaded_file)
-            show_file_size_warning(file_info['size_gb'])
+            show_file_size_warning(file_info['size_gb'], file_info.get('file_type'))
 
             # Show file info
-            col1, col2, col3 = st.columns(3)
+            col1, col2, col3, col4 = st.columns(4)
             with col1:
                 st.metric("Ukuran File", f"{file_info['size_mb']:.1f} MB")
             with col2:
-                st.metric("Kategori", file_info['size_category'].title())
+                st.metric("Batas Format", f"{file_info['max_allowed_mb']:.0f} MB")
             with col3:
+                st.metric("Kategori", file_info['size_category'].title())
+            with col4:
                 st.metric("Ukuran Chunk", f"{file_info['recommended_chunk_size']:,}" if file_info['recommended_chunk_size'] else "Muat Penuh")
 
             # Clear old processing state if new file is uploaded
@@ -252,14 +268,16 @@ def show_data_collection_page():
                     plot_cols = numeric_cols[:6]
                     for col in plot_cols:
                         fig = create_histogram_chart(eda_df, col, nbins=40, title=f"Distribusi: {col}")
-                        st.plotly_chart(fig, width='stretch')
+                        if fig is not None:
+                            st.plotly_chart(fig, width='stretch')
 
                 if len(numeric_cols) >= 2:
                     with st.expander("🔗 Korelasi (Numerik)"):
                         corr_cols = numeric_cols[:20]
                         corr = eda_df[corr_cols].corr()
                         fig = create_correlation_heatmap(corr, title="Peta Korelasi (20 Fitur Numerik Teratas)")
-                        st.plotly_chart(fig, width='stretch')
+                        if fig is not None:
+                            st.plotly_chart(fig, width='stretch')
 
             # Preprocessing options
             st.markdown("---")
@@ -465,9 +483,10 @@ def show_data_collection_page():
                         st.success("✅ Data berhasil diproses dengan encoding canggih!")
 
                         try:
-                            orig_r = dataset_rows
-                            orig_c = dataset_cols
-                            proc_r = preprocessing_metadata.get('total_rows_processed', dataset_rows)
+                            orig_r = int(dataset_rows) if isinstance(dataset_rows, (int, float, str)) else 0
+                            orig_c = int(dataset_cols) if isinstance(dataset_cols, (int, float, str)) else 0
+                            proc_r_raw = preprocessing_metadata.get('total_rows_processed', dataset_rows)
+                            proc_r = int(proc_r_raw) if isinstance(proc_r_raw, (int, float, str)) else 0
                             proc_c = len(feature_columns)
                             log_preprocessing(
                                 original_rows=orig_r,
@@ -568,8 +587,9 @@ def show_data_collection_page():
                                 st.write(f"Baris duplikat dihapus: {dup_meta.get('duplicates_removed', 0):,}")
                                 st.write(f"Baris final: {dup_meta.get('final_rows', 0):,}")
                                 st.write(f"Persentase duplikat: {dup_meta.get('duplicate_rate', 0.0):.2%}")
-                                if dup_meta.get('subset'):
-                                    st.write(f"Kolom yang dicek: {', '.join(dup_meta['subset'])}")
+                                subset_val = dup_meta.get('subset')
+                                if subset_val and isinstance(subset_val, (list, tuple)):
+                                    st.write(f"Kolom yang dicek: {', '.join(str(c) for c in subset_val)}")
                                 else:
                                     st.write("Kolom yang dicek: Semua kolom")
 
@@ -1167,13 +1187,15 @@ def show_data_collection_page():
                         if 'billed_amount' in df_processed.columns:
                             fig = create_histogram_chart(df_processed, 'billed_amount',
                                            nbins=50, title='Distribusi Jumlah Klaim')
-                            st.plotly_chart(fig, width='stretch')
+                            if fig is not None:
+                                st.plotly_chart(fig, width='stretch')
 
                         # Plot 2: Distribusi usia pasien
                         if 'patient_age' in df_processed.columns:
                             fig = create_histogram_chart(df_processed, 'patient_age',
                                            nbins=20, title='Distribusi Usia Pasien')
-                            st.plotly_chart(fig, width='stretch')
+                            if fig is not None:
+                                st.plotly_chart(fig, width='stretch')
 
                         # Plot 3: Provider specialty distribution
                         if 'provider_specialty' in df_processed.columns:

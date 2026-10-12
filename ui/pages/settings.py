@@ -59,6 +59,11 @@ def show_settings_page():
                 help="Pilih provider LLM untuk Agentic Copilot. Heuristic Engine bekerja offline tanpa API key."
             )
         
+        # Default values for variables that may not be assigned in all branches
+        api_key_input: str = ""
+        model_choice: str = ""
+        endpoint_choice: str = ""
+
         with col2:
             if "Gemini" in provider_choice or "OpenAI" in provider_choice:
                 if 'settings_api_key_val' not in st.session_state:
@@ -372,31 +377,38 @@ def show_settings_page():
         st.markdown("#### 🧠 Konfigurasi Memori")
         
         try:
-            from config import MEMORY_LIMIT_MB, CHUNK_SIZE, MAX_FILE_SIZE
+            from config import (
+                MEMORY_LIMIT_MB, CHUNK_SIZE, MAX_FILE_SIZE,
+                MAX_CSV_FILE_SIZE, MAX_PARQUET_FILE_SIZE, MAX_EXCEL_FILE_SIZE
+            )
             
-            mem_col1, mem_col2, mem_col3 = st.columns(3)
+            mem_col1, mem_col2, mem_col3, mem_col4 = st.columns(4)
             with mem_col1:
                 st.metric("Memory Limit", f"{MEMORY_LIMIT_MB} MB")
             with mem_col2:
                 st.metric("Chunk Size", f"{CHUNK_SIZE // (1024*1024)} MB")
             with mem_col3:
-                st.metric("Max File Size", f"{MAX_FILE_SIZE // (1024*1024*1024)} GB")
+                st.metric("Max CSV", f"{MAX_CSV_FILE_SIZE // (1024*1024*1024)} GB")
+            with mem_col4:
+                st.metric("Max Parquet", f"{MAX_PARQUET_FILE_SIZE // (1024*1024*1024)} GB")
             
             st.info("💡 Konfigurasi memori diatur di file `config.py`. Modifikasi memerlukan restart aplikasi.")
             
+            st.markdown("---")
+            
+            # File Upload Configuration
+            st.markdown("#### 📁 Konfigurasi Upload File Optimal (Deploy Lokal)")
+            
+            up_c1, up_c2, up_c3 = st.columns(3)
+            with up_c1:
+                st.success(f"📄 **CSV / CSV.GZ**: Hingga **{MAX_CSV_FILE_SIZE // (1024*1024*1024)} GB** (streaming buffer & partition to disk)")
+            with up_c2:
+                st.success(f"⚡ **Parquet**: Hingga **{MAX_PARQUET_FILE_SIZE // (1024*1024*1024)} GB** ({MAX_PARQUET_FILE_SIZE // (1024*1024)} MB, columnar streaming Polars)")
+            with up_c3:
+                st.warning(f"📊 **Excel (.xlsx, .xls)**: Dibatasi **{MAX_EXCEL_FILE_SIZE // (1024*1024)} MB** (streaming row iterator / RAM-safe)")
+        
         except Exception as e:
             st.error(f"❌ Error membaca konfigurasi memori: {str(e)}")
-        
-        st.markdown("---")
-        
-        # File Upload Configuration
-        st.markdown("#### 📁 Konfigurasi Upload File")
-        
-        upload_col1, upload_col2 = st.columns(2)
-        with upload_col1:
-            st.info("📂 Format yang didukung: CSV, Excel (.xlsx, .xls), Parquet")
-        with upload_col2:
-            st.info("📏 Ukuran maksimal: 3 GB (diproses per chunk)")
     
     # TAB 4: Security & Privacy
     with tab4:

@@ -4,10 +4,12 @@ import tempfile
 import numpy as np
 import pandas as pd
 
-# File upload configuration for large files
-MAX_FILE_SIZE = 3 * 1024 * 1024 * 1024  # 3GiB in bytes
+# File upload configuration for large files (optimized for local deployment)
+MAX_CSV_FILE_SIZE = int(os.getenv("ASTINA_MAX_CSV_MB", "3072")) * 1024 * 1024        # 3GiB for CSV / CSV.GZ
+MAX_PARQUET_FILE_SIZE = int(os.getenv("ASTINA_MAX_PARQUET_MB", "1024")) * 1024 * 1024  # 1GiB for Parquet (compressed columnar)
+MAX_EXCEL_FILE_SIZE = int(os.getenv("ASTINA_MAX_EXCEL_MB", "150")) * 1024 * 1024      # 150MiB for Excel (.xlsx/.xls)
+MAX_FILE_SIZE = MAX_CSV_FILE_SIZE  # Overall 3GiB maximum file size
 MAX_DIRECT_DETECTION_FILE_SIZE = 500 * 1024 * 1024  # Direct detection still uses an in-memory DataFrame
-MAX_EXCEL_FILE_SIZE = 100 * 1024 * 1024  # Excel parsing is full-memory via pandas
 CHUNK_SIZE = 50 * 1024 * 1024  # 50MB chunks for processing
 VISUALIZATION_SAMPLE_SIZE = 5000
 SHAP_BACKGROUND_SAMPLE_SIZE = 500
@@ -33,7 +35,11 @@ USE_CATEGORICAL_OPTIMIZATION = True
 UPLOADER_CONFIG = {
     'type': ['csv', 'parquet', 'xlsx', 'xls', 'gz'],
     'max_file_size': MAX_FILE_SIZE,
-    'help': f'Upload file up to {MAX_FILE_SIZE // (1024*1024*1024)}GiB. Large files are processed in partitions. Gunakan CSV/Parquet (atau .csv.gz); Excel dibatasi {MAX_EXCEL_FILE_SIZE // (1024*1024):.0f}MB.'
+    'help': (
+        f"Unggah file: CSV/CSV.GZ hingga {MAX_CSV_FILE_SIZE // (1024*1024*1024)}GiB (streaming), "
+        f"Parquet hingga {MAX_PARQUET_FILE_SIZE // (1024*1024*1024)}GiB ({MAX_PARQUET_FILE_SIZE // (1024*1024)}MB), "
+        f"Excel dibatasi {MAX_EXCEL_FILE_SIZE // (1024*1024)}MB."
+    )
 }
 
 # Processing configuration for large datasets
@@ -130,10 +136,33 @@ def _validate_database_config():
 # Run validation on module import
 _validate_database_config()
 
-def check_file_size(file_size_bytes):
-    """Check if file size is within limits"""
-    if file_size_bytes > MAX_FILE_SIZE:
-        raise ValueError(f"File size ({file_size_bytes / (1024*1024*1024):.2f}GB) exceeds maximum allowed size ({MAX_FILE_SIZE / (1024*1024*1024)}GB)")
+def get_max_file_size_for_type(file_type: str = "") -> int:
+    """Return maximum allowed size in bytes for a specific file format."""
+    ft = (file_type or "").lower().lstrip(".")
+    if ft in ("xlsx", "xls", "excel"):
+        return MAX_EXCEL_FILE_SIZE
+    elif ft == "parquet":
+        return MAX_PARQUET_FILE_SIZE
+    elif ft in ("csv", "csv.gz", "gz"):
+        return MAX_CSV_FILE_SIZE
+    return MAX_FILE_SIZE
+
+def check_file_size(file_size_bytes: int, file_type: str = ""):
+    """Check if file size is within limits for its specific type."""
+    allowed_max = get_max_file_size_for_type(file_type) if file_type else MAX_FILE_SIZE
+    if file_size_bytes > allowed_max:
+        limit_str = (
+            f"{allowed_max / (1024*1024*1024):.1f}GB"
+            if allowed_max >= 1024 * 1024 * 1024
+            else f"{allowed_max / (1024*1024):.0f}MB"
+        )
+        size_str = (
+            f"{file_size_bytes / (1024*1024*1024):.2f}GB"
+            if file_size_bytes >= 1024 * 1024 * 1024
+            else f"{file_size_bytes / (1024*1024):.1f}MB"
+        )
+        type_desc = f" ({file_type.upper()})" if file_type else ""
+        raise ValueError(f"File size{type_desc} ({size_str}) exceeds maximum allowed size ({limit_str})")
     return True
 
 def get_optimal_chunk_size(file_size_bytes):

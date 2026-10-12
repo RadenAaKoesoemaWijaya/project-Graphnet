@@ -158,15 +158,18 @@ def _pandas_csv_to_parquet(file_path, output_path, chunk_size, dialect, progress
     writer = None
     writer_closed = False
     total_rows = 0
-    read_kwargs = {
-        "chunksize": chunk_size,
-        "sep": dialect.get("separator", ","),
-        "encoding": dialect.get("encoding", "utf-8"),
-        "low_memory": True,
-        "on_bad_lines": "warn",
-    }
+    sep = str(dialect.get("separator", ","))
+    encoding = str(dialect.get("encoding", "utf-8"))
     try:
-        for chunk_number, chunk in enumerate(pd.read_csv(file_path, **read_kwargs), start=1):
+        reader = pd.read_csv(
+            file_path,
+            chunksize=int(chunk_size),
+            sep=sep,
+            encoding=encoding,
+            low_memory=True,
+            on_bad_lines="warn",
+        )
+        for chunk_number, chunk in enumerate(reader, start=1):
             chunk = optimize_memory_usage(chunk)
             chunk = fix_arrow_compatibility(chunk)
             for column in chunk.select_dtypes(include=["category"]).columns:
@@ -188,7 +191,6 @@ def _pandas_csv_to_parquet(file_path, output_path, chunk_size, dialect, progress
                     f"Konversi CSV chunk {chunk_number}...",
                 )
     except TypeError:
-        read_kwargs.pop("on_bad_lines", None)
         return _pandas_csv_to_parquet_legacy(file_path, output_path, chunk_size, dialect, progress_callback)
     except Exception:
         if writer is not None:
@@ -309,13 +311,123 @@ def stream_csv_to_parquet(file_path, output_path=None, chunk_size=50000, progres
         progress_callback=progress_callback,
     )
 
+
+def stream_excel_to_parquet(file_path, output_path=None, chunk_size=25000, progress_callback=None):
+    """Write an Excel (.xlsx / .xls) to Parquet with memory safety.
+
+    Uses openpyxl read_only iterator for .xlsx to stream row chunks directly to Parquet.
+    Falls back to pandas for .xls or complex sheets.
+    """
+    file_size = os.path.getsize(file_path)
+    check_file_size(file_size, "xlsx")
+    check_ingest_resources(file_size)
+    if output_path is None:
+        os.makedirs(TEMP_DATA_DIR, exist_ok=True)
+        output_path = os.path.join(TEMP_DATA_DIR, f"raw_{uuid.uuid4().hex}.parquet")
+    else:
+        output_dir = os.path.dirname(output_path)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+
+    excel_errors = {'#NULL!', '#DIV/0!', '#VALUE!', '#REF!', '#NAME?', '#NUM!', '#N/A', '#N/A!'}
+
+    if str(file_path).lower().endswith(".xlsx"):
+        try:
+            import openpyxl
+            import pyarrow as pa
+            import pyarrow.parquet as pq
+
+            wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
+            sheet_names = wb.sheetnames
+            if not sheet_names:
+                raise ValueError("Workbook Excel tidak memiliki sheet.")
+            ws = wb[sheet_names[0]]
+            rows_iter = ws.iter_rows(values_only=True)
+
+            header_row = None
+            for row in rows_iter:
+                if row and any(cell is not None for cell in row):
+                    header_row = [
+                        str(cell).strip() if cell is not None else f"col_{idx}"
+                        for idx, cell in enumerate(row)
+                    ]
+                    break
+            if not header_row:
+                wb.close()
+                raise ValueError("File Excel tidak memiliki baris header.")
+
+            writer = None
+            chunk_buffer = []
+            total_rows = 0
+
+            for row in rows_iter:
+                if row is None or not any(c is not None for c in row):
+                    continue
+                cleaned_row = [
+                    None if (isinstance(c, str) and c.strip().upper() in excel_errors) else c
+                    for c in row[:len(header_row)]
+                ]
+                if len(cleaned_row) < len(header_row):
+                    cleaned_row.extend([None] * (len(header_row) - len(cleaned_row)))
+                chunk_buffer.append(cleaned_row)
+                total_rows += 1
+
+                if len(chunk_buffer) >= chunk_size:
+                    chunk_df = pd.DataFrame(chunk_buffer, columns=header_row)
+                    chunk_df = optimize_memory_usage(chunk_df)
+                    chunk_df = fix_arrow_compatibility(chunk_df)
+                    table = pa.Table.from_pandas(chunk_df)
+                    if writer is None:
+                        writer = pq.ParquetWriter(output_path, table.schema, compression="zstd")
+                    writer.write_table(table)
+                    chunk_buffer = []
+                    del chunk_df, table
+                    _report_progress(progress_callback, "convert", 65.0, f"Mengonversi Excel ({total_rows:,} baris)...")
+
+            if chunk_buffer:
+                chunk_df = pd.DataFrame(chunk_buffer, columns=header_row)
+                chunk_df = optimize_memory_usage(chunk_df)
+                chunk_df = fix_arrow_compatibility(chunk_df)
+                table = pa.Table.from_pandas(chunk_df)
+                if writer is None:
+                    writer = pq.ParquetWriter(output_path, table.schema, compression="zstd")
+                writer.write_table(table)
+                chunk_buffer = []
+                del chunk_df, table
+
+            if writer:
+                writer.close()
+            wb.close()
+
+            if total_rows == 0:
+                raise ValueError("File Excel tidak mengandung baris data.")
+
+            _report_progress(progress_callback, "convert", 90.0, f"Excel siap ({total_rows:,} baris).")
+            return output_path, total_rows
+        except Exception as exc:
+            logger.warning("Streaming Excel gagal (%s); falling back to pandas.", exc)
+            if os.path.exists(output_path):
+                try:
+                    os.unlink(output_path)
+                except Exception:
+                    pass
+
+    # Fallback to pandas
+    df = _read_local_file_with_optimization(file_path, "xlsx" if str(file_path).lower().endswith(".xlsx") else "xls")
+    df.to_parquet(output_path, index=False, compression="zstd")
+    row_count = len(df)
+    del df
+    gc.collect()
+    return output_path, row_count
+
+
 def read_with_polars(file_path, file_type='csv'):
     """
     Read file using Polars for high-performance big data handling
     """
     try:
         if file_type == 'csv':
-            df_pl = pl.read_csv(file_path, rechunk=False)
+            df_pl = pl.read_csv(file_path)
         elif file_type == 'parquet':
             df_pl = pl.read_parquet(file_path)
         elif file_type == 'json':
@@ -437,7 +549,7 @@ def read_file_with_optimization(uploaded_file, file_type='csv'):
     file_type = normalize_upload_type(file_type, filename)
 
     file_size = uploaded_file.size
-    check_file_size(file_size)
+    check_file_size(file_size, file_type)
     check_ingest_resources(file_size, copies=2.0)
 
     if file_type in ['xlsx', 'xls'] and file_size > MAX_EXCEL_FILE_SIZE:
@@ -445,6 +557,14 @@ def read_file_with_optimization(uploaded_file, file_type='csv'):
         raise ValueError(
             f"File Excel dibatasi {limit_mb:.0f}MB karena parser Excel menggunakan memory penuh. "
             "Gunakan CSV atau Parquet untuk dataset yang lebih besar."
+        )
+
+    if file_type == 'parquet' and file_size > MAX_PARQUET_FILE_SIZE:
+        limit_mb = MAX_PARQUET_FILE_SIZE / (1024 * 1024)
+        limit_gb = MAX_PARQUET_FILE_SIZE / (1024 * 1024 * 1024)
+        raise ValueError(
+            f"File Parquet dibatasi {limit_mb:.0f}MB ({limit_gb:.1f}GB) untuk menjaga kestabilan memori lokal. "
+            "Gunakan CSV streaming untuk dataset hingga 3GB."
         )
 
     suffix = ".csv.gz" if file_type == "csv.gz" else f".{file_type}"
@@ -523,15 +643,21 @@ def get_file_info(uploaded_file):
     file_size = uploaded_file.size
     file_size_mb = file_size / (1024 * 1024)
     file_size_gb = file_size / (1024 * 1024 * 1024)
-    
+    filename = getattr(uploaded_file, "name", "") or ""
+    file_type = normalize_upload_type("", filename)
+    max_allowed = get_max_file_size_for_type(file_type)
+
     info = {
         'size_bytes': file_size,
         'size_mb': file_size_mb,
         'size_gb': file_size_gb,
+        'file_type': file_type,
+        'max_allowed_bytes': max_allowed,
+        'max_allowed_mb': max_allowed / (1024 * 1024),
         'size_category': 'small' if file_size_mb < 100 else 'medium' if file_size_mb < 500 else 'large',
         'recommended_chunk_size': get_optimal_chunk_size(file_size)
     }
-    
+
     return info
 
 def optimize_dataframe_memory(df):
@@ -589,7 +715,7 @@ def ingest_file_to_raw_parquet(uploaded_file, file_type='csv', progress_callback
     filename = getattr(uploaded_file, "name", "") or ""
     file_type = normalize_upload_type(file_type, filename)
     file_size = int(getattr(uploaded_file, "size", 0) or 0)
-    check_file_size(file_size)
+    check_file_size(file_size, file_type)
     check_ingest_resources(file_size)
 
     if file_type in ["xlsx", "xls"] and file_size > MAX_EXCEL_FILE_SIZE:
@@ -597,6 +723,14 @@ def ingest_file_to_raw_parquet(uploaded_file, file_type='csv', progress_callback
         raise ValueError(
             f"File Excel dibatasi {limit_mb:.0f}MB karena parser Excel menggunakan memory penuh. "
             "Gunakan CSV atau Parquet untuk dataset yang lebih besar."
+        )
+
+    if file_type == "parquet" and file_size > MAX_PARQUET_FILE_SIZE:
+        limit_mb = MAX_PARQUET_FILE_SIZE / (1024 * 1024)
+        limit_gb = MAX_PARQUET_FILE_SIZE / (1024 * 1024 * 1024)
+        raise ValueError(
+            f"File Parquet dibatasi {limit_mb:.0f}MB ({limit_gb:.1f}GB) untuk menjaga kestabilan memori lokal. "
+            "Gunakan CSV streaming untuk dataset hingga 3GB."
         )
 
     os.makedirs(TEMP_DATA_DIR, exist_ok=True)
@@ -616,6 +750,16 @@ def ingest_file_to_raw_parquet(uploaded_file, file_type='csv', progress_callback
                 tmp_file_path,
                 output_path=raw_parquet_path,
                 progress_bar=False,
+                progress_callback=progress_callback,
+            )
+        elif file_type in ("xlsx", "xls"):
+            suffix = f".{file_type}"
+            tmp_file_path = os.path.join(TEMP_DATA_DIR, f"upload_{unique_id}{suffix}")
+            _stream_upload_to_path(uploaded_file, tmp_file_path, progress_callback)
+            _report_progress(progress_callback, "convert", 45.0, "Mengonversi Excel ke Parquet secara streaming...")
+            stream_excel_to_parquet(
+                tmp_file_path,
+                output_path=raw_parquet_path,
                 progress_callback=progress_callback,
             )
         else:
@@ -735,15 +879,23 @@ def remove_duplicates_from_parquet(input_path, output_path=None, subset=None, ke
     }
     return output_path, metadata
 
-def show_file_size_warning(file_size_gb):
+def show_file_size_warning(file_size_gb, file_type=None):
     """
-    Show warning for large files
+    Show warning for large files with format awareness
     """
-    if file_size_gb > 1.0:
-        st.warning(f"⚠️ File besar terdeteksi ({file_size_gb:.2f}GB). Proses akan membutuhkan waktu lebih lama.")
-        st.info("💡 Tips: File akan diproses secara bertahap untuk mengoptimalkan penggunaan memory.")
-    elif file_size_gb > 0.5:
-        st.info(f"📊 File medium ({file_size_gb:.2f}GB) akan diproses dengan optimasi memory.")
+    ft = (file_type or "").lower().lstrip(".")
+    if ft in ("xlsx", "xls"):
+        if file_size_gb > 0.08:  # > 80MB
+            st.warning(f"⚠️ File Excel berukuran {file_size_gb*1024:.0f} MB terdeteksi. Streaming iterator aktif untuk menjaga stabilitas RAM.")
+    elif ft == "parquet":
+        if file_size_gb > 0.5:
+            st.info(f"🚀 File Parquet terkompresi ({file_size_gb:.2f} GB) memuat data skala besar. ASTINA menggunakan lazy columnar streaming Polars untuk menjaga memori tetap optimal.")
+    else:
+        if file_size_gb > 1.0:
+            st.warning(f"⚠️ File CSV besar terdeteksi ({file_size_gb:.2f} GB). Ingest streaming ke Parquet aktif untuk mengoptimalkan penggunaan memory.")
+            st.info("💡 Tips: File diproses per partisi tanpa membebani RAM.")
+        elif file_size_gb > 0.5:
+            st.info(f"📊 File medium ({file_size_gb:.2f} GB) akan diproses dengan optimasi memory streaming.")
 
 def save_processed_data(df, prefix="processed"):
     """
