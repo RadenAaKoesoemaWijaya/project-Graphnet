@@ -39,7 +39,21 @@ def normalize_upload_type(file_type, filename=""):
 
 
 def check_ingest_resources(file_size_bytes, copies=None):
-    """Fail fast when temp disk (or RAM) cannot hold ingest copies."""
+    """Check disk and RAM resources for ingest.
+
+    Returns
+    -------
+    tuple(bool, str | None)
+        (ok, warning_message).  ``ok`` is always True (disk issues still
+        raise).  ``warning_message`` is a human-readable string when RAM
+        is low but the upload can still proceed, or ``None`` when
+        resources look fine.
+
+    Raises
+    ------
+    ValueError
+        Only when *disk* space is insufficient (unrecoverable).
+    """
     copies = INGEST_DISK_COPIES if copies is None else copies
     os.makedirs(TEMP_DATA_DIR, exist_ok=True)
     usage = shutil.disk_usage(TEMP_DATA_DIR)
@@ -50,20 +64,43 @@ def check_ingest_resources(file_size_bytes, copies=None):
             f"bebas di {TEMP_DATA_DIR} (tersedia {usage.free / (1024**3):.2f} GB). "
             "Kosongkan disk atau set TEMP_DATA_DIR ke volume yang lebih besar."
         )
+
+    warning_msg = None
     try:
         import psutil
-        # Only gate RAM for large uploads; small files and CI hosts with low
-        # "available" pages must still ingest.
-        if file_size_bytes >= 100 * 1024 * 1024:
-            available = psutil.virtual_memory().available
-            if available < 256 * 1024 * 1024:
-                raise ValueError(
-                    "RAM tersedia kurang dari 256 MB untuk file besar. "
-                    "Tutup aplikasi lain sebelum mengunggah."
-                )
+        gc.collect()
+        available = psutil.virtual_memory().available
+        avail_mb = available / (1024 * 1024)
+        file_mb = file_size_bytes / (1024 * 1024)
+
+        # Tiered RAM check:
+        # 1. Critical: RAM < 64 MB AND file > 500 MB → hard block
+        # 2. Low: RAM < 128 MB AND file > 100 MB → soft warning
+        # 3. Otherwise → proceed normally
+        critical_ram_mb = int(os.getenv("ASTINA_CRITICAL_RAM_MB", "64"))
+        warn_ram_mb = int(os.getenv("ASTINA_MIN_AVAILABLE_RAM_MB", "128"))
+        large_file_threshold_mb = 500
+
+        if avail_mb < critical_ram_mb and file_mb > large_file_threshold_mb:
+            raise ValueError(
+                f"RAM tersedia ({avail_mb:.0f} MB) sangat rendah dan file terlalu besar ({file_mb:.0f} MB). "
+                f"Minimal {critical_ram_mb} MB RAM diperlukan untuk file >500 MB. "
+                "Tutup aplikasi lain atau gunakan file yang lebih kecil."
+            )
+        elif avail_mb < warn_ram_mb and file_mb > 100:
+            warning_msg = (
+                f"⚠️ RAM tersedia rendah ({avail_mb:.0f} MB). "
+                "Proses upload tetap dilanjutkan dengan mode hemat memori. "
+                "Untuk performa optimal, tutup aplikasi lain."
+            )
+            logger.warning(
+                "Low RAM warning: %.0f MB available, file size %.0f MB",
+                avail_mb, file_mb,
+            )
     except ImportError:
         pass
-    return True
+
+    return True, warning_msg
 
 
 def can_materialize_dataset(file_size_bytes, safety_factor=2.0, reserve_bytes=1024 * 1024 * 1024):
@@ -256,7 +293,7 @@ def stream_csv_to_parquet(file_path, output_path=None, chunk_size=50000, progres
     """
     file_size = os.path.getsize(file_path)
     check_file_size(file_size)
-    check_ingest_resources(file_size)
+    check_ingest_resources(file_size)  # warning ignored in internal path
     if output_path is None:
         os.makedirs(TEMP_DATA_DIR, exist_ok=True)
         output_path = os.path.join(TEMP_DATA_DIR, f"raw_{uuid.uuid4().hex}.parquet")
@@ -320,7 +357,7 @@ def stream_excel_to_parquet(file_path, output_path=None, chunk_size=25000, progr
     """
     file_size = os.path.getsize(file_path)
     check_file_size(file_size, "xlsx")
-    check_ingest_resources(file_size)
+    check_ingest_resources(file_size)  # warning ignored in internal path
     if output_path is None:
         os.makedirs(TEMP_DATA_DIR, exist_ok=True)
         output_path = os.path.join(TEMP_DATA_DIR, f"raw_{uuid.uuid4().hex}.parquet")
@@ -550,7 +587,7 @@ def read_file_with_optimization(uploaded_file, file_type='csv'):
 
     file_size = uploaded_file.size
     check_file_size(file_size, file_type)
-    check_ingest_resources(file_size, copies=2.0)
+    check_ingest_resources(file_size, copies=2.0)  # warning ignored in internal path
 
     if file_type in ['xlsx', 'xls'] and file_size > MAX_EXCEL_FILE_SIZE:
         limit_mb = MAX_EXCEL_FILE_SIZE / (1024 * 1024)
@@ -716,7 +753,7 @@ def ingest_file_to_raw_parquet(uploaded_file, file_type='csv', progress_callback
     file_type = normalize_upload_type(file_type, filename)
     file_size = int(getattr(uploaded_file, "size", 0) or 0)
     check_file_size(file_size, file_type)
-    check_ingest_resources(file_size)
+    check_ingest_resources(file_size)  # warning ignored in internal path
 
     if file_type in ["xlsx", "xls"] and file_size > MAX_EXCEL_FILE_SIZE:
         limit_mb = MAX_EXCEL_FILE_SIZE / (1024 * 1024)
@@ -868,7 +905,7 @@ def ingest_multiple_files_to_raw_parquet(
         raise ValueError("Tidak ada file yang diunggah.")
 
     total_size = sum(int(getattr(f, "size", 0) or 0) for f in uploaded_files)
-    check_ingest_resources(total_size)
+    check_ingest_resources(total_size)  # warning ignored in internal path
 
     raw_paths = []
     file_names = []

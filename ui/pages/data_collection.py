@@ -47,7 +47,9 @@ def load_and_validate_raw_data(uploaded_files, add_source_column=True):
 
     try:
         total_size = sum(int(getattr(f, "size", 0) or 0) for f in file_list)
-        check_ingest_resources(total_size)
+        _ok, ram_warning = check_ingest_resources(total_size)
+        if ram_warning:
+            st.warning(ram_warning)
 
         raw_parquet_path, total_rows, schema_dict, summaries = ingest_multiple_files_to_raw_parquet(
             file_list,
