@@ -101,15 +101,76 @@ def show_data_collection_page():
         *Catatan: Sistem tetap adaptif memproses dataset parsial dengan imputasi dan feature extraction otomatis.*
         """)
 
+    # Petunjuk Batas Maksimal Upload per Format
+    csv_limit_gb = MAX_CSV_FILE_SIZE / (1024 ** 3)
+    csv_limit_mb = int(MAX_CSV_FILE_SIZE / (1024 ** 2))
+    parquet_limit_gb = MAX_PARQUET_FILE_SIZE / (1024 ** 3)
+    parquet_limit_mb = int(MAX_PARQUET_FILE_SIZE / (1024 ** 2))
+    excel_limit_mb = int(MAX_EXCEL_FILE_SIZE / (1024 ** 2))
+
+    st.markdown(f"""
+    <div style="background: rgba(30, 64, 175, 0.04); border: 1px solid rgba(59, 130, 246, 0.25); border-radius: 12px; padding: 14px 18px; margin-top: 10px; margin-bottom: 14px;">
+        <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 10px;">
+            <div style="font-weight: 700; font-size: 0.9rem; color: #1E40AF; display: flex; align-items: center; gap: 6px;">
+                <span>📋</span> <span>Petunjuk Batas Maksimal Upload per Format File:</span>
+            </div>
+            <span style="font-size: 0.74rem; font-weight: 600; color: #0284C7; background: rgba(2, 132, 199, 0.1); padding: 3px 10px; border-radius: 20px; border: 1px solid rgba(2, 132, 199, 0.2);">
+                ⚡ Zero-Crash Streaming & In-Memory Shield Active
+            </span>
+        </div>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(135px, 1fr)); gap: 10px;">
+            <div style="background: var(--card-bg, #FFFFFF); border: 1px solid rgba(226, 232, 240, 0.9); border-radius: 10px; padding: 10px 12px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.03);">
+                <div style="font-size: 0.78rem; font-weight: 700; color: #0284C7;">📄 CSV</div>
+                <div style="font-size: 1.15rem; font-weight: 800; color: #0F172A; margin: 2px 0;">{csv_limit_gb:g} GiB</div>
+                <div style="font-size: 0.7rem; color: #64748B;">({csv_limit_mb:,} MB) • Streaming</div>
+            </div>
+            <div style="background: var(--card-bg, #FFFFFF); border: 1px solid rgba(226, 232, 240, 0.9); border-radius: 10px; padding: 10px 12px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.03);">
+                <div style="font-size: 0.78rem; font-weight: 700; color: #0284C7;">🗜️ GZ / CSV.GZ</div>
+                <div style="font-size: 1.15rem; font-weight: 800; color: #0F172A; margin: 2px 0;">{csv_limit_gb:g} GiB</div>
+                <div style="font-size: 0.7rem; color: #64748B;">({csv_limit_mb:,} MB) • Terkompresi</div>
+            </div>
+            <div style="background: var(--card-bg, #FFFFFF); border: 1px solid rgba(226, 232, 240, 0.9); border-radius: 10px; padding: 10px 12px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.03);">
+                <div style="font-size: 0.78rem; font-weight: 700; color: #059669;">⚡ PARQUET</div>
+                <div style="font-size: 1.15rem; font-weight: 800; color: #0F172A; margin: 2px 0;">{parquet_limit_gb:g} GiB</div>
+                <div style="font-size: 0.7rem; color: #64748B;">({parquet_limit_mb:,} MB) • Columnar Polars</div>
+            </div>
+            <div style="background: var(--card-bg, #FFFFFF); border: 1px solid rgba(226, 232, 240, 0.9); border-radius: 10px; padding: 10px 12px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.03);">
+                <div style="font-size: 0.78rem; font-weight: 700; color: #D97706;">📊 XLSX</div>
+                <div style="font-size: 1.15rem; font-weight: 800; color: #0F172A; margin: 2px 0;">{excel_limit_mb:,} MB</div>
+                <div style="font-size: 0.7rem; color: #64748B;">Excel Modern • RAM Guard</div>
+            </div>
+            <div style="background: var(--card-bg, #FFFFFF); border: 1px solid rgba(226, 232, 240, 0.9); border-radius: 10px; padding: 10px 12px; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.03);">
+                <div style="font-size: 0.78rem; font-weight: 700; color: #D97706;">📑 XLS</div>
+                <div style="font-size: 1.15rem; font-weight: 800; color: #0F172A; margin: 2px 0;">{excel_limit_mb:,} MB</div>
+                <div style="font-size: 0.7rem; color: #64748B;">Excel 97-2004 • RAM Guard</div>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
     # Upload file
+    upload_help = (
+        f"Panduan Batas Maksimal Ukuran File:\n"
+        f"• CSV: Hingga {csv_limit_gb:g} GiB ({csv_limit_mb:,} MB) via streaming partition\n"
+        f"• GZ / CSV.GZ: Hingga {csv_limit_gb:g} GiB ({csv_limit_mb:,} MB) via streaming gzip\n"
+        f"• PARQUET: Hingga {parquet_limit_gb:g} GiB ({parquet_limit_mb:,} MB) via Polars columnar\n"
+        f"• XLSX: Hingga {excel_limit_mb:,} MB (proteksi memori parser Excel)\n"
+        f"• XLS: Hingga {excel_limit_mb:,} MB (proteksi memori parser Excel)"
+    )
+
     uploaded_file = st.file_uploader(
         "Unggah file data transaksi (CSV / CSV.GZ / Excel / Parquet)",
         type=["csv", "xlsx", "xls", "parquet", "gz"],
-        help=(
-            f"CSV/CSV.GZ hingga {MAX_CSV_FILE_SIZE // (1024*1024*1024)} GiB (streaming partition). "
-            f"Parquet hingga {MAX_PARQUET_FILE_SIZE // (1024*1024*1024)} GiB ({MAX_PARQUET_FILE_SIZE // (1024*1024)} MB). "
-            f"Excel dibatasi {MAX_EXCEL_FILE_SIZE // (1024*1024)} MB."
-        )
+        help=upload_help
+    )
+
+    st.caption(
+        f"💡 **Panduan Ukuran Maksimal**: "
+        f"**CSV**: {csv_limit_gb:g} GiB ({csv_limit_mb:,} MB) | "
+        f"**GZ / CSV.GZ**: {csv_limit_gb:g} GiB | "
+        f"**PARQUET**: {parquet_limit_gb:g} GiB ({parquet_limit_mb:,} MB) | "
+        f"**XLSX**: {excel_limit_mb:,} MB | "
+        f"**XLS**: {excel_limit_mb:,} MB"
     )
 
     if uploaded_file is not None:

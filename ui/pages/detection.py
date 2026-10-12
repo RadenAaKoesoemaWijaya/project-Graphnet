@@ -294,15 +294,29 @@ def show_detection_page():
     if selected_source.startswith("📤 Unggah File Baru"):
         col_up1, col_up2 = st.columns([3, 1])
         with col_up1:
+            csv_lim_gb = MAX_CSV_FILE_SIZE / (1024 ** 3)
+            csv_lim_mb = int(MAX_CSV_FILE_SIZE / (1024 ** 2))
+            parquet_lim_gb = MAX_PARQUET_FILE_SIZE / (1024 ** 3)
+            parquet_lim_mb = int(MAX_PARQUET_FILE_SIZE / (1024 ** 2))
+            excel_lim_mb = int(MAX_EXCEL_FILE_SIZE / (1024 ** 2))
+
             uploaded_file = st.file_uploader(
                 "Unggah file dataset klaim asuransi:",
                 type=["csv", "xlsx", "xls", "parquet", "gz"],
                 help=(
-                    f"CSV/CSV.GZ hingga {MAX_CSV_FILE_SIZE // (1024*1024*1024)} GiB (streaming). "
-                    f"Parquet hingga {MAX_PARQUET_FILE_SIZE // (1024*1024*1024)} GiB ({MAX_PARQUET_FILE_SIZE // (1024*1024)} MB). "
-                    f"Excel dibatasi {MAX_EXCEL_FILE_SIZE // (1024*1024)} MB."
+                    f"Panduan Batas Maksimal Upload per File:\n"
+                    f"• CSV: hingga {csv_lim_gb:g} GiB ({csv_lim_mb:,} MB) via streaming partition\n"
+                    f"• GZ / CSV.GZ: hingga {csv_lim_gb:g} GiB ({csv_lim_mb:,} MB) via streaming kompresi\n"
+                    f"• PARQUET: hingga {parquet_lim_gb:g} GiB ({parquet_lim_mb:,} MB) via Polars columnar\n"
+                    f"• XLSX & XLS: hingga {excel_lim_mb:,} MB (proteksi memori RAM)"
                 ),
                 key="detection_file_uploader"
+            )
+            st.caption(
+                f"💡 **Batas Maksimal**: "
+                f"**CSV & GZ**: {csv_lim_gb:g} GiB | "
+                f"**PARQUET**: {parquet_lim_gb:g} GiB ({parquet_lim_mb:,} MB) | "
+                f"**XLSX & XLS**: {excel_lim_mb:,} MB"
             )
         with col_up2:
             template_df = generate_sample_claims_template(n_rows=5)
