@@ -52,9 +52,9 @@ class SecurityValidator:
                 self._check_env_file_security(env_file)
             else:
                 if env_file == '.env.production':
-                    # Check if template exists as fallback
-                    if Path('.env.production.template').exists():
-                        self.warnings.append(f"[WARN] {env_file} not found, but template exists. Run: python scripts/setup_production_env.py")
+                    # Check if template or example exists as fallback
+                    if Path('.env.production.template').exists() or Path('.env.example').exists():
+                        self.warnings.append(f"[WARN] {env_file} not found, but template/example exists. Run: python scripts/setup_production_env.py")
                     else:
                         self.issues.append(f"[ERROR] {env_file} not found (required for production)")
     
@@ -64,15 +64,18 @@ class SecurityValidator:
             with open(env_file, 'r', encoding='utf-8', errors='ignore') as f:
                 content = f.read()
             
+            # Extract assigned password values to avoid matching comment words or key names
+            password_matches = re.findall(r'(?:ASTINA_\w+_PASSWORD|DB_PASSWORD|PASSWORD)\s*=\s*["\']?([^"\'\r\n#]+)["\']?', content, re.IGNORECASE)
+            assigned_passwords = [p.strip() for p in password_matches]
+
             # Check for default passwords
             for default_pwd in self.default_passwords:
-                if default_pwd in content:
+                if any(p == default_pwd for p in assigned_passwords):
                     self.issues.append(f"[ERROR] Default password found in {env_file}: {default_pwd[:10]}...")
             
             # Check for short passwords
-            password_lines = re.findall(r'PASSWORD=([^\n]+)', content)
-            for pwd in password_lines:
-                if len(pwd) < 12 and pwd != 'CHANGE_THIS_IN_PRODUCTION':
+            for pwd in assigned_passwords:
+                if len(pwd) < 12 and not pwd.startswith('CHANGE_THIS'):
                     self.warnings.append(f"[WARN] Short password in {env_file} (min 12 characters)")
             
             # Check if AUTH_ENABLED is properly set
