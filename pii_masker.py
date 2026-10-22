@@ -13,7 +13,7 @@ Security Category: High Priority (Phase 1)
 import re
 import os
 import hashlib
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Optional
 from datetime import datetime
 import logging
 
@@ -116,7 +116,7 @@ class PIIMasker:
     """Mask sensitive fields to protect PII in audit logs"""
     
     @staticmethod
-    def hash_pii(value: str, salt: str = None) -> str:
+    def hash_pii(value: str, salt: Optional[str] = None) -> str:
         """
         One-way hash of PII for anonymization.
         
@@ -271,7 +271,7 @@ class PIIMasker:
             return df
 
     @staticmethod
-    def mask_dataframe_for_ui(df, role: str = 'viewer', unmask: bool = False):
+    def mask_dataframe_for_ui(df: Any, role: str = 'viewer', unmask: bool = False) -> Any:
         """
         Apply role-based dynamic PII masking for UI preview tables under UU PDP No. 27/2022.
         - If unmask=True AND role in ('admin', 'auditor'): data is displayed unmasked.
@@ -282,7 +282,7 @@ class PIIMasker:
         if df is None:
             return df
 
-        if unmask and str(role).lower() in ('admin', 'auditor'):
+        if unmask and role.lower() in ('admin', 'auditor'):
             return df
 
         try:
@@ -410,8 +410,6 @@ class SecureDelete:
             True if successful
         """
         try:
-            import os
-            
             if not os.path.exists(file_path):
                 return True
             

@@ -13,8 +13,10 @@ import os
 # ─────────────────────────────────────────────────────────────────────────────
 if sys.platform == "win32" and sys.version_info < (3, 14):
     import asyncio
-    if hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    _set_policy = getattr(asyncio, "set_event_loop_policy", None)
+    _policy_cls = getattr(asyncio, "WindowsSelectorEventLoopPolicy", None)
+    if _set_policy and _policy_cls:
+        _set_policy(_policy_cls())
 
 from state_manager import navigate_to_page
 
@@ -119,11 +121,23 @@ def main():
     except Exception as e:
         # Log error and show recovery options
         import traceback
-        logger.error(f"Error displaying page '{current_page}': {e}", exc_info=True)
-        st.error(f"❌ Terjadi kesalahan pada halaman ({current_page}): {str(e)}")
-        
-        with st.expander("🔍 Detail Teknis Kesalahan (Traceback)"):
-            st.code(traceback.format_exc(), language='python')
+        import uuid
+        incident_id = f"ASTINA-{uuid.uuid4().hex[:8].upper()}"
+        logger.error(f"[{incident_id}] Error displaying page '{current_page}': {e}", exc_info=True)
+
+        env_name = os.getenv("ASTINA_ENVIRONMENT", os.getenv("ENVIRONMENT", "development")).strip().lower()
+        is_production = env_name in {"production", "prod"}
+
+        if is_production:
+            st.error(f"❌ Terjadi kesalahan internal pada halaman ({current_page}).")
+            st.warning(
+                f"🛡️ **Mode Keamanan Produksi Aktif**: Detail teknis dilindungi. "
+                f"ID Insiden: `{incident_id}`. Silakan hubungi administrator sistem atau tim teknis dengan menyertakan ID ini."
+            )
+        else:
+            st.error(f"❌ Terjadi kesalahan pada halaman ({current_page}): {str(e)}")
+            with st.expander("🔍 Detail Teknis Kesalahan (Traceback) - [Dev Mode]"):
+                st.code(traceback.format_exc(), language='python')
         
         st.markdown("---")
         col_err1, col_err2 = st.columns(2)

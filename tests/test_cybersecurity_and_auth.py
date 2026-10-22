@@ -5,6 +5,7 @@ from unittest.mock import patch
 from auth_manager import (
     AuthManager,
     hash_password,
+    generate_secure_password_hash,
     verify_password,
     DEFAULT_USERS,
     ROLE_PERMISSIONS,
@@ -51,6 +52,18 @@ class TestCybersecurityAndAuth(unittest.TestCase):
         legacy_h = hashlib.sha256(f"{legacy_salt}:{pw}:{legacy_salt}".encode('utf-8')).hexdigest()
         self.assertTrue(verify_password(pw, legacy_h))
         self.assertFalse(verify_password("WrongPassword!", legacy_h))
+
+    def test_dynamic_salt_password_hashing(self):
+        pw = "SuperSecureKey2026!#"
+        hash1 = generate_secure_password_hash(pw)
+        hash2 = generate_secure_password_hash(pw)
+
+        # Dynamic salts must produce different hashes for identical passwords
+        self.assertNotEqual(hash1, hash2)
+        # Both must still verify successfully with verify_password
+        self.assertTrue(verify_password(pw, hash1))
+        self.assertTrue(verify_password(pw, hash2))
+        self.assertFalse(verify_password("IncorrectPassword", hash1))
 
     def test_login_rate_limiting_and_account_lockout(self):
         test_user = "brute_force_target_user"
@@ -189,6 +202,7 @@ class TestCybersecurityAndAuth(unittest.TestCase):
 
         # 1. Viewer / Analyst: personal identity is masked, financial data intact
         masked_viewer = PIIMasker.mask_dataframe_for_ui(raw_claims, role="viewer", unmask=False)
+        assert masked_viewer is not None
         self.assertNotEqual(masked_viewer.loc[0, "patient_id"], "PAT-98765432")
         self.assertIn("****", masked_viewer.loc[0, "patient_id"])
         self.assertIn("****", masked_viewer.loc[0, "nik"])
@@ -198,10 +212,12 @@ class TestCybersecurityAndAuth(unittest.TestCase):
 
         # 2. Auditor default (toggle off): still masked
         masked_auditor_default = PIIMasker.mask_dataframe_for_ui(raw_claims, role="auditor", unmask=False)
+        assert masked_auditor_default is not None
         self.assertIn("****", masked_auditor_default.loc[0, "nik"])
 
         # 3. Auditor with unmask toggle on: forensic access granted
         unmasked_auditor = PIIMasker.mask_dataframe_for_ui(raw_claims, role="auditor", unmask=True)
+        assert unmasked_auditor is not None
         self.assertEqual(unmasked_auditor.loc[0, "patient_id"], "PAT-98765432")
         self.assertEqual(unmasked_auditor.loc[0, "nik"], "3201123456780001")
         self.assertEqual(unmasked_auditor.loc[0, "nama"], "Ahmad Dani")

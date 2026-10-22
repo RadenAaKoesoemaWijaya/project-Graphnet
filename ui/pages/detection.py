@@ -496,6 +496,16 @@ def show_detection_page():
         unsafe_allow_html=True
     )
 
+    if source_is_sampled:
+        total_str = f"{source_total_rows:,}" if source_total_rows else "seluruh file"
+        st.warning(
+            f"⚖️ **Perhatian Kepatuhan Audit (Compliance Notice)**: "
+            f"Dataset yang dimuat pada sesi interaktif ini adalah **sampel terbatas ({len(raw_df):,} klaim)** dari total **{total_str} baris**. "
+            "Inference interaktif di browser ini ditujukan untuk evaluasi cepat dan eksplorasi pola fraud. "
+            "Untuk audit forensik resmi pada 100% seluruh dataset tanpa batasan memori browser, gunakan batch processing CLI "
+            "atau proses file Parquet penuh secara headless."
+        )
+
     # Schema completeness inspection
     with st.expander("🩺 Periksa Kesiapan Skema Kolom Bisnis", expanded=False):
         render_schema_readiness_card(raw_df)

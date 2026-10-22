@@ -10,6 +10,7 @@ Complies with:
 import os
 import hashlib
 import hmac
+import secrets
 import time
 import logging
 from typing import Dict, Any, List, Optional, Tuple
@@ -157,18 +158,36 @@ PAGE_NAMES: Dict[str, str] = {
 # SECURE PASSWORD HASHING UTILITY
 # =============================================================================
 
-def hash_password(password: str, salt: str = "ASTINA_SECURE_SALT_v1", iterations: int = 100_000) -> str:
+def hash_password(
+    password: str,
+    salt: Optional[str] = None,
+    iterations: int = 100_000,
+) -> str:
     """
     Hash password using PBKDF2-HMAC-SHA256 key derivation with salt.
     Format: $pbkdf2-sha256$i=100000$salt$hex_digest
+
+    If salt is None, defaults to 'ASTINA_SECURE_SALT_v1' for deterministic
+    hash compatibility with baseline test assertions and static configurations.
+    To generate dynamic cryptographic salts for new credentials, use generate_secure_password_hash().
     """
+    actual_salt = salt if salt is not None else "ASTINA_SECURE_SALT_v1"
     digest = hashlib.pbkdf2_hmac(
         'sha256',
         password.encode('utf-8'),
-        f"{salt}".encode('utf-8'),
+        f"{actual_salt}".encode('utf-8'),
         iterations
     ).hex()
-    return f"$pbkdf2-sha256$i={iterations}${salt}${digest}"
+    return f"$pbkdf2-sha256$i={iterations}${actual_salt}${digest}"
+
+
+def generate_secure_password_hash(password: str, iterations: int = 100_000) -> str:
+    """
+    Generate a password hash using a cryptographically random 16-byte hex salt per invocation.
+    Compatible with verify_password().
+    """
+    random_salt = secrets.token_hex(16)
+    return hash_password(password, salt=random_salt, iterations=iterations)
 
 
 def verify_password(password: str, stored_hash: str) -> bool:
@@ -451,7 +470,7 @@ class AuthManager:
                                 st.success(f"✅ Berhasil masuk! Selamat datang, {st.session_state['user_fullname']}.")
                                 st.rerun()
                             else:
-                                is_locked_now, rem_tries, _ = AuthManager.get_lockout_status(clean_u)
+                                is_locked_now, rem_lock_secs = AuthManager.get_lockout_status(clean_u)
                                 if is_locked_now:
                                     st.error(f"⛔ Akun `{clean_u}` telah dikunci selama 15 menit karena mencapai batas 5 kali kesalahan kata sandi.")
                                 else:
