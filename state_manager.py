@@ -138,6 +138,7 @@ def reset_downstream_state():
         'selected_features_cache',
         'feature_selection_method',
         'feature_selection_scope',
+        'excluded_engineered_features',
         'original_feature_count',
         'final_feature_count',
         'proceed_after_selection',

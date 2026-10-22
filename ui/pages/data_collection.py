@@ -399,12 +399,12 @@ def show_data_collection_page():
             # Tampilkan informasi kolom
             st.subheader("Informasi Kolom")
             col_info = pd.DataFrame({
-                'Kolom': df.columns,
-                'Tipe Data': df.dtypes.values,
-                'Missing Values': df.isnull().sum().values,
-                'Unique Values': [df[col].nunique() for col in df.columns]
+                'Kolom': [str(c) for c in df.columns],
+                'Tipe Data': [str(dtype) for dtype in df.dtypes],
+                'Missing Values': [int(v) for v in df.isnull().sum().values],
+                'Unique Values': [int(df[col].nunique()) for col in df.columns]
             })
-            st.dataframe(col_info)
+            st.dataframe(col_info, width='stretch')
 
             numeric_cols = eda_df.select_dtypes(include=[np.number]).columns.tolist()  # type: ignore[arg-type]
             if numeric_cols:
@@ -481,6 +481,89 @@ def show_data_collection_page():
                     "dari sisa data; seluruh statistik preprocessing hanya di-fit pada train."
                 ),
             )
+
+            # --- Opsi Penghapusan Fitur / Kolom Mentah ---
+            available_raw_cols = [str(c) for c in df.columns]
+
+            high_missing_suggestions = [
+                str(c) for c in df.columns 
+                if (df[c].isnull().sum() / len(df)) > 0.5
+            ]
+            constant_col_suggestions = [
+                str(c) for c in df.columns 
+                if df[c].nunique(dropna=False) <= 1
+            ]
+
+            with st.expander("🗑️ Opsi Penghapusan Fitur / Kolom Mentah (Feature Dropping)", expanded=True):
+                st.markdown(
+                    "Pilih kolom mentah yang ingin **dihapus / dikeluarkan** dari dataset sebelum pembersihan data, imputasi, dan rekayasa fitur (*feature engineering*). "
+                    "Kolom yang dipilih tidak akan diproses, tidak akan membebani memori, dan tidak akan diubah menjadi fitur model."
+                )
+
+                q_cols = st.columns([1.2, 1.2, 1])
+                with q_cols[0]:
+                    if high_missing_suggestions:
+                        if st.button(
+                            f"⚡ Pilih Missing > 50% ({len(high_missing_suggestions)})",
+                            key="btn_quick_missing",
+                            help=f"Pilih: {', '.join(high_missing_suggestions)}"
+                        ):
+                            cur = set(st.session_state.get('columns_to_drop', []))
+                            cur.update(high_missing_suggestions)
+                            st.session_state['columns_to_drop'] = sorted(list(cur))
+                            st.rerun()
+                    else:
+                        st.caption("✅ Tidak ada kolom missing > 50%")
+                with q_cols[1]:
+                    if constant_col_suggestions:
+                        if st.button(
+                            f"⚡ Pilih Kolom Konstan ({len(constant_col_suggestions)})",
+                            key="btn_quick_constant",
+                            help=f"Pilih: {', '.join(constant_col_suggestions)}"
+                        ):
+                            cur = set(st.session_state.get('columns_to_drop', []))
+                            cur.update(constant_col_suggestions)
+                            st.session_state['columns_to_drop'] = sorted(list(cur))
+                            st.rerun()
+                    else:
+                        st.caption("✅ Tidak ada kolom nilai tunggal")
+                with q_cols[2]:
+                    if st.session_state.get('columns_to_drop'):
+                        if st.button("🔄 Reset Pilihan Kolom", key="btn_reset_drop_cols"):
+                            st.session_state['columns_to_drop'] = []
+                            st.rerun()
+
+                if 'columns_to_drop' not in st.session_state:
+                    st.session_state['columns_to_drop'] = []
+
+                # Filter agar hanya kolom yang valid di dataset
+                st.session_state['columns_to_drop'] = [
+                    c for c in st.session_state['columns_to_drop'] if c in available_raw_cols
+                ]
+
+                selected_drop_cols = st.multiselect(
+                    "Pilih kolom untuk dihapus:",
+                    options=available_raw_cols,
+                    default=st.session_state['columns_to_drop'],
+                    key="multiselect_drop_columns",
+                    help="Pilih satu atau beberapa kolom yang ingin dihapus. Kolom ini akan dieliminasi dari seluruh proses downstream."
+                )
+                st.session_state['columns_to_drop'] = selected_drop_cols
+
+                rem_cols = len(available_raw_cols) - len(selected_drop_cols)
+                if selected_drop_cols:
+                    drop_c1, drop_c2, drop_c3 = st.columns(3)
+                    with drop_c1:
+                        st.metric("Total Kolom Awal", len(available_raw_cols))
+                    with drop_c2:
+                        st.metric("Kolom Dihapus", f"-{len(selected_drop_cols)}")
+                    with drop_c3:
+                        st.metric("Kolom Tersisa", rem_cols)
+                    st.warning(f"⚠️ **{len(selected_drop_cols)} kolom akan dihapus:** {', '.join(selected_drop_cols)}")
+                    if rem_cols <= 0:
+                        st.error("❌ Anda tidak dapat menghapus semua kolom. Sisakan minimal 1 kolom untuk diproses.")
+
+            can_process = rem_cols > 0
             
             # Show process button only if data hasn't been processed yet
             if 'df_processed_path' not in st.session_state:
@@ -489,6 +572,7 @@ def show_data_collection_page():
                     type="primary",
                     width='stretch',
                     key="btn_process_data",
+                    disabled=not can_process,
                 )
             else:
                 process_data_btn = False
@@ -514,6 +598,7 @@ def show_data_collection_page():
                     duplicate_metadata = None
                     result = None
                     temporary_input_paths = []
+                    columns_to_drop = list(st.session_state.get('columns_to_drop', []))
                     dataset_rows = st.session_state.get('raw_data_total_rows', len(df) if hasattr(df, 'shape') else 0)
                     dataset_cols = st.session_state.get('raw_data_total_cols', len(df.columns) if hasattr(df, 'columns') else 0)
 
@@ -524,6 +609,7 @@ def show_data_collection_page():
                             subset_cols = None
                             if duplicate_subset.strip():
                                 subset_cols = [col.strip() for col in duplicate_subset.split(',') if col.strip()]
+                                subset_cols = [col for col in subset_cols if col not in columns_to_drop]
                             duplicate_input = input_target
                             input_target, duplicate_metadata = remove_duplicates_from_parquet(
                                 input_target,
@@ -542,7 +628,7 @@ def show_data_collection_page():
                             subset_cols = None
                             if duplicate_subset.strip():
                                 subset_cols = [col.strip() for col in duplicate_subset.split(',') if col.strip()]
-                                subset_cols = [col for col in subset_cols if col in df.columns]
+                                subset_cols = [col for col in subset_cols if col in df.columns and col not in columns_to_drop]
 
                             input_target, duplicate_metadata = remove_duplicates(input_target, subset=subset_cols, keep='first')
 
@@ -554,6 +640,7 @@ def show_data_collection_page():
                         input_target, owns_partitioned_input = prepare_train_validation_test_parquet(
                             input_target,
                             test_size=preprocessing_test_size / 100,
+                            drop_columns=columns_to_drop,
                         )
                         if owns_partitioned_input:
                             temporary_input_paths.append(input_target)
@@ -563,6 +650,7 @@ def show_data_collection_page():
                             enable_outlier_detection=st.session_state.get('enable_outlier_detection', True),
                             enable_data_validation=st.session_state.get('enable_data_validation', True),
                             test_size=preprocessing_test_size / 100,
+                            drop_columns=columns_to_drop,
                         )
                         for temporary_path in temporary_input_paths:
                             if os.path.exists(temporary_path):
@@ -655,15 +743,20 @@ def show_data_collection_page():
                             logger.warning(f"Failed to log audit trail: {e}")
 
                         st.subheader("📊 Ringkasan Preprocessing")
-                        col1, col2, col3, col4 = st.columns(4)
-                        with col1:
-                            st.metric("Kolom Awal", str(preprocessing_metadata.get('original_columns_count', dataset_cols)))
-                        with col2:
+                        sum_cols = st.columns(5)
+                        with sum_cols[0]:
+                            st.metric("Kolom Awal", str(dataset_cols))
+                        with sum_cols[1]:
+                            st.metric("Kolom Dihapus", f"-{len(columns_to_drop)}" if columns_to_drop else "0")
+                        with sum_cols[2]:
                             st.metric("Fitur Akhir", str(preprocessing_metadata.get('final_features_count', len(feature_columns))))
-                        with col3:
+                        with sum_cols[3]:
                             st.metric("Kolom Tanggal", str(preprocessing_metadata.get('date_columns_count', 0)))
-                        with col4:
+                        with sum_cols[4]:
                             st.metric("Kolom Kategorikal", str(preprocessing_metadata.get('categorical_columns_count', 0)))
+
+                        if columns_to_drop:
+                            st.info(f"🗑️ **{len(columns_to_drop)} Kolom berhasil dieliminasi dari dataset:** {', '.join(columns_to_drop)}")
 
                         # Display detailed preprocessing insights safely
                         if preprocessing_metadata.get('outlier_metadata') or preprocessing_metadata.get('validation_metadata'):
@@ -921,7 +1014,31 @@ def show_data_collection_page():
                 
                     # Feature selection options - Multiple Methods
                     st.write("### 🎯 Pilihan Seleksi Fitur:")
-                
+
+                    # Feature exclusion (Drop specific engineered features)
+                    with st.expander("🗑️ Opsi Eliminasi Fitur Modeling (Exclude Features)", expanded=False):
+                        st.caption("Keluarkan fitur spesifik dari kandidat model jika dirasa kurang informatif, redundan, atau berpotensi leakage.")
+                        if 'excluded_engineered_features' not in st.session_state:
+                            st.session_state['excluded_engineered_features'] = []
+                        st.session_state['excluded_engineered_features'] = [
+                            f for f in st.session_state['excluded_engineered_features'] if f in feature_columns
+                        ]
+                        excluded_features = st.multiselect(
+                            "Pilih fitur yang ingin dikecualikan dari model:",
+                            options=feature_columns,
+                            default=st.session_state['excluded_engineered_features'],
+                            key="excluded_engineered_features_selection",
+                            help="Fitur yang dipilih akan dieliminasi dari kandidat pelatihan model."
+                        )
+                        st.session_state['excluded_engineered_features'] = excluded_features
+                        if excluded_features:
+                            st.warning(f"🗑️ **{len(excluded_features)} fitur dikecualikan:** {', '.join(excluded_features[:5])}{'...' if len(excluded_features) > 5 else ''}")
+
+                    candidate_features = [f for f in feature_columns if f not in st.session_state.get('excluded_engineered_features', [])]
+                    if not candidate_features:
+                        candidate_features = feature_columns
+                        st.warning("⚠️ Semua fitur dikecualikan! Mengembalikan semua fitur sebagai kandidat.")
+
                     selection_method = st.selectbox(
                         "Pilih metode seleksi fitur:",
                         ["Semua Fitur", "Seleksi Manual Kustom", "Select K-Best (Statistical)", 
@@ -929,12 +1046,12 @@ def show_data_collection_page():
                          "PCA Dimensionality Reduction"],
                         help="Pilih metode untuk menentukan fitur yang akan digunakan dalam training"
                     )
-                
+
                     selected_features = []
-                
+
                     if selection_method == "Semua Fitur":
-                        selected_features = feature_columns
-                        st.info(f"✅ Menggunakan semua {len(feature_columns)} fitur yang tersedia")
+                        selected_features = candidate_features
+                        st.info(f"✅ Menggunakan semua {len(candidate_features)} fitur yang tersedia")
                     
                     elif selection_method == "Seleksi Manual Kustom":
                         st.write("**Pilih Fitur untuk Pelatihan:**")
@@ -946,45 +1063,48 @@ def show_data_collection_page():
                             with col1:
                                 st.write("**📊 Fitur Original:**")
                                 # Use feature_columns as original features since original_features is not defined
-                                for feat in feature_columns[:5]:  # Show first 5
+                                for feat in candidate_features[:5]:  # Show first 5
                                     st.write(f"  • {feat}")
-                                if len(feature_columns) > 5:
-                                    st.write(f"  ... dan {len(feature_columns)-5} lainnya")
+                                if len(candidate_features) > 5:
+                                    st.write(f"  ... dan {len(candidate_features)-5} lainnya")
                         
                             with col2:
                                 st.write("**🔢 Fitur Numerikal:**")
-                                if numerical_features:
-                                    for feat in numerical_features[:5]:
+                                cand_numerical = [f for f in numerical_features if f in candidate_features]
+                                if cand_numerical:
+                                    for feat in cand_numerical[:5]:
                                         st.write(f"  • {feat}")
-                                    if len(numerical_features) > 5:
-                                        st.write(f"  ... dan {len(numerical_features)-5} lainnya")
+                                    if len(cand_numerical) > 5:
+                                        st.write(f"  ... dan {len(cand_numerical)-5} lainnya")
                                 else:
                                     st.write("  Tidak ada")
                         
                             with col3:
                                 st.write("**⏰ Fitur Temporal:**")
-                                if temporal_features:
-                                    for feat in temporal_features:
+                                cand_temporal = [f for f in temporal_features if f in candidate_features]
+                                if cand_temporal:
+                                    for feat in cand_temporal:
                                         st.write(f"  • {feat}")
                                 else:
                                     st.write("  Tidak ada")
                         
                             with col4:
                                 st.write("**🔧 Fitur Engineering:**")
-                                if derived_features:
-                                    for feat in derived_features[:5]:
+                                cand_derived = [f for f in derived_features if f in candidate_features]
+                                if cand_derived:
+                                    for feat in cand_derived[:5]:
                                         st.write(f"  • {feat}")
-                                    if len(derived_features) > 5:
-                                        st.write(f"  ... dan {len(derived_features)-5} lainnya")
+                                    if len(cand_derived) > 5:
+                                        st.write(f"  ... dan {len(cand_derived)-5} lainnya")
                                 else:
                                     st.write("  Tidak ada")
                     
                         selected_features = st.multiselect(
                             "Pilih fitur yang ingin digunakan:",
-                            options=feature_columns,
-                            default=feature_columns[:15],  # Default 15 fitur pertama
+                            options=candidate_features,
+                            default=candidate_features[:min(15, len(candidate_features))],
                             help="Pilih fitur yang paling relevan untuk deteksi anomali. Semakin banyak fitur, semakin kompleks modelnya.",
-                            max_selections=len(feature_columns)
+                            max_selections=len(candidate_features)
                         )
                     
                         # Show selection summary
@@ -1287,6 +1407,11 @@ def show_data_collection_page():
 
                     # Save and proceed if ready
                     if proceed_to_training and (len(selected_features) > 0 or len(final_features) > 0):
+                        excluded_set = set(st.session_state.get('excluded_engineered_features', []))
+                        if excluded_set:
+                            final_features = [f for f in final_features if f not in excluded_set]
+                            selected_features = [f for f in selected_features if f not in excluded_set]
+
                         # Save final feature selection
                         st.session_state['selected_features'] = final_features
                         st.session_state['feature_selection_method'] = selection_method

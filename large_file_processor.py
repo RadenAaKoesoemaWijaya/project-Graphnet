@@ -16,13 +16,19 @@ def _is_target_column(column_name):
     return any(token in name for token in ("fraud", "label", "target", "class"))
 
 
-def compute_global_preprocessing_stats(parquet_path: str, enable_outlier_detection: bool = True, enable_data_validation: bool = True):
+def compute_global_preprocessing_stats(
+    parquet_path: str,
+    enable_outlier_detection: bool = True,
+    enable_data_validation: bool = True,
+    drop_columns: list[str] | tuple[str, ...] | set[str] | None = None,
+):
     """
     Pass 1: Extract global statistics, quantiles, missing rates, and categorical frequencies
     using Polars Lazy streaming without loading the entire dataset into memory.
     """
     lf = pl.scan_parquet(parquet_path)
     schema = lf.collect_schema()
+    drop_set = set(drop_columns) if drop_columns else set()
     
     partition_column = "__astina_partition"
     fit_lf = lf
@@ -33,7 +39,7 @@ def compute_global_preprocessing_stats(parquet_path: str, enable_outlier_detecti
     if total_rows == 0:
         raise ValueError("Partisi training kosong; statistik preprocessing tidak dapat di-fit.")
 
-    original_columns = list(schema.names())
+    original_columns = [col for col in list(schema.names()) if col not in drop_set]
     
     # Classify columns
     date_columns = []
@@ -42,6 +48,8 @@ def compute_global_preprocessing_stats(parquet_path: str, enable_outlier_detecti
     
     for col, dtype in schema.items():
         if col in {partition_column, "__astina_split_row_id"}:
+            continue
+        if col in drop_set:
             continue
         if _is_target_column(col):
             continue
@@ -163,12 +171,19 @@ def compute_global_preprocessing_stats(parquet_path: str, enable_outlier_detecti
         'categorical_columns': categorical_columns,
         'num_stats': num_stats,
         'cat_stats': cat_stats,
-        'initial_features': final_features
+        'initial_features': final_features,
+        'dropped_columns': list(drop_columns) if drop_columns else []
     }
     return stats
 
-def stream_transform_to_parquet(input_parquet_path: str, output_parquet_path: str | None = None, stats: dict | None = None,
-                                enable_outlier_detection: bool = True, enable_data_validation: bool = True):
+def stream_transform_to_parquet(
+    input_parquet_path: str,
+    output_parquet_path: str | None = None,
+    stats: dict | None = None,
+    enable_outlier_detection: bool = True,
+    enable_data_validation: bool = True,
+    drop_columns: list[str] | tuple[str, ...] | set[str] | None = None,
+):
     """
     Pass 2: Apply lazy transformation expressions and stream directly to output Parquet on disk.
     Peak memory remains bounded regardless of input file size.
@@ -177,7 +192,8 @@ def stream_transform_to_parquet(input_parquet_path: str, output_parquet_path: st
         stats = compute_global_preprocessing_stats(
             input_parquet_path, 
             enable_outlier_detection=enable_outlier_detection,
-            enable_data_validation=enable_data_validation
+            enable_data_validation=enable_data_validation,
+            drop_columns=drop_columns,
         )
 
     if output_parquet_path is None:
@@ -194,13 +210,22 @@ def stream_transform_to_parquet(input_parquet_path: str, output_parquet_path: st
             os.makedirs(output_dir, exist_ok=True)
 
     lf = pl.scan_parquet(input_parquet_path)
+    drop_set = set(drop_columns) if drop_columns else set()
+    drop_set.update(stats.get('dropped_columns', []))
+    if drop_set:
+        valid_drops = [c for c in drop_set if c in lf.collect_schema().names() and c not in {"__astina_partition", "__astina_split_row_id"}]
+        if valid_drops:
+            lf = lf.drop(valid_drops)
+
     total_rows = int(lf.select(pl.len()).collect().item())
     transform_exprs = []
-    final_features = list(stats['initial_features'])
+    final_features = [f for f in list(stats['initial_features']) if f not in drop_set]
     encoding_metadata = {}
 
     # 1. Date Features
     for col in stats['date_columns']:
+        if col in drop_set:
+            continue
         try:
             # Parse to date/datetime if string
             date_expr = pl.col(col)
@@ -222,6 +247,8 @@ def stream_transform_to_parquet(input_parquet_path: str, output_parquet_path: st
 
     # 2. Outlier Capping & Missing Imputation for Numerical Columns
     for col in stats['numerical_columns']:
+        if col in drop_set:
+            continue
         st_col = stats['num_stats'].get(col, {})
         median_val = st_col.get('median', 0.0)
         
@@ -236,6 +263,8 @@ def stream_transform_to_parquet(input_parquet_path: str, output_parquet_path: st
 
     # 3. Categorical Encodings
     for col, c_info in stats['cat_stats'].items():
+        if col in drop_set:
+            continue
         cardinality = c_info.get('cardinality', 0)
         freq_map = c_info.get('freq_map', {})
         top_cats = c_info.get('top_categories', [])
@@ -276,7 +305,7 @@ def stream_transform_to_parquet(input_parquet_path: str, output_parquet_path: st
                 encoding_metadata[col] = {'strategy': 'frequency', 'features': [freq_name], 'cardinality': cardinality}
 
     # 4. Financial & Amount Ratios (Top 5 amounts)
-    amount_cols = [c for c in stats['numerical_columns'] if any(k in c.lower() for k in ['amount', 'cost', 'price', 'fee', 'charge'])][:5]
+    amount_cols = [c for c in stats['numerical_columns'] if c not in drop_set and any(k in c.lower() for k in ['amount', 'cost', 'price', 'fee', 'charge'])][:5]
     if len(amount_cols) >= 2:
         for i, c1 in enumerate(amount_cols):
             for c2 in amount_cols[i+1:i+3]:
@@ -288,7 +317,7 @@ def stream_transform_to_parquet(input_parquet_path: str, output_parquet_path: st
                 final_features.append(ratio_name)
 
     # 5. Age squared and high value flags
-    age_cols = [c for c in stats['numerical_columns'] if any(k in c.lower() for k in ['age', 'years', 'old'])]
+    age_cols = [c for c in stats['numerical_columns'] if c not in drop_set and any(k in c.lower() for k in ['age', 'years', 'old'])]
     for c in age_cols:
         sq_name = f"{c}_squared"
         transform_exprs.append((pl.col(c) ** 2).cast(pl.Float32).alias(sq_name))
@@ -301,7 +330,7 @@ def stream_transform_to_parquet(input_parquet_path: str, output_parquet_path: st
     seen_features = set()
     dedup_final_features = []
     for f in final_features:
-        if f not in seen_features:
+        if f not in seen_features and f not in drop_set:
             seen_features.add(f)
             dedup_final_features.append(f)
 
@@ -323,6 +352,8 @@ def stream_transform_to_parquet(input_parquet_path: str, output_parquet_path: st
         'date_columns_count': len(stats['date_columns']),
         'categorical_columns_count': len(stats['categorical_columns']),
         'numerical_columns_count': len(stats['numerical_columns']),
+        'dropped_columns': list(drop_set),
+        'dropped_columns_count': len(drop_set),
         'enhanced_encoding_metadata': encoding_metadata,
         'outlier_metadata': {'outlier_detection_enabled': enable_outlier_detection},
         'validation_metadata': {'data_validation_enabled': enable_data_validation},
@@ -331,12 +362,20 @@ def stream_transform_to_parquet(input_parquet_path: str, output_parquet_path: st
 
     return output_parquet_path, dedup_final_features, preprocessing_metadata
 
-def preprocess_large_dataset(df_or_path, chunk_size=50000, progress_bar=True, enable_outlier_detection=True, enable_data_validation=True):
+def preprocess_large_dataset(
+    df_or_path,
+    chunk_size=50000,
+    progress_bar=True,
+    enable_outlier_detection=True,
+    enable_data_validation=True,
+    drop_columns=None,
+):
     """
     Optimized streaming preprocessing for large datasets with bounded memory consumption.
     Accepts either a Parquet file path (str) or a pandas DataFrame.
     """
     temp_input_created = False
+    drop_set = set(drop_columns) if drop_columns else set()
     
     if isinstance(df_or_path, str) and os.path.exists(df_or_path):
         parquet_input_path = df_or_path
@@ -346,9 +385,11 @@ def preprocess_large_dataset(df_or_path, chunk_size=50000, progress_bar=True, en
         # Convert in-memory DataFrame to temporary Parquet to stream out-of-core
         parquet_input_path = os.path.join(TEMP_DATA_DIR, f"temp_input_{uuid.uuid4().hex}.parquet")
         if isinstance(df_or_path, pd.DataFrame):
-            df_or_path.to_parquet(parquet_input_path, index=False, compression="snappy")
+            df_in = df_or_path.drop(columns=[c for c in drop_set if c in df_or_path.columns]) if drop_set else df_or_path
+            df_in.to_parquet(parquet_input_path, index=False, compression="snappy")
         elif isinstance(df_or_path, pl.DataFrame):
-            df_or_path.write_parquet(parquet_input_path, compression="snappy")
+            pl_in = df_or_path.drop([c for c in drop_set if c in df_or_path.columns]) if drop_set else df_or_path
+            pl_in.write_parquet(parquet_input_path, compression="snappy")
         else:
             raise ValueError("Input must be a valid Parquet path or DataFrame.")
         temp_input_created = True
@@ -357,7 +398,8 @@ def preprocess_large_dataset(df_or_path, chunk_size=50000, progress_bar=True, en
         stats = compute_global_preprocessing_stats(
             parquet_input_path,
             enable_outlier_detection=enable_outlier_detection,
-            enable_data_validation=enable_data_validation
+            enable_data_validation=enable_data_validation,
+            drop_columns=drop_columns,
         )
         
         # Ensure TEMP_DATA_DIR exists before attempting to write
@@ -368,7 +410,8 @@ def preprocess_large_dataset(df_or_path, chunk_size=50000, progress_bar=True, en
             output_parquet_path=output_parquet_path,
             stats=stats,
             enable_outlier_detection=enable_outlier_detection,
-            enable_data_validation=enable_data_validation
+            enable_data_validation=enable_data_validation,
+            drop_columns=drop_columns,
         )
         
         # If input was a small DataFrame and caller expects a DataFrame back, check size
@@ -462,7 +505,12 @@ def smart_data_type_optimization(df, memory_threshold=0.8):
     return df
 
 
-def prepare_train_validation_test_parquet(input_data, test_size=0.2, validation_size=0.15):
+def prepare_train_validation_test_parquet(
+    input_data,
+    test_size=0.2,
+    validation_size=0.15,
+    drop_columns=None,
+):
     """Write a deterministic row-level split marker before fitting preprocessing statistics."""
     if not 0 < test_size < 1 or not 0 < validation_size < 1:
         raise ValueError("Ukuran test dan validation harus berada di antara 0 dan 1.")
@@ -472,9 +520,12 @@ def prepare_train_validation_test_parquet(input_data, test_size=0.2, validation_
     os.makedirs(TEMP_DATA_DIR, exist_ok=True)
     source_is_temporary = False
     retain_temporary_source = False
+    drop_set = set(drop_columns) if drop_columns else set()
+
     if isinstance(input_data, pd.DataFrame):
+        df_source = input_data.drop(columns=[c for c in drop_set if c in input_data.columns]) if drop_set else input_data
         source_path = os.path.join(TEMP_DATA_DIR, f"raw_split_source_{uuid.uuid4().hex}.parquet")
-        input_data.to_parquet(source_path, index=False, compression="zstd")
+        df_source.to_parquet(source_path, index=False, compression="zstd")
         source_is_temporary = True
     elif isinstance(input_data, str) and os.path.exists(input_data):
         source_path = input_data
@@ -498,10 +549,21 @@ def prepare_train_validation_test_parquet(input_data, test_size=0.2, validation_
             )
             if not set(invalid).issubset(allowed):
                 raise ValueError("Kolom partisi ASTINA berisi nilai yang tidak dikenal.")
+            if drop_set:
+                valid_drops = [c for c in drop_set if c in names and c not in {partition_column, row_id_column}]
+                if valid_drops:
+                    lf.drop(valid_drops).sink_parquet(output_path, compression="zstd")
+                    return output_path, True
             retain_temporary_source = source_is_temporary
             return source_path, source_is_temporary
         if row_id_column in names:
             raise ValueError(f"Kolom internal {row_id_column} sudah ada pada sumber data.")
+
+        if drop_set:
+            valid_drops = [c for c in drop_set if c in names and c not in {partition_column, row_id_column}]
+            if valid_drops:
+                lf = lf.drop(valid_drops)
+                schema = lf.collect_schema()
 
         total_rows = int(lf.select(pl.len()).collect().item())
         if total_rows < 10:
@@ -567,12 +629,14 @@ def preprocess_dataset_with_train_only_stats(
     enable_data_validation=True,
     test_size=0.2,
     validation_size=0.15,
+    drop_columns=None,
 ):
     """Fit preprocessing statistics on train rows and transform all rows consistently."""
     partitioned_path, owns_partitioned_path = prepare_train_validation_test_parquet(
         input_data,
         test_size=test_size,
         validation_size=validation_size,
+        drop_columns=drop_columns,
     )
     output_path = os.path.join(TEMP_DATA_DIR, f"preprocessed_train_fit_{uuid.uuid4().hex}.parquet")
     try:
@@ -580,6 +644,7 @@ def preprocess_dataset_with_train_only_stats(
             partitioned_path,
             enable_outlier_detection=enable_outlier_detection,
             enable_data_validation=enable_data_validation,
+            drop_columns=drop_columns,
         )
         transformed_path, feature_columns, metadata = stream_transform_to_parquet(
             partitioned_path,
@@ -587,11 +652,14 @@ def preprocess_dataset_with_train_only_stats(
             stats=stats,
             enable_outlier_detection=enable_outlier_detection,
             enable_data_validation=enable_data_validation,
+            drop_columns=drop_columns,
         )
         metadata["preprocessing_contract_version"] = 1
         metadata["preprocessing_fit_scope"] = "train_partition"
         metadata["split_column"] = "__astina_partition"
         metadata["split_row_id_column"] = "__astina_split_row_id"
+        metadata["dropped_columns"] = list(drop_columns) if drop_columns else []
+        metadata["dropped_columns_count"] = len(drop_columns) if drop_columns else 0
         metadata["split_counts"] = {
             row["__astina_partition"]: int(row["len"])
             for row in (
@@ -617,6 +685,7 @@ def preprocess_dataset_with_train_only_stats(
             "cat_stats": stats["cat_stats"],
             "initial_features": stats["initial_features"],
             "enable_outlier_detection": bool(enable_outlier_detection),
+            "dropped_columns": list(drop_columns) if drop_columns else [],
         }
         return transformed_path, feature_columns, metadata
     except Exception:

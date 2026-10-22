@@ -551,7 +551,13 @@ def enhanced_categorical_encoding(df, categorical_columns):
     
     return df_processed, encoding_metadata
 
-def preprocess_insurance_claims_optimized(df, enable_large_file_handling=True, enable_outlier_detection=True, enable_data_validation=True):
+def preprocess_insurance_claims_optimized(
+    df,
+    enable_large_file_handling=True,
+    enable_outlier_detection=True,
+    enable_data_validation=True,
+    drop_columns=None,
+):
     """
     Enhanced preprocessing with large file support - adapts to any dataset structure
     
@@ -560,33 +566,41 @@ def preprocess_insurance_claims_optimized(df, enable_large_file_handling=True, e
         enable_large_file_handling: Enable parallel processing for large datasets
         enable_outlier_detection: Enable outlier detection and handling
         enable_data_validation: Enable data range validation
+        drop_columns: Optional list of columns to exclude/drop before preprocessing
     
     Returns:
         df_processed: Processed dataframe
         final_features: List of final features for modeling
         preprocessing_metadata: Dictionary with preprocessing statistics
     """
+    drop_set = set(drop_columns) if drop_columns else set()
+
     # Check if input is a file path or large dataset
     if isinstance(df, str):
         return preprocess_large_dataset(
             df,
             enable_outlier_detection=enable_outlier_detection,
-            enable_data_validation=enable_data_validation
+            enable_data_validation=enable_data_validation,
+            drop_columns=drop_columns,
         )
 
     if enable_large_file_handling and len(df) > 50000:
         return preprocess_large_dataset(
             df,
             enable_outlier_detection=enable_outlier_detection,
-            enable_data_validation=enable_data_validation
+            enable_data_validation=enable_data_validation,
+            drop_columns=drop_columns,
         )
     
     # Original preprocessing for smaller datasets
-    # Work in-place to avoid unnecessary copy
     df_processed = df
+    if drop_set:
+        cols_to_drop = [c for c in drop_set if c in df_processed.columns]
+        if cols_to_drop:
+            df_processed = df_processed.drop(columns=cols_to_drop)
     
     # Store original columns for reference
-    original_columns = df.columns.tolist()
+    original_columns = df_processed.columns.tolist()
     
     # 1. ENHANCED MISSING VALUE HANDLING (with robust statistics)
     memory_mb, is_critical, should_continue = check_memory_threshold(warning_threshold_mb=2000)
@@ -923,6 +937,8 @@ def preprocess_insurance_claims_optimized(df, enable_large_file_handling=True, e
         'date_columns_count': date_columns_count,
         'categorical_columns_count': categorical_columns_count,
         'numerical_columns_count': numerical_columns_count,
+        'dropped_columns': list(drop_set),
+        'dropped_columns_count': len(drop_set),
         'enhanced_encoding_metadata': encoding_metadata,
         'missing_value_metadata': missing_metadata,
         'outlier_metadata': outlier_metadata,
