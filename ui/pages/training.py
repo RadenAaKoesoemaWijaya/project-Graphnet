@@ -55,6 +55,20 @@ def show_training_page():
             navigate_to_page('collect')
         return
 
+    # Ensure train_df and test_df are initialized
+    if 'train_df' not in st.session_state or 'test_df' not in st.session_state:
+        try:
+            from state_manager import split_processed_dataset_with_validation
+            train_df, validation_df, test_df, stratify_label = split_processed_dataset_with_validation(df_processed)
+            st.session_state['train_df'] = train_df
+            st.session_state['validation_df'] = validation_df
+            st.session_state['test_df'] = test_df
+            st.info(f"✅ Data split otomatis: latih ({len(train_df)}), validasi ({len(validation_df)}), test ({len(test_df)})")
+        except Exception as e:
+            st.error(f"❌ Gagal membagi data: {str(e)}")
+            logger.error(f"Failed to split data in training page: {e}", exc_info=True)
+            return
+
     try:
         df_processed = get_df_processed()
         if df_processed is None:
@@ -397,7 +411,7 @@ def show_training_page():
     # ----------------------------------------------------
     # DYNAMIC COMPLEXITY & HARDWARE ESTIMATOR (QA BADGE)
     # ----------------------------------------------------
-    n_samples = len(st.session_state.get('train_df', [])) if 'train_df' in st.session_state else len(df_processed)
+    n_samples = len(st.session_state.get('train_df', pd.DataFrame())) if 'train_df' in st.session_state else len(df_processed)
     
     # Calculate complexity score
     complexity_score = 0
@@ -469,6 +483,11 @@ def show_training_page():
     # Training
     if st.button("🚀 Mulai Training", type="primary"):
         with st.spinner("Sedang melatih model..."):
+            # Ensure train_df and test_df are available
+            if 'train_df' not in st.session_state or 'test_df' not in st.session_state:
+                st.error("❌ Data latih/test belum tersedia. Silakan coba lagi atau refresh halaman.")
+                return
+
             train_df = st.session_state['train_df']
             test_df = st.session_state['test_df']
             
