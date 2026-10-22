@@ -169,12 +169,12 @@ Semua dependensi inti dikunci pada [requirements.txt](requirements.txt):
 2. **Buat dan aktifkan Virtual Environment**:
    - **Windows (PowerShell)**:
      ```powershell
-     py -3.13 -m venv .venv
+     py -3.12 -m venv .venv
      .\.venv\Scripts\Activate.ps1
      ```
    - **Linux / macOS**:
      ```bash
-     python3.13 -m venv .venv
+     python3.12 -m venv .venv
      source .venv/bin/activate
      ```
 
