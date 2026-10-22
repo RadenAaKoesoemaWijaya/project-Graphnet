@@ -22,9 +22,10 @@ if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
 # disconnect: _ProactorBasePipeTransport._call_connection_lost → [WinError 10054]
 # WindowsSelectorEventLoopPolicy is stable for Streamlit's HTTP/WebSocket I/O.
 # ─────────────────────────────────────────────────────────────────────────────
-if sys.platform == "win32":
+if sys.platform == "win32" and sys.version_info < (3, 14):
     import asyncio
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    if hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 # ─────────────────────────────────────────────────────────────────────────────
 # FIX: Resolve correct Python interpreter (.venv priority)
@@ -114,6 +115,17 @@ def main():
     os.makedirs("logs", exist_ok=True)
     os.makedirs("cache", exist_ok=True)
 
+    # Configure thread pool and streaming limits to prevent memory exhaustion and crashes
+    max_threads = str(min(4, max(1, (os.cpu_count() or 2) // 2)))
+    os.environ["POLARS_MAX_THREADS"] = max_threads
+    os.environ["RAYON_NUM_THREADS"] = max_threads
+    os.environ["OMP_NUM_THREADS"] = max_threads
+    os.environ["OPENBLAS_NUM_THREADS"] = max_threads
+    os.environ["MKL_NUM_THREADS"] = max_threads
+    os.environ["VECLIB_MAXIMUM_THREADS"] = max_threads
+    os.environ["NUMEXPR_NUM_THREADS"] = max_threads
+    os.environ["POLARS_STREAMING_CHUNK_SIZE"] = "50000"
+
     print("🚀 Menjalankan aplikasi...")
     print("🌐 Membuka di browser pada http://localhost:8501")
     print("⏹️  Tekan Ctrl+C untuk menghentikan aplikasi")
@@ -122,6 +134,14 @@ def main():
     try:
         # Run streamlit app using the resolved Python interpreter
         runtime_env = os.environ.copy()
+        runtime_env["POLARS_MAX_THREADS"] = max_threads
+        runtime_env["RAYON_NUM_THREADS"] = max_threads
+        runtime_env["OMP_NUM_THREADS"] = max_threads
+        runtime_env["OPENBLAS_NUM_THREADS"] = max_threads
+        runtime_env["MKL_NUM_THREADS"] = max_threads
+        runtime_env["VECLIB_MAXIMUM_THREADS"] = max_threads
+        runtime_env["NUMEXPR_NUM_THREADS"] = max_threads
+        runtime_env["POLARS_STREAMING_CHUNK_SIZE"] = "50000"
         project_root = os.path.dirname(os.path.abspath(__file__))
         existing_pythonpath = runtime_env.get("PYTHONPATH", "")
         runtime_env["PYTHONPATH"] = os.pathsep.join(
@@ -130,7 +150,8 @@ def main():
         cmd = [
             PYTHON_EXEC, "-m", "streamlit", "run", "main.py",
             "--server.maxUploadSize=3072",
-            "--server.maxMessageSize=3072"
+            "--server.maxMessageSize=3072",
+            "--server.fileWatcherType=none"
         ]
         subprocess.run(cmd, check=True, env=runtime_env)
     except KeyboardInterrupt:

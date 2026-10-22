@@ -11,9 +11,10 @@ import os
 # → sock.shutdown(SHUT_RDWR) → [WinError 10054] Connection reset by remote host.
 # SelectorEventLoop is stable for Streamlit's HTTP/WebSocket I/O workload.
 # ─────────────────────────────────────────────────────────────────────────────
-if sys.platform == "win32":
+if sys.platform == "win32" and sys.version_info < (3, 14):
     import asyncio
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    if hasattr(asyncio, "WindowsSelectorEventLoopPolicy"):
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 from state_manager import navigate_to_page
 
@@ -24,6 +25,17 @@ logger = logging.getLogger(__name__)
 if not hasattr(sys, 'get_int_max_str_digits'):
     sys.get_int_max_str_digits = lambda: 4300
     sys.set_int_max_str_digits = lambda maxdigits: None
+
+# Configure thread pool and streaming limits to prevent memory exhaustion and crashes
+max_threads = str(min(4, max(1, (os.cpu_count() or 2) // 2)))
+os.environ.setdefault("POLARS_MAX_THREADS", max_threads)
+os.environ.setdefault("RAYON_NUM_THREADS", max_threads)
+os.environ.setdefault("OMP_NUM_THREADS", max_threads)
+os.environ.setdefault("OPENBLAS_NUM_THREADS", max_threads)
+os.environ.setdefault("MKL_NUM_THREADS", max_threads)
+os.environ.setdefault("VECLIB_MAXIMUM_THREADS", max_threads)
+os.environ.setdefault("NUMEXPR_NUM_THREADS", max_threads)
+os.environ.setdefault("POLARS_STREAMING_CHUNK_SIZE", "50000")
 
 # Suppress Polars CPU feature check warnings
 os.environ["POLARS_SKIP_CPU_CHECK"] = "1"

@@ -62,35 +62,61 @@ def compute_global_preprocessing_stats(
             categorical_columns.append(col)
 
     # Global aggregations for numerical columns
-    num_aggs = []
+    # 1. Basic non-sorting stats across the full training partition (streaming O(1) RAM)
+    basic_aggs = []
     for col in numerical_columns:
-        num_aggs.extend([
+        basic_aggs.extend([
             pl.col(col).null_count().alias(f"{col}__nulls"),
-            pl.col(col).median().alias(f"{col}__median"),
             pl.col(col).mean().alias(f"{col}__mean"),
             pl.col(col).std().alias(f"{col}__std"),
             pl.col(col).min().alias(f"{col}__min"),
             pl.col(col).max().alias(f"{col}__max"),
-            pl.col(col).quantile(0.25).alias(f"{col}__q25"),
-            pl.col(col).quantile(0.75).alias(f"{col}__q75"),
-            pl.col(col).quantile(0.90).alias(f"{col}__q90"),
-            pl.col(col).quantile(0.10).alias(f"{col}__q10"),
         ])
 
+    basic_stats_df = fit_lf.select(basic_aggs).collect() if basic_aggs else None
+
+    # 2. Order statistics (median, quantiles) for outlier clipping & imputation
+    # To prevent OOM / Access Violation (0xC0000005) from sorting 1.7M+ rows simultaneously across 40+ columns,
+    # use a highly representative 50k-row sample when total_rows > 50,000.
+    sample_for_stats = total_rows > 50000
+    if sample_for_stats and numerical_columns:
+        num_sample_df = fit_lf.select(numerical_columns).limit(50000).collect()
+    else:
+        num_sample_df = None
+
     num_stats = {}
-    if num_aggs:
-        stats_df = fit_lf.select(num_aggs).collect()
+    if basic_stats_df is not None:
         for col in numerical_columns:
-            null_count = stats_df[f"{col}__nulls"][0]
-            median_val = stats_df[f"{col}__median"][0]
-            mean_val = stats_df[f"{col}__mean"][0]
-            std_val = stats_df[f"{col}__std"][0]
-            min_val = stats_df[f"{col}__min"][0]
-            max_val = stats_df[f"{col}__max"][0]
-            q25 = stats_df[f"{col}__q25"][0]
-            q75 = stats_df[f"{col}__q75"][0]
-            q90 = stats_df[f"{col}__q90"][0]
-            q10 = stats_df[f"{col}__q10"][0]
+            null_count = int(basic_stats_df[f"{col}__nulls"][0] or 0)
+            mean_val = basic_stats_df[f"{col}__mean"][0]
+            std_val = basic_stats_df[f"{col}__std"][0]
+            min_val = basic_stats_df[f"{col}__min"][0]
+            max_val = basic_stats_df[f"{col}__max"][0]
+
+            if num_sample_df is not None and col in num_sample_df.columns:
+                series = num_sample_df[col].drop_nulls()
+                if len(series) > 0:
+                    median_val = series.median()
+                    q10 = series.quantile(0.10)
+                    q25 = series.quantile(0.25)
+                    q75 = series.quantile(0.75)
+                    q90 = series.quantile(0.90)
+                else:
+                    median_val = q10 = q25 = q75 = q90 = 0.0
+            else:
+                # Small dataset (< 50,000 rows): compute directly
+                single_stats = fit_lf.select([
+                    pl.col(col).median().alias("median"),
+                    pl.col(col).quantile(0.10).alias("q10"),
+                    pl.col(col).quantile(0.25).alias("q25"),
+                    pl.col(col).quantile(0.75).alias("q75"),
+                    pl.col(col).quantile(0.90).alias("q90"),
+                ]).collect()
+                median_val = single_stats["median"][0]
+                q10 = single_stats["q10"][0]
+                q25 = single_stats["q25"][0]
+                q75 = single_stats["q75"][0]
+                q90 = single_stats["q90"][0]
 
             # Replace NaNs in stats if column was entirely null
             median_val = float(median_val) if median_val is not None and not np.isnan(median_val) else 0.0
@@ -121,23 +147,42 @@ def compute_global_preprocessing_stats(
                 'upper_bound': upper_bound
             }
 
+    # Free sample memory
+    del num_sample_df
+    gc.collect()
+
     # Extract categorical stats & frequency maps (Top categories only)
     cat_stats = {}
+    cat_sample_df = (
+        fit_lf.select(categorical_columns).limit(50000).collect()
+        if categorical_columns and sample_for_stats
+        else None
+    )
+
     for col in categorical_columns:
         try:
-            cardinality = fit_lf.select(pl.col(col).n_unique()).collect().item()
-            top_cats = (
-                fit_lf.group_by(pl.col(col))
-                .agg(pl.len().alias("count"))
-                .sort("count", descending=True)
-                .head(50)
-                .collect()
-            )
-            freq_dict = {
-                str(row[col]): int(row["count"])
-                for row in top_cats.iter_rows(named=True)
-                if row[col] is not None
-            }
+            if cat_sample_df is not None and col in cat_sample_df.columns:
+                cardinality = int(cat_sample_df[col].n_unique())
+                counts = cat_sample_df[col].value_counts(sort=True).head(50)
+                freq_dict = {
+                    str(row[col]): int(row["count"])
+                    for row in counts.iter_rows(named=True)
+                    if row[col] is not None
+                }
+            else:
+                cardinality = fit_lf.select(pl.col(col).n_unique()).collect().item()
+                top_cats = (
+                    fit_lf.group_by(pl.col(col))
+                    .agg(pl.len().alias("count"))
+                    .sort("count", descending=True)
+                    .head(50)
+                    .collect()
+                )
+                freq_dict = {
+                    str(row[col]): int(row["count"])
+                    for row in top_cats.iter_rows(named=True)
+                    if row[col] is not None
+                }
             cat_stats[col] = {
                 'cardinality': int(cardinality or 0),
                 'freq_map': freq_dict,
@@ -146,6 +191,9 @@ def compute_global_preprocessing_stats(
         except Exception as e:
             logger.warning(f"Failed to extract categorical stats for {col}: {e}")
             cat_stats[col] = {'cardinality': 0, 'freq_map': {}, 'top_categories': []}
+
+    del cat_sample_df
+    gc.collect()
 
     # Filter numerical features
     id_keywords = ['id', 'identifier', 'key', 'code']
@@ -246,10 +294,14 @@ def stream_transform_to_parquet(
             logger.warning(f"Could not construct lazy date features for {col}: {e}")
 
     # 2. Outlier Capping & Missing Imputation for Numerical Columns
+    num_stats_dict = stats.get('num_stats')
+    num_stats: dict = num_stats_dict if isinstance(num_stats_dict, dict) else {}
+
     for col in stats['numerical_columns']:
         if col in drop_set:
             continue
-        st_col = stats['num_stats'].get(col, {})
+        st_col_raw = num_stats.get(col, {})
+        st_col: dict = st_col_raw if isinstance(st_col_raw, dict) else {}
         median_val = st_col.get('median', 0.0)
         
         expr = pl.col(col).fill_null(median_val)
@@ -262,9 +314,13 @@ def stream_transform_to_parquet(
         transform_exprs.append(expr.cast(pl.Float32).alias(col))
 
     # 3. Categorical Encodings
-    for col, c_info in stats['cat_stats'].items():
+    cat_stats_dict = stats.get('cat_stats')
+    cat_stats: dict = cat_stats_dict if isinstance(cat_stats_dict, dict) else {}
+
+    for col, c_info_raw in cat_stats.items():
         if col in drop_set:
             continue
+        c_info: dict = c_info_raw if isinstance(c_info_raw, dict) else {}
         cardinality = c_info.get('cardinality', 0)
         freq_map = c_info.get('freq_map', {})
         top_cats = c_info.get('top_categories', [])
@@ -346,7 +402,7 @@ def stream_transform_to_parquet(
         'original_columns_count': len(stats['original_columns']),
         'total_rows_processed': total_rows,
         'preprocessing_fit_scope': stats.get('fit_scope', 'full_dataset'),
-        'preprocessing_fit_rows': int(stats['total_rows']),
+        'preprocessing_fit_rows': int(str(stats.get('total_rows', 0) or 0)),
         'final_features_count': len(dedup_final_features),
         'final_features': dedup_final_features,
         'date_columns_count': len(stats['date_columns']),
@@ -586,8 +642,8 @@ def prepare_train_validation_test_parquet(
                 hash_columns.append(pl.col(candidate))
                 break
         bucket = pl.struct(hash_columns).hash(seed=42) % 10000
-        train_boundary = int(round((1.0 - test_size - validation_size * (1.0 - test_size)) * 10000))
-        validation_boundary = int(round((1.0 - test_size) * 10000))
+        train_boundary = round((1.0 - test_size - validation_size * (1.0 - test_size)) * 10000)
+        validation_boundary = round((1.0 - test_size) * 10000)
         partition_expr = (
             pl.when(bucket < train_boundary)
             .then(pl.lit("train"))

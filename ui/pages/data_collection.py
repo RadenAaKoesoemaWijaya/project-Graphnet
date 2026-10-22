@@ -342,35 +342,37 @@ def show_data_collection_page():
             else:
                 st.success(f"✅ File berhasil dimuat dan divalidasi! Jumlah baris: {total_rows:,}, Jumlah kolom: {total_cols}")
 
-            # Log data upload to audit trail
-            try:
-                upload_duration = time.time() - upload_start_time
-                display_filename = (
-                    f"Merged ({len(uploaded_files)} files): " + ", ".join(f.name for f in uploaded_files[:2]) + ("..." if len(uploaded_files) > 2 else "")
-                    if is_multi_file
-                    else uploaded_files[0].name
-                )
-                log_data_upload(
-                    file_name=display_filename,
-                    file_size=total_upload_size,
-                    row_count=total_rows,
-                    column_count=total_cols,
-                    success=True
-                )
-                # Record metrics
-                record_operation('data_upload', upload_duration, {
-                    'file_name': display_filename,
-                    'file_size_mb': total_upload_size / (1024 * 1024),
-                    'file_count': len(uploaded_files)
-                })
-                increment_counter('total_data_uploads')
-                set_gauge('current_dataset_rows', total_rows)
-                set_gauge('current_dataset_columns', total_cols)
+            # Log data upload to audit trail (only once per unique upload key)
+            if st.session_state.get('last_logged_upload_key') != raw_cache_key:
+                try:
+                    upload_duration = time.time() - upload_start_time
+                    display_filename = (
+                        f"Merged ({len(uploaded_files)} files): " + ", ".join(f.name for f in uploaded_files[:2]) + ("..." if len(uploaded_files) > 2 else "")
+                        if is_multi_file
+                        else uploaded_files[0].name
+                    )
+                    log_data_upload(
+                        file_name=display_filename,
+                        file_size=total_upload_size,
+                        row_count=total_rows,
+                        column_count=total_cols,
+                        success=True
+                    )
+                    # Record metrics
+                    record_operation('data_upload', upload_duration, {
+                        'file_name': display_filename,
+                        'file_size_mb': total_upload_size / (1024 * 1024),
+                        'file_count': len(uploaded_files)
+                    })
+                    increment_counter('total_data_uploads')
+                    set_gauge('current_dataset_rows', total_rows)
+                    set_gauge('current_dataset_columns', total_cols)
 
-                # Increment upload quota counter
-                increment_quota(user_id, 'upload')
-            except Exception as e:
-                logger.warning(f"Failed to log audit trail: {e}")
+                    # Increment upload quota counter
+                    increment_quota(user_id, 'upload')
+                    st.session_state['last_logged_upload_key'] = raw_cache_key
+                except Exception as e:
+                    logger.warning(f"Failed to log audit trail: {e}")
 
             st.markdown("---")
             st.subheader("📊 Analisis Data Eksploratif")
@@ -637,13 +639,8 @@ def show_data_collection_page():
                             else:
                                 st.info("✅ Tidak ada duplikasi ditemukan")
 
-                        input_target, owns_partitioned_input = prepare_train_validation_test_parquet(
-                            input_target,
-                            test_size=preprocessing_test_size / 100,
-                            drop_columns=columns_to_drop,
-                        )
-                        if owns_partitioned_input:
-                            temporary_input_paths.append(input_target)
+                        import gc
+                        gc.collect()
 
                         result = preprocess_dataset_with_train_only_stats(
                             input_target,
@@ -656,6 +653,7 @@ def show_data_collection_page():
                             if os.path.exists(temporary_path):
                                 os.unlink(temporary_path)
                         temporary_input_paths.clear()
+                        gc.collect()
 
                         if result is None or len(result) < 3 or result[0] is None:
                             raise ValueError("Fungsi preprocessing mengembalikan hasil yang tidak valid.")
