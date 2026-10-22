@@ -1,11 +1,13 @@
 import streamlit as st
 import plotly.express as px
+import plotly.graph_objects as go
 import numpy as np
 import pandas as pd
 import threading
 import uuid
 import json
 import os
+import time
 try:
     import torch
     _TORCH_AVAILABLE = True
@@ -961,8 +963,6 @@ def show_training_page():
 
     # Polling logic outside the button context
     if st.session_state.get('training_in_progress', False):
-        import time
-        
         st.warning("⚠️ Proses pelatihan sedang berjalan di background. Anda bisa membiarkan halaman ini terbuka.")
         progress_bar = st.progress(0)
         status_text = st.empty()
@@ -1017,7 +1017,6 @@ def show_training_page():
                     st.session_state.pop('gnn_anomaly_subgraph', None)
                 
                 # We can remove the temp json
-                import os
                 if os.path.exists(training_status_path):
                     os.remove(training_status_path)
                     
@@ -1117,7 +1116,6 @@ def show_training_page():
                         
                 # Create Pie Chart for Weights
                 if sum(weights) > 0:
-                    import plotly.express as px
                     fig = px.pie(
                         names=models_used, 
                         values=weights, 
@@ -1182,9 +1180,7 @@ def show_training_page():
                     st.subheader("🕸️ Visualisasi Jaringan Anomali GNN")
 
                     try:
-                        import time
                         import networkx as nx
-                        import plotly.graph_objects as go
 
                         visualization_started = time.perf_counter()
                         # ── Unpack pre-computed subgraph ──────────────────────
