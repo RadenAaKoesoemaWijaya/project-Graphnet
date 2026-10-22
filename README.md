@@ -181,13 +181,13 @@ Semua dependensi inti dikunci pada [requirements.txt](requirements.txt):
 3. **Install semua dependensi**:
    - **Mode CPU (Standar)**:
      ```bash
-     pip install --upgrade pip
+     python.exe -m pip install --upgrade pip
      pip install -r requirements.txt
      ```
    - **Mode GPU CUDA (Direkomendasikan untuk Akselerasi GNN & XGBoost)**:
      Bagi pengguna dengan kartu grafis NVIDIA (misalnya GeForce RTX Series):
      ```powershell
-     pip install --upgrade pip
+     python.exe -m pip install --upgrade pip
      # 1. Install PyTorch dengan CUDA 12.4
      pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
      # 2. Install PyG dan seluruh dependensi proyek
