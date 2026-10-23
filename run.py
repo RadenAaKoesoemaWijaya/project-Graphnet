@@ -151,7 +151,9 @@ def main():
             PYTHON_EXEC, "-m", "streamlit", "run", "main.py",
             "--server.maxUploadSize=3072",
             "--server.maxMessageSize=3072",
-            "--server.fileWatcherType=none"
+            "--server.fileWatcherType=none",
+            "--server.websocketPingInterval=60",
+            "--server.websocketPingTimeout=120"
         ]
         subprocess.run(cmd, check=True, env=runtime_env)
     except KeyboardInterrupt:

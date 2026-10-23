@@ -562,6 +562,56 @@ def apply_custom_css():
         overflow: hidden;
     }
 </style>
+
+<script>
+// Auto-reconnect WebSocket when connection is lost due to browser background throttling
+// This prevents the "Connection error: Is Streamlit still running?" message
+let reconnectAttempts = 0;
+const maxReconnectAttempts = 5;
+const reconnectDelay = 2000; // 2 seconds
+
+window.addEventListener('offline', () => {
+    console.log('Connection lost. Attempting to reconnect...');
+    if (reconnectAttempts < maxReconnectAttempts) {
+        reconnectAttempts++;
+        setTimeout(() => {
+            console.log(`Reconnect attempt ${reconnectAttempts}/${maxReconnectAttempts}`);
+            window.location.reload();
+        }, reconnectDelay);
+    }
+});
+
+window.addEventListener('online', () => {
+    console.log('Connection restored. Resetting reconnect counter.');
+    reconnectAttempts = 0;
+});
+
+// Also handle visibility change (tab inactive -> active)
+document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+        console.log('Tab became active, checking connection...');
+        // Streamlit will auto-reconnect, but we ensure the UI refreshes
+        const now = Date.now();
+        const lastActivity = localStorage.getItem('streamlit_last_activity') || now;
+        const inactiveTime = now - parseInt(lastActivity);
+
+        // If inactive for more than 30 seconds, refresh to ensure clean state
+        if (inactiveTime > 30000) {
+            console.log('Tab was inactive for >30s, refreshing to ensure connection...');
+            localStorage.setItem('streamlit_last_activity', now.toString());
+            setTimeout(() => window.location.reload(), 500);
+        }
+    }
+});
+
+// Track activity
+document.addEventListener('mousemove', () => {
+    localStorage.setItem('streamlit_last_activity', Date.now().toString());
+});
+document.addEventListener('keydown', () => {
+    localStorage.setItem('streamlit_last_activity', Date.now().toString());
+});
+</script>
 """, unsafe_allow_html=True)
 
 def custom_container(content, container_type="highlight"):
