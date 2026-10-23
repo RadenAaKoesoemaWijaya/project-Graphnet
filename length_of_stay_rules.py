@@ -4,6 +4,14 @@ import logging
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
+import numpy as np
+
+try:
+    from robust_outlier_detector import RobustOutlierDetector
+    _has_robust_detector = True
+except ImportError:
+    _has_robust_detector = False
+    RobustOutlierDetector = None
 
 logger = logging.getLogger("astina.length_of_stay")
 
@@ -78,6 +86,16 @@ def detect_prolonged_stay_and_readmission(df: pd.DataFrame) -> pd.DataFrame:
         return _empty_fraud_result()
 
     clean_df["los_days"] = (clean_df["discharge_date"] - clean_df["admission_date"]).dt.days
+    
+    # Use robust outlier detection if available
+    if _has_robust_detector and len(clean_df) >= 10:
+        detector = RobustOutlierDetector()
+        los_outliers = detector.detect_outliers_mad(clean_df["los_days"], threshold=3.0)
+        outlier_scores = detector.calculate_outlier_score(clean_df["los_days"], method="mad")
+    else:
+        los_outliers = pd.Series([False] * len(clean_df), index=clean_df.index)
+        outlier_scores = pd.Series([0.0] * len(clean_df), index=clean_df.index)
+
     results: List[Dict[str, Any]] = []
 
     for idx, row in clean_df.iterrows():
@@ -89,10 +107,21 @@ def detect_prolonged_stay_and_readmission(df: pd.DataFrame) -> pd.DataFrame:
         los_days = int(row.get("los_days") or 0)
 
         if los_days > 0:
-            median_los = float(clean_df["los_days"].median() or 0.0)
-            if median_los > 0 and los_days > median_los * 1.5:
-                issues.append("Length of stay is significantly above benchmark.")
-                score = max(score, 0.7)
+            # Use robust outlier detection instead of median-based
+            if los_outliers.loc[idx]:
+                outlier_score = outlier_scores.loc[idx]
+                if outlier_score > 0.7:  # Extreme outlier
+                    issues.append(f"Length of stay is extreme outlier (score: {outlier_score:.2f})")
+                    score = max(score, 0.7)
+                elif outlier_score > 0.4:  # Moderate outlier
+                    issues.append(f"Length of stay is moderate outlier (score: {outlier_score:.2f})")
+                    score = max(score, 0.5)
+            elif not _has_robust_detector:
+                # Fallback to median-based for small datasets
+                median_los = float(clean_df["los_days"].median() or 0.0)
+                if median_los > 0 and los_days > median_los * 1.5:
+                    issues.append("Length of stay is significantly above benchmark.")
+                    score = max(score, 0.7)
 
         same_patient = clean_df[clean_df["patient_id"].astype(str) == patient_id]
         if not same_patient.empty:

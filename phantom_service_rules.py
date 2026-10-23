@@ -6,13 +6,20 @@ from typing import Dict, Iterable, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+try:
+    from whitelist_manager import WhitelistManager
+    _has_whitelist = True
+except ImportError:
+    _has_whitelist = False
+    WhitelistManager = None
+
 logger = logging.getLogger("astina.phantom_service")
 
 
 class PhantomServiceRuleEngine:
     """Rule-based validation for phantom service claims with vectorized batch support."""
 
-    def __init__(self):
+    def __init__(self, whitelist_manager: WhitelistManager = None):
         self.valid_services = {
             "CT001": "CT_SCAN",
             "XR001": "X_RAY",
@@ -38,6 +45,8 @@ class PhantomServiceRuleEngine:
             {"service_type": "CT_SCAN", "patient_age_max": 1, "reason": "CT Scan tidak seharusnya untuk pasien usia < 1 bulan."},
             {"service_type": "SURGERY", "max_per_day": 1, "reason": "Tidak boleh ada lebih dari 1 operasi per hari untuk pasien yang sama."},
         ]
+        
+        self.whitelist_manager = whitelist_manager
 
     def validate_claim(self, claim: Dict) -> Tuple[bool, List[str]]:
         violations: List[str] = []
@@ -105,7 +114,7 @@ class PhantomServiceRuleEngine:
                 lambda v: (v + "; " if v else "") + "CT Scan tidak seharusnya untuk pasien usia < 1 bulan."
             )
 
-        # 3. Frequency check per patient + service + service_date
+        # 3. Frequency check per patient + service + service_date with whitelist
         if "patient_id" in clean.columns and "service_date" in clean.columns:
             dates = pd.to_datetime(clean["service_date"], errors="coerce")
             valid_date_mask = dates.notna()
@@ -115,7 +124,37 @@ class PhantomServiceRuleEngine:
                 counts = sub_freq.groupby(["patient_id", "service_code", "_date_only"])["claim_id"].transform("count")
                 service_types = sub_freq["service_code"].map(self.valid_services)
                 max_limits = service_types.map(self.max_frequency_per_day).fillna(10)
-                freq_violations = counts > max_limits
+                
+                # Check whitelist exceptions before flagging
+                whitelist_exceptions = []
+                for idx, row in sub_freq.iterrows():
+                    patient_id = row.get("patient_id")
+                    service_code = row.get("service_code")
+                    count = counts.loc[idx]
+                    provider_id = row.get("provider_id")
+                    
+                    # Check provider volume exception
+                    if self.whitelist_manager:
+                        is_allowed, reason = self.whitelist_manager.check_provider_capacity_exception(
+                            provider_id, count, service_types.loc[idx]
+                        )
+                        if is_allowed:
+                            whitelist_exceptions.append(idx)
+                            continue
+                    
+                    # Check chronic condition exception for frequency
+                    diagnosis = row.get("diagnosis_code", "")
+                    if self.whitelist_manager:
+                        is_legitimate, legit_reason = self.whitelist_manager.is_legitimate_repeat(
+                            diagnosis, service_code, patient_id, 0
+                        )
+                        if is_legitimate:
+                            whitelist_exceptions.append(idx)
+                            continue
+                
+                # Apply standard limits only to non-whitelisted claims
+                non_whitelined = sub_freq[~sub_freq.index.isin(whitelist_exceptions)]
+                freq_violations = counts.loc[non_whitelined.index] > max_limits.loc[non_whitelined.index]
                 if freq_violations.any():
                     violating_indices = sub_freq[freq_violations].index
                     violations_series[violating_indices] = violations_series[violating_indices].apply(

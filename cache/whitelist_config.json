@@ -1,0 +1,38 @@
+{
+  "provider_exceptions": {
+    "PROV001": {
+      "max_daily_claims": 50,
+      "reason": "High-volume tertiary hospital",
+      "added_at": "2026-10-23 21:59:00.679706",
+      "valid_until": null
+    }
+  },
+  "service_combinations": {},
+  "patient_exceptions": {
+    "PAT001": {
+      "allowed_repeat_patterns": [
+        {
+          "diagnosis_prefix": "M54",
+          "max_gap_days": 14,
+          "reason": "Chronic pain management"
+        },
+        {
+          "diagnosis_prefix": "Z00",
+          "max_gap_days": 14,
+          "reason": "Patient history exception"
+        },
+        {
+          "diagnosis_prefix": "Z00",
+          "max_gap_days": 14,
+          "reason": "Patient history exception"
+        },
+        {
+          "diagnosis_prefix": "Z00",
+          "max_gap_days": 14,
+          "reason": "Patient history exception"
+        }
+      ],
+      "added_at": "2026-10-23 21:54:41.760972"
+    }
+  }
+}

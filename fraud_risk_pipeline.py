@@ -18,6 +18,13 @@ from repeat_billing_detector import RepeatBillingDetector
 from upcoding_unbundling_rules import detect_upcoding_and_unbundling
 from schema_harmonizer import SchemaHarmonizer
 
+try:
+    from whitelist_manager import WhitelistManager
+    _has_whitelist = True
+except ImportError:
+    _has_whitelist = False
+    WhitelistManager = None
+
 logger = logging.getLogger("astina.fraud_risk_pipeline")
 
 REQUIRED_CLAIM_FIELDS = {
@@ -137,9 +144,15 @@ def enrich_claims_with_business_risk_features(df: pd.DataFrame) -> Tuple[pd.Data
         }
 
     # Parallel evaluation of independent rule modules
-    repeat_detector = RepeatBillingDetector(temporal_window_days=30, fuzzy_threshold=0.8)
-    phantom_engine = PhantomServiceRuleEngine()
-    capacity_validator = ProviderCapacityValidator()
+    whitelist_mgr = WhitelistManager() if _has_whitelist else None
+    repeat_detector = RepeatBillingDetector(
+        temporal_window_days=30,
+        fuzzy_threshold=0.85,
+        use_adaptive_threshold=True,
+        whitelist_manager=whitelist_mgr
+    )
+    phantom_engine = PhantomServiceRuleEngine(whitelist_manager=whitelist_mgr)
+    capacity_validator = ProviderCapacityValidator(whitelist_manager=whitelist_mgr)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
         f_repeat = executor.submit(repeat_detector.detect_repeat_claims, clean)

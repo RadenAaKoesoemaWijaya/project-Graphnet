@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, Iterable, List, Tuple, Optional
 
 import numpy as np
 import pandas as pd
@@ -45,14 +45,82 @@ class RepeatBillingDetector:
         fuzzy_threshold: float = 0.85,
         amount_variance_pct: float = 5.0,
         verbose: bool = False,
+        use_adaptive_threshold: bool = True,
+        whitelist_manager = None,
     ):
         self.temporal_window = int(temporal_window_days)
         self.fuzzy_threshold = float(fuzzy_threshold)
         self.amount_variance_pct = float(amount_variance_pct)
         self.verbose = bool(verbose)
+        self.use_adaptive = use_adaptive_threshold
+        self.whitelist_manager = whitelist_manager
 
         if self.verbose:
             logger.setLevel(logging.DEBUG)
+
+    def _calculate_adaptive_fuzzy_threshold(self, df: pd.DataFrame) -> float:
+        """
+        Calculate adaptive fuzzy threshold based on historical patterns.
+        Uses 75th percentile of similarity scores as threshold.
+        """
+        if not self.use_adaptive or df is None or df.empty:
+            return self.fuzzy_threshold
+
+        try:
+            # Calculate similarity scores for all pairs in the dataset
+            # This is expensive, so we use a sample if dataset is large
+            sample_size = min(1000, len(df))
+            sampled_df = df.sample(n=sample_size, random_state=42) if len(df) > sample_size else df
+
+            similarities = []
+            for i in range(len(sampled_df) - 1):
+                for j in range(i + 1, min(i + 10, len(sampled_df))):
+                    sim = self._calculate_claim_similarity(
+                        sampled_df.iloc[i],
+                        sampled_df.iloc[j]
+                    )
+                    similarities.append(sim)
+
+            if similarities:
+                # Use 75th percentile as threshold (stricter for high-risk)
+                threshold = np.percentile(similarities, 75)
+                # Ensure minimum threshold
+                return max(threshold, 0.75)  # Minimum 75% similarity
+        except Exception as e:
+            logger.warning(f"Failed to calculate adaptive threshold: {e}, using default")
+
+        return self.fuzzy_threshold
+
+    def _check_whitelist_exception(
+        self,
+        patient_id: str,
+        provider_id: str,
+        service_code: str,
+        diagnosis_code: str,
+        time_gap_days: int
+    ) -> Tuple[bool, str]:
+        """
+        Check if repeat billing is whitelisted (legitimate).
+
+        Returns:
+            (is_whitelisted, reason)
+        """
+        if self.whitelist_manager:
+            # Check chronic condition whitelist
+            is_legitimate, reason = self.whitelist_manager.is_legitimate_repeat(
+                diagnosis_code, service_code, patient_id, time_gap_days
+            )
+            if is_legitimate:
+                return True, reason
+
+            # Check service combination whitelist
+            is_allowed, combo_reason = self.whitelist_manager.check_service_combination_whitelist(
+                diagnosis_code, service_code, time_gap_days
+            )
+            if is_allowed:
+                return True, combo_reason
+
+        return False, ""
 
     def detect_repeat_claims(self, df: pd.DataFrame) -> pd.DataFrame:
         if df is None or df.empty:
@@ -100,7 +168,12 @@ class RepeatBillingDetector:
                 "detection_reason",
             ])
 
+        # Calculate adaptive threshold if enabled
+        adaptive_threshold = self._calculate_adaptive_fuzzy_threshold(clean_df)
+        current_threshold = adaptive_threshold if self.use_adaptive else self.fuzzy_threshold
+
         results: List[Dict] = []
+        whitelisted_count = 0
         grouped = clean_df.groupby(["patient_id", "provider_id", "service_code"], dropna=False)
 
         for (patient_id, provider_id, service_code), group in grouped:
@@ -128,7 +201,19 @@ class RepeatBillingDetector:
 
                     similarity = self._calculate_claim_similarity(claim1, claim2)
                     variance = self._calculate_amount_variance(float(claim1.get("amount", 0.0) or 0.0), float(claim2.get("amount", 0.0) or 0.0))
-                    if similarity < self.fuzzy_threshold:
+                    
+                    # Check whitelist exception before flagging
+                    diagnosis1 = str(claim1.get("diagnosis_code", "") or "")
+                    diagnosis2 = str(claim2.get("diagnosis_code", "") or "")
+                    is_whitelisted, whitelist_reason = self._check_whitelist_exception(
+                        patient_id, provider_id, service_code, diagnosis1, time_gap
+                    )
+                    
+                    if is_whitelisted:
+                        whitelisted_count += 1
+                        continue  # Skip flagging for whitelisted claims
+
+                    if similarity < current_threshold:
                         continue
 
                     risk_score = self._calculate_risk_score(time_gap, similarity, variance)
@@ -170,6 +255,9 @@ class RepeatBillingDetector:
 
         if self.verbose:
             logger.info("Detected %s possible repeat billing cases", len(result_df))
+            if whitelisted_count > 0:
+                logger.info("Skipped %s repeat billing cases due to whitelist exceptions", whitelisted_count)
+        
         return result_df.sort_values(["risk_score", "similarity_score"], ascending=False).reset_index(drop=True)
 
     def _calculate_claim_similarity(self, claim1: pd.Series, claim2: pd.Series) -> float:

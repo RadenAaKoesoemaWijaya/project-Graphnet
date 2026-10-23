@@ -4,6 +4,14 @@ import logging
 from typing import Any, Dict, Iterable, List, Optional
 
 import pandas as pd
+import numpy as np
+
+try:
+    from robust_outlier_detector import RobustOutlierDetector
+    _has_robust_detector = True
+except ImportError:
+    _has_robust_detector = False
+    RobustOutlierDetector = None
 
 logger = logging.getLogger("astina.upcoding_unbundling")
 
@@ -61,6 +69,15 @@ def detect_upcoding_and_unbundling(df: pd.DataFrame) -> pd.DataFrame:
             clean_df[col] = ""
     clean_df["amount"] = pd.to_numeric(clean_df["amount"], errors="coerce").fillna(0.0)
 
+    # Use robust outlier detection if available
+    if _has_robust_detector and len(clean_df) >= 10:
+        detector = RobustOutlierDetector()
+        amount_outliers = detector.detect_outliers_mad(clean_df["amount"], threshold=3.0)
+        outlier_scores = detector.calculate_outlier_score(clean_df["amount"], method="mad")
+    else:
+        amount_outliers = pd.Series([False] * len(clean_df), index=clean_df.index)
+        outlier_scores = pd.Series([0.0] * len(clean_df), index=clean_df.index)
+
     results: List[Dict[str, Any]] = []
 
     for idx, row in clean_df.iterrows():
@@ -74,9 +91,20 @@ def detect_upcoding_and_unbundling(df: pd.DataFrame) -> pd.DataFrame:
             issues.append("Diagnosis and procedure appear indistinguishable or duplicated.")
             score = max(score, 0.35)
 
-        if amount > 0 and amount > float(clean_df["amount"].median() or 0.0) * 2.5:
-            issues.append("Claim amount exceeds the median benchmark substantially.")
-            score = max(score, 0.6)
+        # Check amount outlier using robust detection
+        if amount > 0 and amount_outliers.loc[idx]:
+            outlier_score = outlier_scores.loc[idx]
+            if outlier_score > 0.7:  # Extreme outlier
+                issues.append(f"Claim amount is extreme outlier (score: {outlier_score:.2f})")
+                score = max(score, 0.6)
+            elif outlier_score > 0.4:  # Moderate outlier
+                issues.append(f"Claim amount is moderate outlier (score: {outlier_score:.2f})")
+                score = max(score, 0.4)
+        elif amount > 0 and not _has_robust_detector:
+            # Fallback to median-based for small datasets
+            if amount > float(clean_df["amount"].median() or 0.0) * 2.5:
+                issues.append("Claim amount exceeds the median benchmark substantially.")
+                score = max(score, 0.6)
 
         if diagnosis and procedure and len(diagnosis) > 0 and len(procedure) > 0 and diagnosis[0] != procedure[0]:
             if amount > 0:
@@ -97,6 +125,7 @@ def detect_upcoding_and_unbundling(df: pd.DataFrame) -> pd.DataFrame:
             "diagnosis_code": diagnosis,
             "procedure_code": procedure,
             "amount": amount,
+            "outlier_score": float(outlier_scores.loc[idx]) if _has_robust_detector else 0.0,
             "rule_matches": issues,
         }
 

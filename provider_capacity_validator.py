@@ -7,6 +7,13 @@ import pandas as pd
 
 from config import SERVICE_CAPACITY
 
+try:
+    from whitelist_manager import WhitelistManager
+    _has_whitelist = True
+except ImportError:
+    _has_whitelist = False
+    WhitelistManager = None
+
 logger = logging.getLogger("astina.provider_capacity")
 
 SERVICE_CODE_TO_TYPE = {
@@ -23,8 +30,9 @@ SERVICE_CODE_TO_TYPE = {
 class ProviderCapacityValidator:
     """Check whether provider capacity is feasible for a given service schedule."""
 
-    def __init__(self, service_capacity: Dict = None):
+    def __init__(self, service_capacity: Dict = None, whitelist_manager: WhitelistManager = None):
         self.service_capacity = service_capacity or SERVICE_CAPACITY
+        self.whitelist_manager = whitelist_manager
 
     def _normalize_service_type(self, code: str) -> str:
         code_str = str(code or "").strip().upper()
@@ -47,6 +55,14 @@ class ProviderCapacityValidator:
 
         violations: List[str] = []
         total_minutes = 0.0
+
+        # Check whitelist exception first
+        if self.whitelist_manager:
+            is_allowed, reason = self.whitelist_manager.check_provider_capacity_exception(
+                provider_id, len(subset)
+            )
+            if is_allowed:
+                return True, [], 0.0
 
         # Map each row's service code to normalized type
         service_types = subset.get("service_code", pd.Series(dtype=object)).map(self._normalize_service_type)

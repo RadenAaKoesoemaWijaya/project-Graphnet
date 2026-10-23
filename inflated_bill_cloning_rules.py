@@ -4,6 +4,14 @@ import logging
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
+import numpy as np
+
+try:
+    from robust_outlier_detector import RobustOutlierDetector
+    _has_robust_detector = True
+except ImportError:
+    _has_robust_detector = False
+    RobustOutlierDetector = None
 
 logger = logging.getLogger("astina.inflated_bill_cloning")
 
@@ -33,7 +41,7 @@ def _safe_numeric(value: Any, default: float = 0.0) -> float:
 
 def detect_inflated_bill_and_cloning(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Detect inflated billing and cloning patterns.
+    Detect inflated billing and cloning patterns using robust outlier detection.
 
     Output schema:
     - claim_id: claim identifier
@@ -63,6 +71,17 @@ def detect_inflated_bill_and_cloning(df: pd.DataFrame) -> pd.DataFrame:
 
     results: List[Dict[str, Any]] = []
 
+    # Use robust outlier detection if available
+    if _has_robust_detector and len(clean_df) >= 10:
+        detector = RobustOutlierDetector()
+        # Try MAD method first (most robust)
+        amount_outliers = detector.detect_outliers_mad(clean_df["amount"], threshold=3.0)
+        outlier_scores = detector.calculate_outlier_score(clean_df["amount"], method="mad")
+    else:
+        # Fallback to median-based method
+        amount_outliers = pd.Series([False] * len(clean_df), index=clean_df.index)
+        outlier_scores = pd.Series([0.0] * len(clean_df), index=clean_df.index)
+
     for idx, row in clean_df.iterrows():
         issues: List[str] = []
         score = 0.0
@@ -72,7 +91,20 @@ def detect_inflated_bill_and_cloning(df: pd.DataFrame) -> pd.DataFrame:
         service_date = str(row.get("service_date") or "")
         diagnosis = str(row.get("diagnosis_code") or "")
 
-        if amount > 0:
+        # Check if amount is outlier using robust detection
+        if amount > 0 and amount_outliers.loc[idx]:
+            outlier_score = outlier_scores.loc[idx]
+            if outlier_score > 0.8:  # Extreme outlier
+                issues.append(f"Claim amount is extreme outlier (score: {outlier_score:.2f})")
+                score = max(score, 0.8)
+            elif outlier_score > 0.5:  # Moderate outlier
+                issues.append(f"Claim amount is moderate outlier (score: {outlier_score:.2f})")
+                score = max(score, 0.5)
+            else:  # Mild outlier
+                issues.append(f"Claim amount is mild outlier (score: {outlier_score:.2f})")
+                score = max(score, 0.3)
+        elif amount > 0 and not _has_robust_detector:
+            # Fallback to median-based for small datasets
             median_amount = float(clean_df["amount"].median() or 0.0)
             if median_amount > 0 and amount > median_amount * 2.5:
                 issues.append("Claim amount is far above the median benchmark.")
@@ -109,6 +141,7 @@ def detect_inflated_bill_and_cloning(df: pd.DataFrame) -> pd.DataFrame:
             "provider_id": provider_id,
             "service_date": service_date,
             "diagnosis_code": diagnosis,
+            "outlier_score": float(outlier_scores.loc[idx]) if _has_robust_detector else 0.0,
             "rule_matches": issues,
         }
 
