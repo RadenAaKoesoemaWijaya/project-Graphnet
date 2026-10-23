@@ -8,6 +8,7 @@ import uuid
 import json
 import os
 import time
+import logging
 try:
     import torch
     _TORCH_AVAILABLE = True
@@ -18,6 +19,8 @@ except (ImportError, OSError, Exception):
     _TORCH_AVAILABLE = False
 from ui.utils import *
 from state_manager import *
+
+logger = logging.getLogger(__name__)
 
 _TRAINING_JOB_LOCK = threading.Lock()
 
@@ -102,11 +105,23 @@ def show_training_page():
         if 'train_df' not in st.session_state or 'test_df' not in st.session_state:
             try:
                 from state_manager import split_processed_dataset_with_validation
-                train_df, validation_df, test_df, stratify_label = split_processed_dataset_with_validation(df_processed)
+
+                # Get custom split proportions from preprocessing metadata
+                test_size = st.session_state.get('split_test_size', 0.2)
+                validation_size = st.session_state.get('split_validation_size', 0.15)
+
+                train_df, validation_df, test_df, stratify_label = split_processed_dataset_with_validation(
+                    df_processed,
+                    test_size=test_size,
+                    validation_size=validation_size
+                )
                 st.session_state['train_df'] = train_df
                 st.session_state['validation_df'] = validation_df
                 st.session_state['test_df'] = test_df
-                st.info(f"✅ Data split otomatis: latih ({len(train_df)}), validasi ({len(validation_df)}), test ({len(test_df)})")
+                st.info(
+                    f"✅ Data split otomatis: latih ({len(train_df)}), validasi ({len(validation_df)}), test ({len(test_df)}) "
+                    f"(test: {test_size:.0%}, validation: {validation_size:.0%})"
+                )
             except Exception as e:
                 st.error(f"❌ Gagal membagi data: {str(e)}")
                 logger.error(f"Failed to split data in training page: {e}", exc_info=True)
@@ -1167,7 +1182,128 @@ def show_training_page():
                         """)
                 else:
                     st.info("🎛️ **Manual Weights Applied**: Using manually configured weights.")
-                
+
+                # ── Model Interpretation & AI-Powered Analysis ─────────────────
+                st.markdown("---")
+                st.subheader("🤖 Interpretasi Model dengan AI Generatif")
+
+                with st.expander("📊 Generate Laporan Analisis Model", expanded=False):
+                    st.info(
+                        "Fitur ini menggunakan AI generatif untuk membuat penjelasan naratif komprehensif "
+                        "tentang proses pelatihan model, arsitektur, dan performa. Laporan dapat diunduh dalam format PDF."
+                    )
+
+                    # Provider selection
+                    llm_provider = st.selectbox(
+                        "Pilih Provider AI:",
+                        ["heuristic", "gemini", "openai", "ollama"],
+                        index=0,
+                        help="heuristic: mode offline tanpa API key. gemini/openai/ollama: memerlukan konfigurasi API."
+                    )
+
+                    if st.button("🚀 Generate Laporan Interpretasi", type="secondary"):
+                        with st.spinner("Sedang menghasilkan laporan interpretasi model..."):
+                            try:
+                                from model_interpreter import ModelInterpreter
+                                from pdf_generator import generate_training_report_pdf
+
+                                # Capture training context
+                                interpreter = ModelInterpreter(provider=llm_provider)
+
+                                # Build hyperparameters dict
+                                hyperparams = {
+                                    "iso_contamination": iso_contamination,
+                                    "iso_n_estimators": iso_n_estimators,
+                                    "ae_encoding_dim": ae_encoding_dim,
+                                    "ae_epochs": ae_epochs,
+                                    "ae_batch_size": ae_batch_size,
+                                    "xgb_n_estimators": xgb_n_estimators,
+                                    "xgb_max_depth": xgb_max_depth,
+                                    "xgb_learning_rate": xgb_learning_rate,
+                                    "gnn_hidden": gnn_hidden,
+                                    "gnn_epochs": gnn_epochs,
+                                    "graph_method": graph_method
+                                }
+
+                                # Capture complete context
+                                context = interpreter.capture_training_context(
+                                    df_processed=df_processed,
+                                    feature_columns=feature_columns,
+                                    selected_features=selected_features,
+                                    training_mode=training_mode,
+                                    algo_options=algo_options,
+                                    hyperparameters=hyperparams,
+                                    detector=detector,
+                                    training_metadata=training_metadata
+                                )
+
+                                # Generate report
+                                report = interpreter.generate_training_report(context, language="id")
+
+                                # Store report in session state for PDF download
+                                st.session_state['model_interpretation_report'] = report
+                                st.session_state['report_generated_at'] = pd.Timestamp.now().strftime('%d %B %Y %H:%M:%S WIB')
+
+                                st.success("✅ Laporan interpretasi berhasil dibuat!")
+
+                                # Display report sections
+                                st.markdown("### 📋 Ringkasan Eksekutif")
+                                st.markdown(report['executive_summary'])
+
+                                with st.expander("📊 Detail Lengkap"):
+                                    st.markdown(report['dataset_analysis'])
+                                    st.markdown("---")
+                                    st.markdown(report['feature_analysis'])
+                                    st.markdown("---")
+                                    st.markdown(report['model_architecture'])
+                                    st.markdown("---")
+                                    st.markdown(report['training_process'])
+                                    st.markdown("---")
+                                    st.markdown(report['performance_metrics'])
+                                    st.markdown("---")
+                                    st.markdown(report['recommendations'])
+
+                            except ImportError as e:
+                                st.error(f"❌ Modul model_interpreter tidak tersedia: {str(e)}")
+                            except Exception as e:
+                                st.error(f"❌ Gagal membuat laporan interpretasi: {str(e)}")
+                                logger.error(f"Error generating model interpretation: {e}", exc_info=True)
+
+                # PDF Download button (if report exists)
+                if 'model_interpretation_report' in st.session_state:
+                    st.markdown("---")
+                    st.subheader("📥 Unduh Laporan PDF")
+
+                    col1, col2 = st.columns(2)
+
+                    with col1:
+                        if st.button("📄 Unduh Laporan Interpretasi (PDF)", type="primary"):
+                            try:
+                                from pdf_generator import generate_training_report_pdf
+
+                                report_data = st.session_state['model_interpretation_report']
+                                pdf_buffer = generate_training_report_pdf(report_data)
+
+                                st.download_button(
+                                    label="⬇️ Klik untuk Mengunduh PDF",
+                                    data=pdf_buffer.getvalue(),
+                                    file_name=f"ASTINA_Model_Training_Report_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                                    mime="application/pdf",
+                                    key="download_pdf_button"
+                                )
+                            except ImportError:
+                                st.error("❌ Library reportlab belum terinstall. Jalankan: pip install reportlab")
+                            except Exception as e:
+                                st.error(f"❌ Gagal membuat PDF: {str(e)}")
+                                logger.error(f"Error generating PDF: {e}", exc_info=True)
+
+                    with col2:
+                        if st.button("🗑️ Hapus Laporan dari Sesi"):
+                            st.session_state.pop('model_interpretation_report', None)
+                            st.session_state.pop('report_generated_at', None)
+                            st.success("Laporan dihapus dari sesi")
+                            st.rerun()
+
                 # ── GNN Anomaly-Focused Subgraph Visualization ─────────────────
                 # Uses the pre-computed subgraph (top-K anomaly seeds + 1-hop
                 # neighbors) stored in session_state by the training pipeline.

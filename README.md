@@ -13,6 +13,7 @@ Aplikasi ini dilengkapi antarmuka interaktif berbasis **Streamlit**, mendukung i
 - **⚡ Circuit Breaker & Dynamic Weight Re-normalization**: Evaluasi kesiapan prasyarat 9 modul aturan bisnis secara otomatis. Jika kolom tertentu absen pada dataset, aturan terkait dilewati secara aman (`SKIPPED`) tanpa memicu error, dan bobot risiko dinormalkan ulang secara dinamis agar total bobot tetap 1.0 (100%), mencegah deflasi skor risiko.
 - **⚡ Resilient Multi-Format & Multi-Dataset Ingestion**: Dukungan unggah berkas tunggal maupun banyak berkas sekaligus (*multi-file batch upload*) untuk CSV, Excel (`.xlsx`, `.xls`), dan Parquet dengan integrasi penggabungan *streaming* (*zero-RAM spike diagonal concat*), pelacakan asal berkas (*source_file provenance*), pemanggilan parser streaming ber-tipe eksplisit (`on_bad_lines="warn"`), engine Polars termutakhir bebas parameter usang, streaming disk buffering 8MB untuk efisiensi RAM, dan integrasi parser Excel tahan error.
 - **🎯 Intelligent Feature Selection & Redundancy Filtering**: Modul seleksi fitur multivariat adaptif di UI Praproses yang mencakup SelectKBest (ANOVA F-Score & Mutual Information), Tree-based Feature Importance (ExtraTrees/RandomForest/LightGBM), Filter Multikolinearitas Terbobot Skor, Filter Low-Variance Skala Invarian, serta Reduksi Dimensi PCA interaktif dengan *live explained variance preview*.
+- **⚖️ Custom Train/Test/Validation Split**: Konfigurasi proporsi split data secara kustom (test: 10-40%, validation: 5-30%) dengan validasi otomatis untuk mencegah total split ≥ 80%. Menggunakan pendekatan **train-only preprocessing** untuk mencegah data leakage: statistik preprocessing dihitung HANYA dari train set dan diterapkan konsisten ke validation/test set. Partisi deterministik dengan stratifikasi otomatis jika label tersedia.
 - **✂️ Dual-Stage Interactive Feature Dropping & Exclusion Guard**: Fleksibilitas pembersihan fitur pada dua tahap kritis: (1) *Tahap Pra-Proses (Raw Feature Dropping)* untuk mengeliminasi kolom mentah bising/PII/tidak relevan sebelum imputasi dan encoding (didukung rekomendasi cerdas otomatis untuk kolom dengan missing >50% dan kolom bernilai tunggal/konstan), menghemat RAM serta mencegah dummy explosion; dan (2) *Tahap Pasca-Proses (Post-Engineering Feature Exclusion)* untuk mengeksklusikan fitur rekayasa tertentu sebelum proses pelatihan model.
 - **🛡️ PyArrow & Python 3.13 Type-Safe Serialization**: Sanitasi tipe data eksplisit pada inspeksi struktur dataset mentah (`df.dtypes`), mencegah crash fatal Windows `STATUS_ACCESS_VIOLATION` (exit status `3221225477`) akibat `ArrowInvalid` pada runtime Python 3.13 & NumPy 2.x.
 - **⚡ Smart Training Profiles & Complexity Estimator**: Antarmuka pelatihan interaktif dengan preset adaptif (⚡ *Mode Cepat* ~10-30 dtk, ⚖️ *Mode Seimbang* ~1-2 mnt, 🧠 *Mode Lengkap* Deep Graph, 🛠️ *Kustom*) serta monitor estimasi beban komputasi & rekomendasi hardware (CPU vs GPU) *real-time*.
@@ -49,9 +50,28 @@ Aplikasi ini dilengkapi antarmuka interaktif berbasis **Streamlit**, mendukung i
   8. *Medication & Device Fraud*: Audit kuantitas obat berlebih, rasionalitas dosis, dan markup alkes tak wajar.
   9. *Fuzzy Claim Matching*: Pencocokan kemiripan klaim non-identik berbasis kemiripan teks leksikal & atribut.
 - **🔍 Explainable AI (SHAP & LIME)**: Visualisasi atribusi fitur (*feature importance*) dan kontribusi lokal untuk transparansi akuntabilitas model.
+- **🤖 AI-Powered Model Interpretation & PDF Export**: Generate laporan naratif komprehensif hasil pelatihan model menggunakan AI generatif (Gemini, OpenAI, Ollama, atau heuristic offline). Laporan mencakup ringkasan eksekutif, analisis dataset, fitur, arsitektur model, proses pelatihan, metrik performa, dan rekomendasi. Dukungan export PDF profesional untuk dokumentasi dan audit.
 - **📊 Real-Time System Telemetry**: Monitoring utilisasi hardware (CPU, RAM, GPU/VRAM), throughput ingestion, dan latensi inferensi.
 - **💻 Headless CLI Training Engine**: Dukungan pelatihan model otomatis melalui baris perintah (`training_cli.py`) untuk integrasi MLOps / CI/CD pipeline.
 - **☁️ Multi-Environment Ready**: Kompatibilitas penuh untuk Localhost (Windows/Linux/macOS), Docker Desktop, dan Google Cloud Run dengan persistensi volume dan sinkronisasi Google Cloud Storage (GCS).
+
+---
+
+## 🆕 Fitur Baru (Update Terbaru)
+
+### ⚖️ Custom Train/Test/Validation Split
+- **Konfigurasi Fleksibel**: Atur proporsi split data secara kustom melalui UI (test: 10-40%, validation: 5-30%)
+- **Data Leakage Prevention**: Menggunakan pendekatan train-only preprocessing - statistik dihitung HANYA dari train set
+- **Validasi Otomatis**: Mencegah konfigurasi tidak valid (total split ≥ 80%)
+- **Stratifikasi Cerdas**: Deteksi otomatis kolom label untuk distribusi seimbang
+- **Panduan Lengkap**: Dokumentasi di [docs/CUSTOM_TRAIN_TEST_SPLIT_GUIDE.md](docs/CUSTOM_TRAIN_TEST_SPLIT_GUIDE.md)
+
+### 🤖 AI-Powered Model Interpretation & PDF Export
+- **Laporan Naratif dengan AI**: Generate penjelasan komprehensif menggunakan LLM (Gemini, OpenAI, Ollama) atau heuristic offline
+- **PDF Profesional**: Export laporan dalam format PDF standar untuk dokumentasi dan audit
+- **7 Section Lengkap**: Ringkasan eksekutif, analisis dataset, fitur, arsitektur model, proses pelatihan, metrik performa, rekomendasi
+- **Mode Hybrid**: Support LLM untuk insight mendalam + heuristic fallback untuk offline
+- **Panduan Lengkap**: Dokumentasi di [docs/MODEL_INTERPRETATION_GUIDE.md](docs/MODEL_INTERPRETATION_GUIDE.md)
 
 ---
 
@@ -72,6 +92,8 @@ project-Graphnet/
 ├── model.py                         # Arsitektur ML Ensemble (Autoencoder, XGBoost, GNN, Optuna)
 ├── model_registry.py                # Manajemen versi model & metadata training
 ├── model_explainer.py               # Modul interpretasi model (SHAP & LIME)
+├── model_interpreter.py             # Service interpretasi model dengan AI generatif & PDF export
+├── pdf_generator.py                 # Generator laporan PDF profesional untuk model training
 ├── agentic_copilot.py               # AI Copilot investigasi berbasis LLM & Agentic reasoning (Zero-Wipeout Fallback)
 ├── rag_engine.py                    # Knowledge base RAG berbasis FAISS, regulasi JKN & kaidah outlier ML
 ├── audit_trail.py                   # Engine pencatatan audit log berantai SHA-256
@@ -90,6 +112,9 @@ project-Graphnet/
 ├── pytest.ini                       # Konfigurasi standar pengujian otomatis Pytest
 ├── ARCHITECTURE.md                  # Dokumentasi arsitektur enterprise lengkap
 ├── EXECUTIVE SUMMARY.md             # Dokumen ringkasan eksekutif untuk manajemen & auditor
+├── docs/
+│   ├── MODEL_INTERPRETATION_GUIDE.md  # Panduan interpretasi model dengan AI generatif
+│   └── CUSTOM_TRAIN_TEST_SPLIT_GUIDE.md # Panduan konfigurasi split train/test/validation
 │
 ├── scripts/                         # Production automation & security scripts
 │   ├── security_validator.py        # Automated security validation before deployment
@@ -149,7 +174,7 @@ project-Graphnet/
 - **Docker**: Docker Desktop versi terbaru dengan Docker Compose v2.
 
 Semua dependensi inti dikunci pada [requirements.txt](requirements.txt):
-`streamlit==1.61.1`, `pandas`, `numpy`, `scikit-learn`, `scipy`, `joblib`, `torch>=2.4.0`, `torch-geometric>=2.6.0`, `imbalanced-learn`, `plotly>=6.0.0`, `xgboost`, `lightgbm`, `catboost`, `polars`, `pyarrow`, `optuna`, `hdbscan`, `faiss-cpu`, `psutil`, `shap`, `lime`, `google-cloud-storage`.
+`streamlit==1.61.1`, `pandas`, `numpy`, `scikit-learn`, `scipy`, `joblib`, `torch>=2.4.0`, `torch-geometric>=2.6.0`, `imbalanced-learn`, `plotly>=6.0.0`, `xgboost`, `lightgbm`, `catboost`, `polars`, `pyarrow`, `optuna`, `hdbscan`, `faiss-cpu`, `psutil`, `shap`, `lime`, `google-cloud-storage`, `reportlab>=4.2.0`.
 
 > **Catatan Streamlit API:** Sejak `streamlit>=1.45`, parameter `use_container_width` pada `st.plotly_chart`, `st.dataframe`, dan `st.button` telah dihapus dan digantikan oleh `width='stretch'` / `width='content'`. Seluruh komponen UI ASTINA sudah menggunakan API baru ini.
 

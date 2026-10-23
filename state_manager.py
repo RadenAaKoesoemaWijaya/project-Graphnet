@@ -360,6 +360,11 @@ def split_processed_dataset_with_validation(df_processed, test_size=0.2, validat
     """Create deterministic train/validation/test partitions with stratification when feasible."""
     if not 0 < test_size < 1 or not 0 < validation_size < 1:
         raise ValueError("Ukuran test dan validation harus berada di antara 0 dan 1.")
+    if test_size + validation_size >= 0.8:
+        raise ValueError(
+            f"Total ukuran test ({test_size:.0%}) dan validation ({validation_size:.0%}) "
+            f"harus kurang dari 80% untuk menyisakan cukup data untuk training."
+        )
     if df_processed is None or len(df_processed) < 10:
         raise ValueError("Dataset minimal 10 baris diperlukan untuk train/validation/test.")
 

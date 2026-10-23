@@ -80,6 +80,12 @@ ASTINA adalah platform analitik dan investigasi anomali transaksi klaim asuransi
 - **Disk-Buffering Architecture**: Membaca dataset skala gigabyte dalam bongkahan (chunks) disk 8MB tanpa memicu lonjakan memori (RAM spike) di container RAM 2-16 GB.
 - **Circuit Breaker Data**: Mencegah crash jika kolom opsional tidak ditemukan; bobot dinormalkan kembali ke 1.0 (100%) secara deterministik.
 - **Zero Preprocessing Leakage**: Transformer statistik (Mean, Median, RobustScaler, OneHotEncoder) dihitung eksklusif pada partisi *train* (`__astina_partition == 'train'`) dan diterapkan ke partisi *test* via metadata artefak.
+- **Custom Train/Test/Validation Split**:
+  - Konfigurasi proporsi split secara kustom melalui UI (test: 10-40%, validation: 5-30%)
+  - Validasi otomatis mencegah total split ≥ 80% untuk menyisakan cukup data training
+  - Split deterministik menggunakan hash-based partitioning pada data mentah sebelum preprocessing
+  - Stratifikasi otomatis jika kolom label tersedia (fraud, label, target, class)
+  - Proporsi split disimpan dalam metadata preprocessing untuk konsistensi di training dan evaluation
 
 ### 2.2 Hybrid Machine Learning & GNN Architecture
 1. **Isolation Forest**: Menangkap anomali distribusi spasial multivariat tanpa supervisi.

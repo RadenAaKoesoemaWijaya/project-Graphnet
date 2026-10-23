@@ -97,8 +97,14 @@ def show_evaluation_page():
             return
         else:
             try:
+                # Get custom split proportions from session state or use defaults
+                test_size = st.session_state.get('split_test_size', 0.2)
+                validation_size = st.session_state.get('split_validation_size', 0.15)
+
                 train_df, validation_df, test_df, stratify_label = split_processed_dataset_with_validation(
                     df_processed,
+                    test_size=test_size,
+                    validation_size=validation_size
                 )
                 st.session_state['train_df'] = train_df
                 st.session_state['validation_df'] = validation_df

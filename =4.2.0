@@ -1,0 +1,9 @@
+Defaulting to user installation because normal site-packages is not writeable
+Collecting reportlab
+  Downloading reportlab-5.1.0-py3-none-any.whl.metadata (1.6 kB)
+Requirement already satisfied: pillow>=9.0.0 in C:\Users\asus\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages (from reportlab) (12.3.0)
+Requirement already satisfied: charset-normalizer in C:\Users\asus\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages (from reportlab) (3.4.9)
+Downloading reportlab-5.1.0-py3-none-any.whl (2.0 MB)
+   ---------------------------------------- 2.0/2.0 MB 65.4 kB/s  0:00:34
+Installing collected packages: reportlab
+Successfully installed reportlab-5.1.0

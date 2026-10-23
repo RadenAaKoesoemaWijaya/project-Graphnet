@@ -479,10 +479,34 @@ def show_data_collection_page():
                 step=5,
                 key="preprocessing_test_size_pct",
                 help=(
-                    "Split ditetapkan pada data mentah. Validation mengambil 15% "
-                    "dari sisa data; seluruh statistik preprocessing hanya di-fit pada train."
+                    "Persentase data yang akan digunakan sebagai test set. "
+                    "Split ditetapkan pada data mentah sebelum preprocessing."
                 ),
             )
+
+            preprocessing_validation_size = st.slider(
+                "Porsi data validation sebelum preprocessing (%)",
+                min_value=5,
+                max_value=30,
+                value=15,
+                step=5,
+                key="preprocessing_validation_size_pct",
+                help=(
+                    "Persentase data yang akan digunakan sebagai validation set. "
+                    "Diambil dari sisa data setelah test split. "
+                    "Seluruh statistik preprocessing hanya di-fit pada train."
+                ),
+            )
+
+            # Validation: Ensure test + validation < 80% (leaving at least 20% for train)
+            total_split_pct = preprocessing_test_size + preprocessing_validation_size
+            if total_split_pct >= 80:
+                st.error(
+                    f"⚠️ Total split (test + validation) harus kurang dari 80%. "
+                    f"Saat ini: {total_split_pct}% (test: {preprocessing_test_size}%, validation: {preprocessing_validation_size}%). "
+                    f"Silakan kurangi salah satu atau keduanya."
+                )
+                st.stop()
 
             # --- Opsi Penghapusan Fitur / Kolom Mentah ---
             available_raw_cols = [str(c) for c in df.columns]
@@ -647,6 +671,7 @@ def show_data_collection_page():
                             enable_outlier_detection=st.session_state.get('enable_outlier_detection', True),
                             enable_data_validation=st.session_state.get('enable_data_validation', True),
                             test_size=preprocessing_test_size / 100,
+                            validation_size=preprocessing_validation_size / 100,
                             drop_columns=columns_to_drop,
                         )
                         for temporary_path in temporary_input_paths:
@@ -694,14 +719,22 @@ def show_data_collection_page():
                                 validation_frame,
                                 test_frame,
                                 stratify_label,
-                            ) = split_processed_dataset_with_validation(df_processed)
+                            ) = split_processed_dataset_with_validation(
+                                df_processed,
+                                test_size=preprocessing_test_size / 100,
+                                validation_size=preprocessing_validation_size / 100
+                            )
                             st.session_state["train_df"] = training_frame
                             st.session_state["validation_df"] = validation_frame
                             st.session_state["test_df"] = test_frame
-                            st.session_state["split_test_size"] = 0.2
+                            st.session_state["split_test_size"] = preprocessing_test_size / 100
+                            st.session_state["split_validation_size"] = preprocessing_validation_size / 100
                             st.session_state["feature_selection_scope"] = "train"
                             st.info(
-                                "Split train/validation/test ditetapkan pada data mentah. "
+                                f"Split train/validation/test ditetapkan pada data mentah. "
+                                f"Train: {len(training_frame):,} ({(1 - preprocessing_test_size/100 - preprocessing_validation_size/100):.0%}), "
+                                f"Validation: {len(validation_frame):,} ({preprocessing_validation_size/100:.0%}), "
+                                f"Test: {len(test_frame):,} ({preprocessing_test_size/100:.0%}). "
                                 "Statistik imputasi, encoding, dan outlier di-fit hanya pada train; "
                                 f"validasi/test ditahan terpisah (stratifikasi: {stratify_label or 'tidak tersedia'})."
                             )

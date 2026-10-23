@@ -728,7 +728,7 @@ def preprocess_dataset_with_train_only_stats(
         }
         metadata["requested_split"] = {
             "test_fraction": float(test_size),
-            "validation_fraction_of_remaining": float(validation_size),
+            "validation_fraction": float(validation_size),
         }
         metadata["fit_statistics"] = {
             "total_rows": int(stats["total_rows"]),
