@@ -575,10 +575,6 @@ pip install torch --index-url https://download.pytorch.org/whl/cpu
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 ```
 
----
-
-## 🎨 UI/UX Integration (Phase 1 & 2)
-
 ### Detection Page Enhancements
 - **Tab 6: Advanced Detection Settings** - New tab untuk Phase 1 & 2 features
   - Context-Aware Scoring Statistics: Real-time metrics (avg composite score, suppressed flags, suppression rate)
