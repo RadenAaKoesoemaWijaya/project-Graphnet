@@ -179,6 +179,7 @@ studies/*.pkl
 # Data files
 *.csv
 !insurance_claims_sample.csv
+!docs/*.csv
 
 # Logs
 *.log
@@ -207,6 +208,7 @@ Thumbs.db
 # Large data files (keep local only)
 *.xlsx
 *.xls
-*.csv
 *.parquet
+!docs/*.xlsx
+!docs/*.xls
 
