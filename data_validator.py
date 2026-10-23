@@ -1,6 +1,6 @@
 """
 Data validation and input sanitization module for ASTINA.
-Provides comprehensive data quality checks and input cleaning.
+Provides comprehensive data quality checks and input validation using Pydantic.
 """
 import pandas as pd
 import numpy as np
@@ -15,6 +15,24 @@ from typing import Dict, List, Optional, Tuple, Any
 import logging
 import polars as pl
 import os
+
+# Pydantic integration
+try:
+    from schemas import (
+        ClaimData,
+        ValidationSummary,
+        DataFrameToPydanticConverter,
+        WhitelistException,
+        ChronicCondition
+    )
+    PYDANTIC_AVAILABLE = True
+except ImportError:
+    PYDANTIC_AVAILABLE = False
+    ClaimData = None
+    ValidationSummary = None
+    DataFrameToPydanticConverter = None
+    WhitelistException = None
+    ChronicCondition = None
 
 logger = logging.getLogger("graphnet.data_validator")
 
@@ -315,7 +333,7 @@ class DataValidator:
 
 def comprehensive_validation(df: pd.DataFrame, target_col: Optional[str] = None) -> Tuple[bool, Dict[str, Any]]:
     """
-    Perform comprehensive data validation.
+    Perform comprehensive data validation (legacy pandas-based).
     
     Args:
         df: Dataframe to validate
@@ -355,6 +373,48 @@ def comprehensive_validation(df: pd.DataFrame, target_col: Optional[str] = None)
     except Exception as e:
         logger.error(f"Error during comprehensive validation: {e}")
         return False, {'error': str(e)}
+
+
+def pydantic_validation(df: pd.DataFrame) -> Tuple[bool, ValidationSummary]:
+    """
+    Perform Pydantic-based validation for claim data.
+    
+    This is the recommended Phase 1 validation method using Pydantic models
+    for type safety and automatic validation.
+    
+    Args:
+        df: Dataframe to validate
+        
+    Returns:
+        Tuple of (is_valid, ValidationSummary)
+    """
+    if not PYDANTIC_AVAILABLE:
+        logger.warning("Pydantic not available, falling back to pandas validation")
+        # Fallback to legacy validation
+        is_valid, results = comprehensive_validation(df)
+        # Convert to ValidationSummary format
+        summary = ValidationSummary(
+            is_valid=is_valid,
+            total_claims=len(df),
+            valid_claims=len(df) if is_valid else 0,
+            invalid_claims=0 if is_valid else len(df),
+            validation_errors=results.get('basic_integrity', {}).get('issues', []),
+            validation_warnings=results.get('basic_integrity', {}).get('warnings', [])
+        )
+        return is_valid, summary
+    
+    try:
+        summary = DataFrameToPydanticConverter.validate_dataframe(df)
+        return summary.is_valid, summary
+    except Exception as e:
+        logger.error(f"Error during Pydantic validation: {e}")
+        return False, ValidationSummary(
+            is_valid=False,
+            total_claims=len(df),
+            valid_claims=0,
+            invalid_claims=len(df),
+            validation_errors=[f"Validation error: {str(e)}"]
+        )
 
 
 def validate_parquet_dataset(parquet_path: str) -> Dict[str, Any]:

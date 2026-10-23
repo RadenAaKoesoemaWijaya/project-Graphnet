@@ -18,6 +18,7 @@ Aplikasi ini dilengkapi antarmuka interaktif berbasis **Streamlit**, mendukung i
 
 ### 🔄 Smart Data Processing
 - **Semantic Schema Harmonizer**: Penyelarasan otomatis sinonim kolom bahasa Indonesia/standar medis ke kolom kanonikal
+- **Pydantic Data Validation**: Type-safe validation dengan automatic validators untuk claim data (Phase 1)
 - **Circuit Breaker**: Evaluasi kesiapan aturan bisnis otomatis dengan bobot dinamis
 - **Multi-Format Ingestion**: Dukungan CSV, Excel (.xlsx, .xls), dan Parquet dengan streaming chunk processing
 - **Intelligent Feature Selection**: SelectKBest, Tree-based Importance, Multicollinearity Filter, Low-Variance Filter, PCA
@@ -47,9 +48,10 @@ Aplikasi ini dilengkapi antarmuka interaktif berbasis **Streamlit**, mendukung i
 ### ⚙️ Production Ready
 - **Multi-Environment**: Localhost, Docker Desktop, Google Cloud Run
 - **CI/CD Pipeline**: GitHub Actions otomatis
-- **Automated Testing**: 217+ unit & integration tests (100% pass rate)
+- **Automated Testing**: 236+ unit & integration tests (100% pass rate)
 - **Score 93%**: Audit kesiapan produksi terverifikasi
 - **Full UI/UX Integration**: Complete visibility dan kontrol untuk Phase 1 & 2 features
+- **Pydantic Integration**: Type-safe data validation dengan zero breaking changes
 
 ### 🎯 False Alarm Reduction (Phase 1 & 2)
 - **Robust Outlier Detection**: MAD, IQR, Modified Z-Score untuk statistik robust
@@ -96,6 +98,7 @@ project-Graphnet/
 ├── length_of_stay_rules.py          # Deteksi LOS & readmission
 ├── medication_device_fraud_rules.py # Deteksi fraud obat & alkes
 ├── fuzzy_claim_matcher.py           # Fuzzy matching klaim
+├── schemas.py                       # Pydantic schemas untuk data validation (Phase 1)
 ├── requirements.txt                 # Dependensi Python
 ├── ui/                              # Antarmuka Streamlit
 │   ├── sidebar.py                   # Navigasi & status
@@ -114,7 +117,8 @@ project-Graphnet/
 │   ├── test_adaptive_threshold_engine.py
 │   ├── test_context_aware_risk_scorer.py
 │   ├── test_historical_baseline_system.py
-│   └── test_ui_integration.py      # UI integration tests
+│   ├── test_ui_integration.py      # UI integration tests
+│   └── test_schemas.py              # Pydantic schemas tests (Phase 1)
 ├── scripts/                         # Production automation scripts
 ├── docs/                            # Dokumentasi & dataset sampel
 │   └── sample_claims.csv             # Dataset sampel 50 baris
@@ -282,37 +286,44 @@ Sistem otomatis menyelaraskan sinonim kolom bahasa Indonesia:
 
 ```mermaid
 flowchart TD
-    A[Data Klaim Mentah] --> B[Validasi & ID Unik]
-    B --> C[Preprocessing & Feature Engineering]
-    C --> D[ML Ensemble Detection]
-    C --> E[GNN Analysis]
-    C --> F[Business Rules Audit]
-    D --> G[Robust Outlier Detection]
-    E --> G
-    F --> G
-    G --> H[Adaptive Thresholds]
-    H --> I[Context-Aware Scoring]
-    I --> J[Whitelist Check]
-    J --> K[Hybrid Risk Aggregation]
-    K --> L[Investigation Workspace]
-    L --> M[AI Copilot & BAP]
-    M --> N[Cryptographic Audit Trail]
+    A[Data Klaim Mentah] --> B[Pydantic Data Validation]
+    B --> C[Validasi & ID Unik]
+    C --> D[Preprocessing & Feature Engineering]
+    D --> E[ML Ensemble Detection]
+    D --> F[GNN Analysis]
+    D --> G[Business Rules Audit]
+    E --> H[Robust Outlier Detection]
+    F --> H
+    G --> H
+    H --> I[Adaptive Thresholds]
+    I --> J[Context-Aware Scoring]
+    J --> K[Whitelist Check]
+    K --> L[Hybrid Risk Aggregation]
+    L --> M[Investigation Workspace]
+    M --> N[AI Copilot & BAP]
+    N --> O[Cryptographic Audit Trail]
 ```
 
-### 1. Preprocessing & Feature Engineering
+### 1. Pydantic Data Validation (Phase 1)
+- Type-safe validation dengan automatic validators
+- Clear error messages untuk invalid data
+- Graceful fallback ke pandas validation
+- Zero performance impact (on-demand validation)
+
+### 2. Preprocessing & Feature Engineering
 - Deteksi outlier robust (MAD, IQR)
 - Encoding kategori optimal
 - Feature engineering domain asuransi (payment_ratio, allowance_ratio)
 - Intelligent feature selection (SelectKBest, Tree Importance, PCA)
 - Leakage-safe splitting (train/validation/test sebelum preprocessing)
 
-### 2. ML Ensemble Detection
+### 3. ML Ensemble Detection
 - **Isolation Forest**: Deteksi isolasi anomali
 - **Autoencoder**: Reconstruction error
 - **XGBoost/LightGBM**: Prediksi probabilitas fraud
 - **GNN**: Analisis jaringan kolusi
 
-### 3. Business Rules Audit (9 Modul)
+### 4. Business Rules Audit (9 Modul)
 1. Repeat Billing (klaim berulang) - dengan adaptive threshold dan whitelist
 2. Phantom Service (layanan fiktif) - dengan chronic condition exception
 3. Provider Capacity (kapasitas berlebih) - dengan provider exception
@@ -323,7 +334,7 @@ flowchart TD
 8. Medication & Device Fraud
 9. Fuzzy Claim Matching
 
-### 4. False Alarm Reduction (Phase 1 & 2)
+### 5. False Alarm Reduction (Phase 1 & 2)
 - **Robust Outlier Detection**: MAD, IQR, Modified Z-Score
 - **Whitelist System**: 10 kondisi kronis dengan frekuensi wajar
 - **Adaptive Thresholds**: Provider-specific thresholds berdasarkan historical patterns
@@ -331,10 +342,10 @@ flowchart TD
 - **Historical Learning**: Continuous learning dengan concept drift detection
 - **Intelligent Flag Suppression**: Suppress flags berdasarkan context intelligence
 
-### 5. Hybrid Risk Scoring
+### 6. Hybrid Risk Scoring
 Kombinasi probabilitas ML dan skor aturan bisnis dengan bobot dinamis (Circuit Breaker).
 
-### 6. Investigation Workspace
+### 7. Investigation Workspace
 - **Tab 1**: Ringkasan & Visualisasi
 - **Tab 2**: Business Risk & Rules
 - **Tab 3**: Fraud Review Table & Export (dengan Phase 2 columns: composite_risk_score, context_suppressed, final_business_risk_flag)
@@ -342,7 +353,7 @@ Kombinasi probabilitas ML dan skor aturan bisnis dengan bobot dinamis (Circuit B
 - **Tab 5**: Concept Drift & Retraining
 - **Tab 6**: Advanced Detection Settings (Phase 1 & 2) - UI untuk whitelist management, adaptive thresholds, context-aware statistics, historical baselines
 
-### 7. UI/UX Advanced Features (Phase 1 & 2)
+### 8. UI/UX Advanced Features (Phase 1 & 2)
 - **Detection Page - Tab 6**: Advanced Detection Settings
   - Context-Aware Scoring Statistics (avg composite score, suppressed flags, suppression rate)
   - Whitelist Management (chronic conditions, provider exceptions, add exception form)
@@ -354,6 +365,75 @@ Kombinasi probabilitas ML dan skor aturan bisnis dengan bobot dinamis (Circuit B
   - Global context-aware scoring configuration
   - Global whitelist configuration
   - Phase 2 global enable/disable
+
+---
+
+## 🔬 Pydantic Data Validation (Phase 1)
+
+### Overview
+ASTINA menggunakan **Pydantic** untuk type-safe data validation pada claim data. Integrasi ini memberikan automatic validation, clear error messages, dan comprehensive schema documentation tanpa breaking changes.
+
+### Pydantic Schemas
+
+**ClaimData Schema:**
+- Validasi field requirements: claim_id, patient_id, provider_id, service_code, diagnosis_code, dates, amounts, status, age, length_of_stay, quantity
+- Automatic validators: dates tidak boleh future, paid/allowed amount tidak boleh exceed billed, length of stay reasonable, age range 0-120
+- Type safety: automatic type checking dengan clear error messages
+
+**Additional Schemas:**
+- `DetectionConfig` - Konfigurasi deteksi dengan method validation
+- `DetectionResult` - Hasil deteksi dengan severity validation
+- `ValidationSummary` - Summary hasil validasi
+- `WhitelistException` - Exception untuk whitelist management
+- `ChronicCondition` - Kondisi kronis untuk whitelist
+
+### Usage Example
+
+```python
+from schemas import ClaimData
+from data_validator import pydantic_validation
+
+# Validasi single claim
+claim = ClaimData(
+    claim_id="CLM001",
+    patient_id="PAT001",
+    provider_id="PROV001",
+    service_code="CONS001",
+    diagnosis_code="E11",
+    billing_date=datetime.now() - timedelta(days=5),
+    service_date=datetime.now() - timedelta(days=5),
+    billed_amount=500000,
+    paid_amount=450000,
+    allowed_amount=450000,
+    claim_status="Settled",
+    patient_age=45,
+    length_of_stay=0,
+    quantity=1
+)
+
+# Validasi DataFrame
+is_valid, summary = pydantic_validation(df)
+if is_valid:
+    print(f"✅ All {summary.valid_claims} claims are valid")
+else:
+    print(f"❌ {summary.invalid_claims} claims are invalid")
+    for error in summary.validation_errors:
+        print(f"  - {error}")
+```
+
+### Benefits
+- ✅ **Type Safety**: Automatic type checking dengan IDE autocomplete
+- ✅ **Automatic Validation**: Consistent validation logic dengan less boilerplate
+- ✅ **Clear Error Messages**: Specific, actionable error messages
+- ✅ **Schema Documentation**: Self-documenting models dengan automatic JSON schema
+- ✅ **Zero Breaking Changes**: Fully backward compatible dengan existing code
+- ✅ **Zero Performance Impact**: Validation on-demand, tidak ada overhead
+
+### Integration Details
+- File: `schemas.py` - Pydantic models
+- File: `data_validator.py` - Pydantic integration dengan graceful fallback
+- Tests: `tests/test_schemas.py` - 19 comprehensive tests (100% pass rate)
+- Dependencies: `pydantic==2.9.2`, `pydantic-settings==2.6.1`
 
 ---
 
@@ -443,7 +523,7 @@ python verify_audit_trail.py
 python system_status.py
 ```
 
-**Hasil**: 217+ tests lulus (100% pass rate)
+**Hasil**: 236+ tests lulus (100% pass rate)
 
 ---
 
@@ -546,8 +626,9 @@ Lisensi MIT / Enterprise Internal Security Policy. Mendukung standar privasi dat
 - **Hybrid AI Architecture**: Menggabungkan strengths dari supervised, unsupervised, dan rule-based methods
 - **False Alarm Reduction**: ~80% reduction dengan adaptive thresholds dan context-aware scoring
 - **Full UI/UX Integration**: Complete visibility dan kontrol untuk Phase 1 & 2 features dengan 6-tab detection interface dan 5-tab settings interface
+- **Pydantic Data Validation**: Type-safe validation dengan automatic validators, zero breaking changes, dan zero performance impact
 - **Enterprise Security**: Cryptographic audit trail dan PII protection sesuai regulasi
-- **Production Ready**: 217+ tests dengan 100% pass rate, CI/CD pipeline, multi-environment deployment, end-to-end pipeline tested
+- **Production Ready**: 236+ tests dengan 100% pass rate, CI/CD pipeline, multi-environment deployment, end-to-end pipeline tested
 
 ---
 
