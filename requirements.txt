@@ -38,7 +38,7 @@ google-cloud-storage>=3.0.0
 faiss-cpu>=1.7.4
 psutil>=7.0.0
 shap>=0.48.0
-lime==0.2.0.0
+lime>=0.2.0.0
 reportlab>=4.2.0
 # alibi-detect is OPTIONAL — provides advanced concept drift detection.
 # Install separately with: pip install "alibi-detect[torch]>=0.12.0"
