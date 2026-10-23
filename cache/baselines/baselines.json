@@ -1,0 +1,80 @@
+{
+  "provider": {
+    "PROV-01": {
+      "total_claims": 5,
+      "unique_patients": 5,
+      "avg_daily_claims": 0.0,
+      "total_amount": 25000000.0,
+      "avg_amount": 5000000.0,
+      "amount_std": 0.0,
+      "last_claim_date": null
+    }
+  },
+  "cost": {
+    "global": {
+      "count": 5,
+      "mean": 5000000.0,
+      "median": 5000000.0,
+      "std": 0.0,
+      "min": 5000000.0,
+      "max": 5000000.0,
+      "q1": 5000000.0,
+      "q3": 5000000.0,
+      "iqr": 0.0,
+      "p95": 5000000.0,
+      "p99": 5000000.0
+    },
+    "by_service": {
+      "SUR001": {
+        "count": 5,
+        "mean": 5000000.0,
+        "median": 5000000.0,
+        "std": 0.0,
+        "p95": 5000000.0
+      }
+    }
+  },
+  "seasonal": {},
+  "patient": {
+    "PAT-0": {
+      "total_claims": 1,
+      "unique_providers": 1,
+      "total_amount": 5000000.0,
+      "avg_amount": 5000000.0,
+      "claim_frequency": 0.0
+    },
+    "PAT-1": {
+      "total_claims": 1,
+      "unique_providers": 1,
+      "total_amount": 5000000.0,
+      "avg_amount": 5000000.0,
+      "claim_frequency": 0.0
+    },
+    "PAT-2": {
+      "total_claims": 1,
+      "unique_providers": 1,
+      "total_amount": 5000000.0,
+      "avg_amount": 5000000.0,
+      "claim_frequency": 0.0
+    },
+    "PAT-3": {
+      "total_claims": 1,
+      "unique_providers": 1,
+      "total_amount": 5000000.0,
+      "avg_amount": 5000000.0,
+      "claim_frequency": 0.0
+    },
+    "PAT-4": {
+      "total_claims": 1,
+      "unique_providers": 1,
+      "total_amount": 5000000.0,
+      "avg_amount": 5000000.0,
+      "claim_frequency": 0.0
+    }
+  },
+  "metadata": {
+    "updated_at": "2026-10-23T22:05:47.150889",
+    "record_count": 5,
+    "time_window_days": 90
+  }
+}

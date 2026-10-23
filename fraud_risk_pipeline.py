@@ -25,6 +25,27 @@ except ImportError:
     _has_whitelist = False
     WhitelistManager = None
 
+try:
+    from adaptive_threshold_engine import AdaptiveThresholdEngine
+    _has_adaptive_threshold = True
+except ImportError:
+    _has_adaptive_threshold = False
+    AdaptiveThresholdEngine = None
+
+try:
+    from context_aware_risk_scorer import ContextAwareRiskScorer
+    _has_context_scorer = True
+except ImportError:
+    _has_context_scorer = False
+    ContextAwareRiskScorer = None
+
+try:
+    from historical_baseline_system import HistoricalBaselineSystem
+    _has_historical_baseline = True
+except ImportError:
+    _has_historical_baseline = False
+    HistoricalBaselineSystem = None
+
 logger = logging.getLogger("astina.fraud_risk_pipeline")
 
 REQUIRED_CLAIM_FIELDS = {
@@ -143,8 +164,20 @@ def enrich_claims_with_business_risk_features(df: pd.DataFrame) -> Tuple[pd.Data
             "high_risk_claims": 0,
         }
 
-    # Parallel evaluation of independent rule modules
+    # Initialize Phase 2 modules if available
     whitelist_mgr = WhitelistManager() if _has_whitelist else None
+    adaptive_engine = AdaptiveThresholdEngine() if _has_adaptive_threshold else None
+    context_scorer = ContextAwareRiskScorer() if _has_context_scorer else None
+    historical_system = HistoricalBaselineSystem() if _has_historical_baseline else None
+
+    # Update historical baseline if available
+    if historical_system:
+        try:
+            historical_system.update_baseline(clean)
+        except Exception as e:
+            logger.warning(f"Failed to update historical baseline: {e}")
+
+    # Parallel evaluation of independent rule modules
     repeat_detector = RepeatBillingDetector(
         temporal_window_days=30,
         fuzzy_threshold=0.85,
@@ -283,6 +316,59 @@ def enrich_claims_with_business_risk_features(df: pd.DataFrame) -> Tuple[pd.Data
         clean["business_risk_score"] = pd.Series(0.0, index=clean.index)
 
     clean["business_risk_flag"] = (clean["business_risk_score"] >= 0.6).astype(int)
+
+    # Phase 2: Context-Aware Risk Scoring
+    if context_scorer:
+        try:
+            # Update patient history
+            context_scorer.update_patient_history(clean)
+
+            # Apply context-aware scoring to each claim
+            composite_scores = []
+            suppression_flags = []
+
+            for idx, row in clean.iterrows():
+                # Collect module flags and scores
+                module_flags = {}
+                module_scores = {}
+
+                flag_columns = [c for c in clean.columns if c.endswith('_flag')]
+                score_columns = [c for c in clean.columns if c.endswith('_score')]
+
+                for col in flag_columns:
+                    module_name = col.replace('_flag', '')
+                    module_flags[module_name] = int(row[col])
+
+                for col in score_columns:
+                    module_name = col.replace('_score', '')
+                    module_scores[module_name] = float(row[col])
+
+                # Calculate composite risk score
+                context_result = context_scorer.calculate_composite_risk_score(
+                    row, module_flags, module_scores, clean
+                )
+
+                composite_scores.append(context_result["composite_risk_score"])
+                suppression_flags.append(context_result["should_suppress_flag"])
+
+            clean["composite_risk_score"] = pd.Series(composite_scores, index=clean.index)
+            clean["context_suppressed"] = pd.Series(suppression_flags, index=clean.index).astype(int)
+
+            # Adjust business risk flag based on context suppression
+            clean["final_business_risk_flag"] = (
+                (clean["business_risk_flag"] == 1) & (clean["context_suppressed"] == 0)
+            ).astype(int)
+
+            logger.info(f"Context-aware scoring applied. Suppressed {clean['context_suppressed'].sum()} flags.")
+        except Exception as e:
+            logger.warning(f"Failed to apply context-aware scoring: {e}")
+            clean["composite_risk_score"] = clean["business_risk_score"]
+            clean["context_suppressed"] = 0
+            clean["final_business_risk_flag"] = clean["business_risk_flag"]
+    else:
+        clean["composite_risk_score"] = clean["business_risk_score"]
+        clean["context_suppressed"] = 0
+        clean["final_business_risk_flag"] = clean["business_risk_flag"]
 
     active_count = sum(1 for r in readiness.values() if r.get("ready", False))
     summary = {
