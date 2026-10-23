@@ -48,10 +48,11 @@ Aplikasi ini dilengkapi antarmuka interaktif berbasis **Streamlit**, mendukung i
 ### ⚙️ Production Ready
 - **Multi-Environment**: Localhost, Docker Desktop, Google Cloud Run
 - **CI/CD Pipeline**: GitHub Actions otomatis
-- **Automated Testing**: 236+ unit & integration tests (100% pass rate)
+- **Automated Testing**: 239+ unit & integration tests (100% pass rate)
 - **Score 93%**: Audit kesiapan produksi terverifikasi
 - **Full UI/UX Integration**: Complete visibility dan kontrol untuk Phase 1 & 2 features
 - **Pydantic Integration**: Type-safe data validation dengan zero breaking changes
+- **GPU Acceleration**: CUDA 12.4 support untuk NVIDIA GeForce RTX 3050+ (opsional, CPU fallback tersedia)
 
 ### 🎯 False Alarm Reduction (Phase 1 & 2)
 - **Robust Outlier Detection**: MAD, IQR, Modified Z-Score untuk statistik robust
@@ -535,16 +536,36 @@ $env:STREAMLIT_SERVER_PORT="8502"
 python run.py
 ```
 
-### Error PyTorch/CUDA
+### PyTorch CUDA Setup (GPU Acceleration)
 ```powershell
-# Jika torch CUDA version menyebabkan error loading DLL
-# Uninstall dan install CPU version:
+# Cek ketersediaan GPU
+nvidia-smi
+
+# Jika GPU tersedia (NVIDIA GeForce RTX 3050 atau sejenis):
+# Install PyTorch dengan CUDA 12.4 support
+.venv\Scripts\python.exe -m pip uninstall torch torchvision torchaudio -y
+.venv\Scripts\python.exe -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+
+# Install torch-geometric (kompatibel dengan CUDA 12.4)
+.venv\Scripts\python.exe -m pip install torch-geometric
+
+# Verifikasi CUDA
+.venv\Scripts\python.exe -c "import torch; print('CUDA available:', torch.cuda.is_available())"
+
+# Jika tidak ada GPU atau CUDA error:
+# Install CPU version (fallback)
 .venv\Scripts\python.exe -m pip uninstall torch torchvision torchaudio -y
 .venv\Scripts\python.exe -m pip install torch --index-url https://download.pytorch.org/whl/cpu
 
 # Reinstall dependencies yang terdampak
 .venv\Scripts\python.exe -m pip install pandas scikit-learn matplotlib seaborn pillow kiwisolver xxhash torch-geometric pyarrow
 ```
+
+**Kompatibilitas GPU:**
+- NVIDIA GeForce RTX 3050 ✅ (CUDA 12.4)
+- NVIDIA GeForce RTX 3060+ ✅ (CUDA 12.4)
+- NVIDIA GeForce RTX 40-series ✅ (CUDA 12.4)
+- GPU tanpa CUDA support → gunakan CPU version
 
 ### Error Dependency Conflicts (Python 3.13)
 ```powershell

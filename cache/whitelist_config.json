@@ -3,7 +3,7 @@
     "PROV001": {
       "max_daily_claims": 50,
       "reason": "High-volume tertiary hospital",
-      "added_at": "2026-10-23 23:15:47.021847",
+      "added_at": "2026-10-24 05:24:19.375727",
       "valid_until": null
     }
   },
@@ -15,6 +15,11 @@
           "diagnosis_prefix": "M54",
           "max_gap_days": 14,
           "reason": "Chronic pain management"
+        },
+        {
+          "diagnosis_prefix": "Z00",
+          "max_gap_days": 14,
+          "reason": "Patient history exception"
         },
         {
           "diagnosis_prefix": "Z00",

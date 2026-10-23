@@ -1,4 +1,6 @@
 # Verified / Python 3.13 compatible stack for ASTINA
+# GPU: NVIDIA GeForce RTX 3050 with CUDA 12.4 support
+# PyTorch: 2.6.0+cu124 (CUDA 12.4) for GPU acceleration
 
 streamlit==1.61.1
 pytest>=8.0
