@@ -517,6 +517,8 @@ def show_settings_page():
                 st.session_state['settings_chronic_enabled'] = True
 
             def update_chronic_enabled():
+                st.session_state['settings_chronic_enabled'] = st.session_state['settings_chronic_enabled_widget']
+
             chronic_enabled = st.toggle(
                 "Aktifkan Chronic Condition Whitelist",
                 value=st.session_state.get('settings_chronic_enabled', True),
