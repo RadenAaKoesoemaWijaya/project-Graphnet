@@ -9,10 +9,9 @@ maxUploadSize = 3072
 maxMessageSize = 3072
 
 # ⭐ FIX: Prevent WebSocket timeout when browser tab is inactive/background
-# Default: 30s ping / 30s timeout (too aggressive for Windows background throttling)
-# Increased to 60s ping / 120s timeout to handle browser throttling
+# Default: 30s ping (too aggressive for Windows background throttling)
+# Increased to 60s ping to handle browser throttling
 websocketPingInterval = 60
-websocketPingTimeout = 120
 
 # ── Connection & Memory Health ─────────────────────────────────────────────
 # Increase WebSocket ping interval/timeout to reduce spurious disconnects

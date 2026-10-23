@@ -152,8 +152,7 @@ def main():
             "--server.maxUploadSize=3072",
             "--server.maxMessageSize=3072",
             "--server.fileWatcherType=none",
-            "--server.websocketPingInterval=60",
-            "--server.websocketPingTimeout=120"
+            "--server.websocketPingInterval=60"
         ]
         subprocess.run(cmd, check=True, env=runtime_env)
     except KeyboardInterrupt:
