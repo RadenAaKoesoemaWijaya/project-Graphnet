@@ -767,12 +767,13 @@ def show_detection_page():
             st.metric("Ambang Batas", f"{threshold:.2f}")
 
         # Tabbed Layout
-        tab_summary, tab_rules, tab_table, tab_copilot, tab_drift = st.tabs([
+        tab_summary, tab_rules, tab_table, tab_copilot, tab_drift, tab_advanced = st.tabs([
             "📊 Ringkasan & Visualisasi",
             "🚨 Business Risk & Rules",
             "📋 Fraud Review Table & Export",
             "🤖 AI Investigator Copilot & BAP",
-            "📈 Concept Drift & Retraining"
+            "📈 Concept Drift & Retraining",
+            "⚙️ Advanced Detection Settings (Phase 1 & 2)"
         ])
 
         # ── TAB 1: Visualizations ──
@@ -863,11 +864,11 @@ def show_detection_page():
                     display_df[col] = display_df[col].fillna(0).astype(int)
 
             if 'final_risk_flag' not in display_df.columns:
-                display_df['final_risk_flag'] = (display_df.get('anomaly_prediction', 0).fillna(0).astype(int) > 0).astype(int)
+                display_df['final_risk_flag'] = display_df.get('final_business_risk_flag', display_df.get('anomaly_prediction', 0).fillna(0).astype(int))
             if 'business_risk_score' not in display_df.columns:
                 display_df['business_risk_score'] = display_df.get('anomaly_probability', 0.0).astype(float)
             if 'final_risk_score' not in display_df.columns:
-                display_df['final_risk_score'] = display_df['business_risk_score']
+                display_df['final_risk_score'] = display_df.get('composite_risk_score', display_df['business_risk_score'])
             if 'risk_category' not in display_df.columns:
                 display_df['risk_category'] = display_df.apply(_derive_risk_category, axis=1)
             if 'severity' not in display_df.columns:
@@ -914,7 +915,10 @@ def show_detection_page():
             # Table display
             display_columns = [
                 'claim_id', 'patient_id', 'provider_id', 'service_code', 'amount', 'billed_amount',
-                'anomaly_probability', 'final_risk_score', 'severity', 'risk_category', 'final_risk_flag'
+                'anomaly_probability', 'final_risk_score', 'composite_risk_score',  # Phase 2: Composite score with context
+                'context_suppressed',  # Phase 2: Flag if original was suppressed
+                'final_business_risk_flag',  # Phase 2: Final flag after context suppression
+                'severity', 'risk_category'
             ]
             for col in ['repeat_billing_flag', 'phantom_service_flag', 'duplicate_payment_flag', 'upcoding_unbundling_flag', 'inflated_bill_cloning_flag', 'prolonged_stay_readmission_flag', 'medication_device_fraud_flag']:
                 if col in display_df.columns:
@@ -1483,3 +1487,190 @@ def show_detection_page():
                     except Exception as drift_err:
                         st.error(f"Gagal mendeteksi concept drift: {str(drift_err)}")
                         logger.error(f"Concept drift error: {drift_err}", exc_info=True)
+
+        # ── TAB 6: Advanced Detection Settings (Phase 1 & 2) ──
+        with tab_advanced:
+            st.subheader("⚙️ Advanced Detection Settings - Phase 1 & 2")
+            st.caption("Konfigurasi fitur canggih untuk reduksi false positive dengan adaptive thresholds, context-aware scoring, dan whitelist management.")
+
+            # Phase 2 Features Status
+            with st.expander("📊 Status Fitur Phase 1 & 2", expanded=True):
+                try:
+                    from adaptive_threshold_engine import AdaptiveThresholdEngine
+                    from context_aware_risk_scorer import ContextAwareRiskScorer
+                    from historical_baseline_system import HistoricalBaselineSystem
+                    from whitelist_manager import WhitelistManager
+
+                    st.success("✅ Semua modul Phase 1 & 2 tersedia dan aktif")
+                except ImportError as e:
+                    st.warning(f"⚠️ Beberapa modul Phase 2 tidak tersedia: {e}")
+
+            # Context-Aware Scoring Statistics
+            with st.expander("🧠 Context-Aware Scoring Statistics", expanded=True):
+                try:
+                    from context_aware_risk_scorer import ContextAwareRiskScorer
+                    scorer = ContextAwareRiskScorer()
+
+                    if 'composite_risk_score' in df_result.columns:
+                        avg_composite = df_result['composite_risk_score'].mean()
+                        suppressed_count = df_result.get('context_suppressed', pd.Series([0] * len(df_result))).sum()
+                        total_flags = df_result.get('final_business_risk_flag', pd.Series([0] * len(df_result))).sum()
+
+                        c1, c2, c3, c4 = st.columns(4)
+                        with c1:
+                            st.metric("Avg Composite Score", f"{avg_composite:.3f}")
+                        with c2:
+                            st.metric("Total Flags", f"{int(total_flags):,}")
+                        with c3:
+                            st.metric("Suppressed Flags", f"{int(suppressed_count):,}")
+                        with c4:
+                            suppression_rate = (suppressed_count / total_flags * 100) if total_flags > 0 else 0
+                            st.metric("Suppression Rate", f"{suppression_rate:.1f}%")
+
+                        if suppressed_count > 0:
+                            st.info(f"🎯 {int(suppressed_count)} flags disuppress oleh context-aware scoring (patient history, provider reputation, seasonal adjustment)")
+                    else:
+                        st.info("ℹ️ Composite risk score belum tersedia. Jalankan deteksi dengan Phase 2 aktif.")
+                except Exception as e:
+                    st.warning(f"Gagal menampilkan context statistics: {e}")
+
+            # Whitelist Management
+            with st.expander("📋 Whitelist Management (Phase 1)", expanded=True):
+                try:
+                    from whitelist_manager import WhitelistManager
+                    whitelist_mgr = WhitelistManager()
+
+                    stats = whitelist_mgr.get_whitelist_statistics()
+
+                    w1, w2, w3 = st.columns(3)
+                    with w1:
+                        st.metric("Chronic Conditions", f"{stats.get('chronic_conditions_count', 0)}")
+                    with w2:
+                        st.metric("Provider Exceptions", f"{stats.get('provider_exceptions_count', 0)}")
+                    with w3:
+                        st.metric("Service Combinations", f"{stats.get('service_combinations_count', 0)}")
+
+                    st.markdown("#### Kondisi Kronis Aktif (Auto-Whitelist)")
+                    chronic_conditions = {
+                        "E10/E11": "Type 2 Diabetes (30 days)",
+                        "I10/I11": "Hypertension (30 days)",
+                        "J45/J46": "Asthma/COPD (30 days)",
+                        "M53/M54": "Chronic Pain (14 days)",
+                        "N18": "Chronic Kidney Disease (7 days)"
+                    }
+
+                    for code, desc in chronic_conditions.items():
+                        st.markdown(f"- **{code}**: {desc}")
+
+                    st.markdown("#### Tambah Provider Exception")
+                    col_w1, col_w2, col_w3 = st.columns(3)
+                    with col_w1:
+                        provider_id = st.text_input("Provider ID", key="whitelist_provider_id")
+                    with col_w2:
+                        max_daily = st.number_input("Max Daily Claims", min_value=1, value=50, key="whitelist_max_daily")
+                    with col_w3:
+                        reason = st.text_input("Alasan", key="whitelist_reason")
+
+                    if st.button("➕ Tambah Provider Exception", key="btn_add_provider_exception"):
+                        if provider_id and reason:
+                            whitelist_mgr.add_provider_exception(provider_id, max_daily, reason)
+                            st.success(f"✅ Provider {provider_id} ditambahkan ke whitelist")
+                            st.rerun()
+                        else:
+                            st.warning("⚠️ Provider ID dan Alasan harus diisi")
+
+                except Exception as e:
+                    st.warning(f"Gagal memuat whitelist manager: {e}")
+
+            # Historical Baseline System
+            with st.expander("📈 Historical Baseline System (Phase 2)", expanded=True):
+                try:
+                    from historical_baseline_system import HistoricalBaselineSystem
+                    baseline_system = HistoricalBaselineSystem()
+
+                    summary = baseline_system.get_baseline_summary()
+
+                    b1, b2, b3 = st.columns(3)
+                    with b1:
+                        st.metric("Last Updated", summary.get("last_updated", "Never"))
+                    with b2:
+                        st.metric("Record Count", f"{summary.get('record_count', 0):,}")
+                    with b3:
+                        st.metric("Provider Count", summary.get("provider_count", 0))
+
+                    if st.button("🔄 Update Baselines Sekarang", key="btn_update_baselines"):
+                        with st.spinner("Updating historical baselines..."):
+                            baseline_system.update_baseline(df_result)
+                            st.success("✅ Baselines updated successfully")
+                            st.rerun()
+
+                    # Concept Drift Detection
+                    st.markdown("#### Concept Drift Detection")
+                    if st.button("🔍 Deteksi Concept Drift", key="btn_concept_drift_advanced"):
+                        drift_results = baseline_system.detect_concept_drift(df_result, threshold=0.2)
+
+                        if drift_results:
+                            drifted = [k for k, v in drift_results.items() if v]
+                            if drifted:
+                                st.warning(f"⚠️ Concept drift detected in: {', '.join(drifted)}")
+                            else:
+                                st.success("✅ No concept drift detected")
+                        else:
+                            st.info("ℹ️ Insufficient data for concept drift detection")
+
+                except Exception as e:
+                    st.warning(f"Gagal memuat historical baseline system: {e}")
+
+            # Adaptive Threshold Configuration
+            with st.expander("🎯 Adaptive Threshold Configuration (Phase 2)", expanded=True):
+                try:
+                    from adaptive_threshold_engine import AdaptiveThresholdEngine
+                    engine = AdaptiveThresholdEngine()
+
+                    st.markdown("#### Threshold Method Selection")
+                    threshold_method = st.selectbox(
+                        "Pilih Method:",
+                        ["iqr", "zscore", "percentile", "robust_mad"],
+                        index=0,
+                        key="adaptive_threshold_method",
+                        help="IQR: Interquartile Range (robust), Z-score: Standard statistical, Percentile: 95th/99th percentile, MAD: Median Absolute Deviation (most robust)"
+                    )
+
+                    st.markdown("#### Mode Selection")
+                    threshold_mode = st.selectbox(
+                        "Pilih Mode:",
+                        ["Standard", "Conservative (Minimize False Positives)", "Aggressive (Maximize Detection)"],
+                        index=0,
+                        key="adaptive_threshold_mode"
+                    )
+
+                    if st.button("🧪 Test Threshold on Current Data", key="btn_test_threshold"):
+                        if 'amount' in df_result.columns:
+                            if threshold_mode == "Conservative":
+                                result = engine.get_conservative_threshold(df_result, 'amount')
+                            elif threshold_mode == "Aggressive":
+                                result = engine.get_aggressive_threshold(df_result, 'amount')
+                            else:
+                                result = engine.calculate_dynamic_threshold(df_result, 'amount', method=threshold_method)
+
+                            st.json(result)
+                        else:
+                            st.warning("⚠️ Column 'amount' not found in dataset")
+
+                except Exception as e:
+                    st.warning(f"Gagal memuat adaptive threshold engine: {e}")
+
+            # Phase 2 Toggle
+            st.markdown("---")
+            st.markdown("#### Phase 2 Feature Toggle")
+            phase2_enabled = st.toggle(
+                "Aktifkan Phase 2 Features (Adaptive Thresholds, Context-Aware Scoring, Historical Learning)",
+                value=True,
+                key="phase2_toggle",
+                help="Nonaktifkan untuk fallback ke Phase 1 saja (Robust Outlier + Whitelist)"
+            )
+
+            if not phase2_enabled:
+                st.warning("⚠️ Phase 2 dinonaktifkan. Sistem akan menggunakan Phase 1 features saja.")
+            else:
+                st.success("✅ Phase 2 aktif. Sistem menggunakan full advanced detection capabilities.")

@@ -38,24 +38,26 @@ Aplikasi ini dilengkapi antarmuka interaktif berbasis **Streamlit**, mendukung i
 - **Prompt Injection Guardrail**: Proteksi terhadap jailbreak dan prompt injection
 
 ### 📊 Investigation Workspace
-- **5-Tab Detection Interface**: Ringkasan & Visualisasi, Business Risk & Rules, Fraud Review Table, AI Copilot & BAP, Concept Drift & Retraining
+- **6-Tab Detection Interface**: Ringkasan & Visualisasi, Business Risk & Rules, Fraud Review Table, AI Copilot & BAP, Concept Drift & Retraining, Advanced Detection Settings (Phase 1 & 2)
 - **Explainable AI**: SHAP & LIME untuk transparansi model
 - **Real-Time Telemetry**: Monitoring CPU, RAM, GPU/VRAM, dan latensi inferensi
 - **Multi-Format Export**: CSV, Excel, JSON untuk audit trail
+- **Advanced UI Controls**: Full visibility dan kontrol untuk Phase 1 & 2 features (adaptive thresholds, context-aware scoring, whitelist management, historical baselines)
 
 ### ⚙️ Production Ready
 - **Multi-Environment**: Localhost, Docker Desktop, Google Cloud Run
 - **CI/CD Pipeline**: GitHub Actions otomatis
-- **Automated Testing**: 206+ unit & integration tests (100% pass rate)
+- **Automated Testing**: 217+ unit & integration tests (100% pass rate)
 - **Score 93%**: Audit kesiapan produksi terverifikasi
+- **Full UI/UX Integration**: Complete visibility dan kontrol untuk Phase 1 & 2 features
 
 ### 🎯 False Alarm Reduction (Phase 1 & 2)
 - **Robust Outlier Detection**: MAD, IQR, Modified Z-Score untuk statistik robust
-- **Adaptive Thresholds**: Threshold dinamis berdasarkan historical patterns dan provider-specific
-- **Context-Aware Scoring**: Composite risk scoring dengan patient history, provider reputation, seasonal adjustment
-- **Whitelist System**: 10 kondisi kronis (diabetes, hypertension, asthma, dll) dengan frekuensi wajar
-- **Historical Learning**: Continuous learning dari data dengan concept drift detection
-- **Intelligent Flag Suppression**: Suppress flags berdasarkan context intelligence
+- **Adaptive Thresholds**: Threshold dinamis berdasarkan historical patterns dan provider-specific dengan UI configuration
+- **Context-Aware Scoring**: Composite risk scoring dengan patient history, provider reputation, seasonal adjustment dengan real-time statistics
+- **Whitelist System**: 10 kondisi kronis (diabetes, hypertension, asthma, dll) dengan frekuensi wajar dan UI management
+- **Historical Learning**: Continuous learning dari data dengan concept drift detection dan UI monitoring
+- **Intelligent Flag Suppression**: Suppress flags berdasarkan context intelligence dengan visibility UI
 
 ---
 
@@ -102,16 +104,17 @@ project-Graphnet/
 │       ├── data_collection.py       # Upload & preprocessing
 │       ├── training.py              # Pelatihan model
 │       ├── evaluation.py            # Evaluasi performa
-│       ├── detection.py             # Deteksi fraud
+│       ├── detection.py             # Deteksi fraud (6 tabs dengan Advanced Detection Settings)
 │       ├── status.py                # Status sistem
-│       └── settings.py              # Pengaturan
+│       └── settings.py              # Pengaturan (5 tabs dengan Advanced Detection)
 ├── tests/                           # Unit & integration tests
 │   ├── test_robust_outlier_detection.py
 │   ├── test_whitelist_manager.py
 │   ├── test_repeat_billing_improved.py
 │   ├── test_adaptive_threshold_engine.py
 │   ├── test_context_aware_risk_scorer.py
-│   └── test_historical_baseline_system.py
+│   ├── test_historical_baseline_system.py
+│   └── test_ui_integration.py      # UI integration tests
 ├── scripts/                         # Production automation scripts
 ├── docs/                            # Dokumentasi & dataset sampel
 │   └── sample_claims.csv             # Dataset sampel 50 baris
@@ -334,9 +337,23 @@ Kombinasi probabilitas ML dan skor aturan bisnis dengan bobot dinamis (Circuit B
 ### 6. Investigation Workspace
 - **Tab 1**: Ringkasan & Visualisasi
 - **Tab 2**: Business Risk & Rules
-- **Tab 3**: Fraud Review Table & Export
+- **Tab 3**: Fraud Review Table & Export (dengan Phase 2 columns: composite_risk_score, context_suppressed, final_business_risk_flag)
 - **Tab 4**: AI Copilot & BAP
 - **Tab 5**: Concept Drift & Retraining
+- **Tab 6**: Advanced Detection Settings (Phase 1 & 2) - UI untuk whitelist management, adaptive thresholds, context-aware statistics, historical baselines
+
+### 7. UI/UX Advanced Features (Phase 1 & 2)
+- **Detection Page - Tab 6**: Advanced Detection Settings
+  - Context-Aware Scoring Statistics (avg composite score, suppressed flags, suppression rate)
+  - Whitelist Management (chronic conditions, provider exceptions, add exception form)
+  - Historical Baseline System (statistics, update button, concept drift detection)
+  - Adaptive Threshold Configuration (method selection, mode selection, test button)
+  - Phase 2 Feature Toggle (enable/disable)
+- **Settings Page - Tab 4**: Advanced Detection
+  - Global threshold method configuration
+  - Global context-aware scoring configuration
+  - Global whitelist configuration
+  - Phase 2 global enable/disable
 
 ---
 
@@ -426,7 +443,7 @@ python verify_audit_trail.py
 python system_status.py
 ```
 
-**Hasil**: 206+ tests lulus (100% pass rate)
+**Hasil**: 217+ tests lulus (100% pass rate)
 
 ---
 
@@ -467,6 +484,36 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 
 ---
 
+## 🎨 UI/UX Integration (Phase 1 & 2)
+
+### Detection Page Enhancements
+- **Tab 6: Advanced Detection Settings** - New tab untuk Phase 1 & 2 features
+  - Context-Aware Scoring Statistics: Real-time metrics (avg composite score, suppressed flags, suppression rate)
+  - Whitelist Management: View chronic conditions, add provider exceptions, manage whitelist
+  - Historical Baseline System: View baseline statistics, update baselines, detect concept drift
+  - Adaptive Threshold Configuration: Select threshold method (IQR, Z-score, Percentile, MAD), choose mode (Standard/Conservative/Aggressive)
+  - Phase 2 Feature Toggle: Enable/disable Phase 2 features dynamically
+
+### Settings Page Enhancements
+- **Tab 4: Advanced Detection** - New tab untuk global Phase 2 configuration
+  - Global threshold method selection
+  - Global context-aware scoring configuration
+  - Global whitelist configuration
+  - Phase 2 global enable/disable
+
+### Detection Table Enhancements
+- **New Columns Displayed:**
+  - `composite_risk_score` - Composite score dengan context factors (0-1)
+  - `context_suppressed` - Flag jika original flag disuppress oleh context-aware scoring
+  - `final_business_risk_flag` - Final flag setelah context suppression
+
+### User Experience Impact
+- **Before UI Integration:** Backend features working but no visibility or control
+- **After UI Integration:** Full visibility dan kontrol untuk semua Phase 1 & 2 features
+- **Zero Performance Impact:** Statistics calculated on-demand, no impact on main detection flow
+
+---
+
 ## 📊 Performance & Metrics
 
 ### False Positive Reduction
@@ -498,8 +545,9 @@ Lisensi MIT / Enterprise Internal Security Policy. Mendukung standar privasi dat
 
 - **Hybrid AI Architecture**: Menggabungkan strengths dari supervised, unsupervised, dan rule-based methods
 - **False Alarm Reduction**: ~80% reduction dengan adaptive thresholds dan context-aware scoring
+- **Full UI/UX Integration**: Complete visibility dan kontrol untuk Phase 1 & 2 features dengan 6-tab detection interface dan 5-tab settings interface
 - **Enterprise Security**: Cryptographic audit trail dan PII protection sesuai regulasi
-- **Production Ready**: 206+ tests dengan 100% pass rate, CI/CD pipeline, multi-environment deployment
+- **Production Ready**: 217+ tests dengan 100% pass rate, CI/CD pipeline, multi-environment deployment, end-to-end pipeline tested
 
 ---
 

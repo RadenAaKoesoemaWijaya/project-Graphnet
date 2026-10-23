@@ -148,7 +148,7 @@ def derive_risk_category(row: pd.Series) -> str:
     return 'Normal / Low Risk'
 
 
-def enrich_claims_with_business_risk_features(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+def enrich_claims_with_business_risk_features(df: pd.DataFrame, enable_phase2: bool = True) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     clean = normalize_claims_dataframe(df)
     if clean.empty:
         return clean, {
@@ -164,11 +164,11 @@ def enrich_claims_with_business_risk_features(df: pd.DataFrame) -> Tuple[pd.Data
             "high_risk_claims": 0,
         }
 
-    # Initialize Phase 2 modules if available
+    # Initialize Phase 2 modules if available and enabled
     whitelist_mgr = WhitelistManager() if _has_whitelist else None
-    adaptive_engine = AdaptiveThresholdEngine() if _has_adaptive_threshold else None
-    context_scorer = ContextAwareRiskScorer() if _has_context_scorer else None
-    historical_system = HistoricalBaselineSystem() if _has_historical_baseline else None
+    adaptive_engine = AdaptiveThresholdEngine() if (_has_adaptive_threshold and enable_phase2) else None
+    context_scorer = ContextAwareRiskScorer() if (_has_context_scorer and enable_phase2) else None
+    historical_system = HistoricalBaselineSystem() if (_has_historical_baseline and enable_phase2) else None
 
     # Update historical baseline if available
     if historical_system:

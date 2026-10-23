@@ -20,10 +20,11 @@ def show_settings_page():
         st.warning("⚠️ Anda login sebagai **Viewer**. Beberapa pengaturan mungkin tidak dapat dimodifikasi.")
     
     # Settings tabs
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "🔌 LLM & Copilot", 
-        "🗄️ Model Registry", 
-        "📊 System Configuration", 
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "🔌 LLM & Copilot",
+        "🗄️ Model Registry",
+        "📊 System Configuration",
+        "⚙️ Advanced Detection (Phase 1 & 2)",
         "🔐 Security & Privacy"
     ])
     
@@ -406,12 +407,151 @@ def show_settings_page():
                 st.success(f"⚡ **Parquet**: Hingga **{MAX_PARQUET_FILE_SIZE // (1024*1024*1024)} GB** ({MAX_PARQUET_FILE_SIZE // (1024*1024)} MB, columnar streaming Polars)")
             with up_c3:
                 st.warning(f"📊 **Excel (.xlsx, .xls)**: Dibatasi **{MAX_EXCEL_FILE_SIZE // (1024*1024)} MB** (streaming row iterator / RAM-safe)")
-        
+
         except Exception as e:
             st.error(f"❌ Error membaca konfigurasi memori: {str(e)}")
-    
-    # TAB 4: Security & Privacy
+
+    # TAB 4: Advanced Detection Settings (Phase 1 & 2)
     with tab4:
+        st.markdown("### ⚙️ Advanced Detection Settings - Phase 1 & 2")
+        st.info("Konfigurasi fitur canggih untuk reduksi false positive dengan adaptive thresholds, context-aware scoring, dan whitelist management.")
+
+        # Phase 2 Features Status
+        with st.expander("📊 Status Fitur Phase 1 & 2", expanded=True):
+            try:
+                from adaptive_threshold_engine import AdaptiveThresholdEngine
+                from context_aware_risk_scorer import ContextAwareRiskScorer
+                from historical_baseline_system import HistoricalBaselineSystem
+                from whitelist_manager import WhitelistManager
+
+                st.success("✅ Semua modul Phase 1 & 2 tersedia dan aktif")
+            except ImportError as e:
+                st.warning(f"⚠️ Beberapa modul Phase 2 tidak tersedia: {e}")
+
+        # Adaptive Threshold Configuration
+        with st.expander("🎯 Adaptive Threshold Configuration", expanded=True):
+            st.markdown("#### Threshold Method Selection")
+
+            if 'settings_threshold_method' not in st.session_state:
+                st.session_state['settings_threshold_method'] = "iqr"
+
+            threshold_method = st.selectbox(
+                "Pilih Method Default:",
+                ["iqr", "zscore", "percentile", "robust_mad"],
+                index=["iqr", "zscore", "percentile", "robust_mad"].index(st.session_state.get('settings_threshold_method', 'iqr')),
+                key="settings_threshold_method",
+                help="IQR: Interquartile Range (robust), Z-score: Standard statistical, Percentile: 95th/99th percentile, MAD: Median Absolute Deviation (most robust)"
+            )
+            st.session_state['settings_threshold_method'] = threshold_method
+
+            st.markdown("#### Mode Selection")
+
+            if 'settings_threshold_mode' not in st.session_state:
+                st.session_state['settings_threshold_mode'] = "Standard"
+
+            threshold_mode = st.selectbox(
+                "Pilih Mode Default:",
+                ["Standard", "Conservative (Minimize False Positives)", "Aggressive (Maximize Detection)"],
+                index=["Standard", "Conservative (Minimize False Positives)", "Aggressive (Maximize Detection)"].index(st.session_state.get('settings_threshold_mode', 'Standard')),
+                key="settings_threshold_mode"
+            )
+            st.session_state['settings_threshold_mode'] = threshold_mode
+
+            st.markdown("#### Historical Window")
+
+            if 'settings_historical_window' not in st.session_state:
+                st.session_state['settings_historical_window'] = 90
+
+            historical_window = st.number_input(
+                "Historical Window (days):",
+                min_value=7,
+                max_value=365,
+                value=st.session_state.get('settings_historical_window', 90),
+                key="settings_historical_window"
+            )
+            st.session_state['settings_historical_window'] = historical_window
+
+        # Context-Aware Scoring Configuration
+        with st.expander("🧠 Context-Aware Scoring Configuration", expanded=True):
+            st.markdown("#### Context Factors")
+
+            if 'settings_context_aware_enabled' not in st.session_state:
+                st.session_state['settings_context_aware_enabled'] = True
+
+            context_aware_enabled = st.toggle(
+                "Aktifkan Context-Aware Scoring",
+                value=st.session_state.get('settings_context_aware_enabled', True),
+                key="settings_context_aware_enabled",
+                help="Jika aktif, sistem akan mempertimbangkan patient history, provider reputation, dan seasonal adjustment"
+            )
+            st.session_state['settings_context_aware_enabled'] = context_aware_enabled
+
+            st.markdown("#### Flag Suppression Threshold")
+
+            if 'settings_suppression_threshold' not in st.session_state:
+                st.session_state['settings_suppression_threshold'] = 0.25
+
+            suppression_threshold = st.slider(
+                "Composite Score Threshold untuk Suppression:",
+                min_value=0.0,
+                max_value=0.5,
+                value=st.session_state.get('settings_suppression_threshold', 0.25),
+                step=0.05,
+                key="settings_suppression_threshold",
+                help="Flags dengan composite score di bawah threshold ini akan disuppress"
+            )
+            st.session_state['settings_suppression_threshold'] = suppression_threshold
+
+        # Whitelist Configuration
+        with st.expander("📋 Whitelist Configuration", expanded=True):
+            st.markdown("#### Chronic Conditions")
+
+            if 'settings_chronic_enabled' not in st.session_state:
+                st.session_state['settings_chronic_enabled'] = True
+
+            chronic_enabled = st.toggle(
+                "Aktifkan Chronic Condition Whitelist",
+                value=st.session_state.get('settings_chronic_enabled', True),
+                key="settings_chronic_enabled",
+                help="Auto-whitelist untuk kondisi kronis (diabetes, hypertension, asthma, dll)"
+            )
+            st.session_state['settings_chronic_enabled'] = chronic_enabled
+
+            st.markdown("#### Provider Exception")
+
+            if 'settings_provider_exception_enabled' not in st.session_state:
+                st.session_state['settings_provider_exception_enabled'] = True
+
+            provider_exception_enabled = st.toggle(
+                "Aktifkan Provider Exception System",
+                value=st.session_state.get('settings_provider_exception_enabled', True),
+                key="settings_provider_exception_enabled",
+                help="Allow manual provider volume exceptions"
+            )
+            st.session_state['settings_provider_exception_enabled'] = provider_exception_enabled
+
+        # Phase 2 Toggle
+        st.markdown("---")
+        st.markdown("#### Phase 2 Feature Toggle")
+
+        if 'settings_phase2_enabled' not in st.session_state:
+            st.session_state['settings_phase2_enabled'] = True
+
+        phase2_enabled = st.toggle(
+            "Aktifkan Phase 2 Features (Adaptive Thresholds, Context-Aware Scoring, Historical Learning)",
+            value=st.session_state.get('settings_phase2_enabled', True),
+            key="settings_phase2_toggle",
+            help="Nonaktifkan untuk fallback ke Phase 1 saja (Robust Outlier + Whitelist)"
+        )
+        st.session_state['settings_phase2_enabled'] = phase2_enabled
+
+        if not phase2_enabled:
+            st.warning("⚠️ Phase 2 dinonaktifkan. Sistem akan menggunakan Phase 1 features saja.")
+        else:
+            st.success("✅ Phase 2 aktif. Sistem menggunakan full advanced detection capabilities.")
+
+    # TAB 5: Security & Privacy
+    with tab5:
         st.markdown("### 🔐 Security & Privacy")
         st.info("Pengaturan keamanan dan privasi data.")
         
