@@ -1,5 +1,5 @@
 # Verified / Python 3.13 compatible stack for ASTINA
-# This set matches the working environment used in this project.
+
 streamlit==1.61.1
 pytest>=8.0
 pandas==2.2.3
@@ -8,7 +8,6 @@ scikit-learn==1.6.1
 scipy==1.14.1
 joblib==1.5.3
 
-# Pydantic for data validation (Phase 1)
 pydantic==2.9.2
 pydantic-settings==2.6.1
 
@@ -40,8 +39,4 @@ psutil>=7.0.0
 shap>=0.48.0
 lime>=0.2.0.0
 reportlab>=4.2.0
-# alibi-detect is OPTIONAL — provides advanced concept drift detection.
-# Install separately with: pip install "alibi-detect[torch]>=0.12.0"
-# NOT included here: the default install pulls TensorFlow (~2GB) which
-# bloats the Docker image and significantly increases Cloud Run build time.
-# alibi-detect[torch]>=0.12.0
+alibi-detect[torch]>=0.12.0
