@@ -196,6 +196,7 @@ python run.py
 
 ## 📋 Format Data
 
+<<<<<<< HEAD
 ### Dataset Sampel
 
 Folder `docs/` berisi dataset sampel yang siap digunakan untuk testing:
@@ -229,6 +230,29 @@ File data BPJS asli (`Klaim FKRTL 2024 Sheet 1.csv` dan `Sheet 2.csv`) juga ters
 
 ### Semantic Schema Harmonizer
 
+=======
+### Kolom Inti yang Diperlukan
+
+| Kolom | Tipe | Deskripsi | Modul |
+|-------|------|-----------|-------|
+| `claim_id` | String/Int | ID unik klaim | Audit Trail |
+| `patient_id` | String/Int | ID unik pasien | Repeat Billing |
+| `provider_id` | String/Int | Kode faskes/dokter | Provider Capacity |
+| `service_code` | String | Kode prosedur medis | Phantom Service |
+| `diagnosis_code` | String | Kode ICD-10 | GNN |
+| `billing_date` | Date | Tanggal penagihan | Repeat Billing |
+| `service_date` | Date | Tanggal tindakan | Length of Stay |
+| `billed_amount` | Float | Nominal tagihan | ML Ensemble |
+| `paid_amount` | Float | Nominal dibayar | Inflated Bill |
+| `allowed_amount` | Float | Nominal disetujui | Ratio calculations |
+| `claim_status` | String | Status klaim | Duplicate Payment |
+| `patient_age` | Integer | Usia pasien | Feature Engineering |
+| `length_of_stay` | Integer | Lama rawat (hari) | LOS & Readmission |
+| `quantity` | Integer | Kuantitas obat/alkes | Medication Fraud |
+
+### Semantic Schema Harmonizer
+
+>>>>>>> 97b04b2dccade1f950664c1b6114210ac8b7e494
 Sistem otomatis menyelaraskan sinonim kolom bahasa Indonesia:
 - `no_klaim` → `claim_id`
 - `no_peserta` → `patient_id`
