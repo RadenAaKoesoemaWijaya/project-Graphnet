@@ -537,11 +537,24 @@ python run.py
 
 ### Error PyTorch/CUDA
 ```powershell
-# CPU mode
-pip install torch --index-url https://download.pytorch.org/whl/cpu
+# Jika torch CUDA version menyebabkan error loading DLL
+# Uninstall dan install CPU version:
+.venv\Scripts\python.exe -m pip uninstall torch torchvision torchaudio -y
+.venv\Scripts\python.exe -m pip install torch --index-url https://download.pytorch.org/whl/cpu
 
-# GPU mode
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+# Reinstall dependencies yang terdampak
+.venv\Scripts\python.exe -m pip install pandas scikit-learn matplotlib seaborn pillow kiwisolver xxhash torch-geometric pyarrow
+```
+
+### Error Dependency Conflicts (Python 3.13)
+```powershell
+# Jika terjadi module import errors atau broken installations
+# Reinstall paket yang terdampak:
+.venv\Scripts\python.exe -m pip uninstall pandas scikit-learn matplotlib seaborn pillow kiwisolver xxhash pyarrow -y
+.venv\Scripts\python.exe -m pip install pandas==2.2.3 numpy==2.1.0 scikit-learn==1.6.1 scipy==1.14.1 matplotlib>=3.10.0 seaborn>=0.13.0 pillow kiwisolver xxhash pyarrow
+
+# Pastikan constraints untuk Streamlit:
+.venv\Scripts\python.exe -m pip install 'pillow<13,>=7.1.0' 'pyarrow<25,>=18.1.0'
 ```
 
 ### Docker Volume Mount Error
