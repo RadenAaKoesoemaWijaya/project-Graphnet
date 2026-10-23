@@ -147,15 +147,15 @@ class AuditTrail:
                 logger.debug(f"Cloud Logging write failed (non-fatal): {e}")
         
         # Also log to system logger
-        log_method = {
-            'DEBUG': logger.debug,
-            'INFO': logger.info,
-            'WARNING': logger.warning,
-            'ERROR': logger.error,
-            'CRITICAL': logger.critical
-        }.get(severity, logger.info)
-        
-        log_method(f"Audit: {event_type} - {action} on {resource} by {user_id}")
+        # log_method = {
+        #     'DEBUG': logger.debug,
+        #     'INFO': logger.info,
+        #     'WARNING': logger.warning,
+        #     'ERROR': logger.error,
+        #     'CRITICAL': logger.critical
+        # }.get(severity, logger.info)
+        #
+        # log_method(f"Audit: {event_type} - {action} on {resource} by {user_id}")
 
         # P1-2.3: Periodic GCS WORM sync — every 50 events or on critical events
         _WORM_SYNC_INTERVAL = 50
