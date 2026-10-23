@@ -442,7 +442,6 @@ def show_settings_page():
                 key="settings_threshold_method",
                 help="IQR: Interquartile Range (robust), Z-score: Standard statistical, Percentile: 95th/99th percentile, MAD: Median Absolute Deviation (most robust)"
             )
-            st.session_state['settings_threshold_method'] = threshold_method
 
             st.markdown("#### Mode Selection")
 
@@ -455,21 +454,23 @@ def show_settings_page():
                 index=["Standard", "Conservative (Minimize False Positives)", "Aggressive (Maximize Detection)"].index(st.session_state.get('settings_threshold_mode', 'Standard')),
                 key="settings_threshold_mode"
             )
-            st.session_state['settings_threshold_mode'] = threshold_mode
 
             st.markdown("#### Historical Window")
 
             if 'settings_historical_window' not in st.session_state:
                 st.session_state['settings_historical_window'] = 90
 
+            def update_historical_window():
+                st.session_state['settings_historical_window'] = st.session_state['settings_historical_window_widget']
+
             historical_window = st.number_input(
                 "Historical Window (days):",
                 min_value=7,
                 max_value=365,
                 value=st.session_state.get('settings_historical_window', 90),
-                key="settings_historical_window"
+                key="settings_historical_window_widget",
+                on_change=update_historical_window
             )
-            st.session_state['settings_historical_window'] = historical_window
 
         # Context-Aware Scoring Configuration
         with st.expander("🧠 Context-Aware Scoring Configuration", expanded=True):
@@ -478,18 +479,24 @@ def show_settings_page():
             if 'settings_context_aware_enabled' not in st.session_state:
                 st.session_state['settings_context_aware_enabled'] = True
 
+            def update_context_aware_enabled():
+                st.session_state['settings_context_aware_enabled'] = st.session_state['settings_context_aware_enabled_widget']
+
             context_aware_enabled = st.toggle(
                 "Aktifkan Context-Aware Scoring",
                 value=st.session_state.get('settings_context_aware_enabled', True),
-                key="settings_context_aware_enabled",
+                key="settings_context_aware_enabled_widget",
+                on_change=update_context_aware_enabled,
                 help="Jika aktif, sistem akan mempertimbangkan patient history, provider reputation, dan seasonal adjustment"
             )
-            st.session_state['settings_context_aware_enabled'] = context_aware_enabled
 
             st.markdown("#### Flag Suppression Threshold")
 
             if 'settings_suppression_threshold' not in st.session_state:
                 st.session_state['settings_suppression_threshold'] = 0.25
+
+            def update_suppression_threshold():
+                st.session_state['settings_suppression_threshold'] = st.session_state['settings_suppression_threshold_widget']
 
             suppression_threshold = st.slider(
                 "Composite Score Threshold untuk Suppression:",
@@ -497,10 +504,10 @@ def show_settings_page():
                 max_value=0.5,
                 value=st.session_state.get('settings_suppression_threshold', 0.25),
                 step=0.05,
-                key="settings_suppression_threshold",
+                key="settings_suppression_threshold_widget",
+                on_change=update_suppression_threshold,
                 help="Flags dengan composite score di bawah threshold ini akan disuppress"
             )
-            st.session_state['settings_suppression_threshold'] = suppression_threshold
 
         # Whitelist Configuration
         with st.expander("📋 Whitelist Configuration", expanded=True):
@@ -509,26 +516,30 @@ def show_settings_page():
             if 'settings_chronic_enabled' not in st.session_state:
                 st.session_state['settings_chronic_enabled'] = True
 
+            def update_chronic_enabled():
             chronic_enabled = st.toggle(
                 "Aktifkan Chronic Condition Whitelist",
                 value=st.session_state.get('settings_chronic_enabled', True),
-                key="settings_chronic_enabled",
+                key="settings_chronic_enabled_widget",
+                on_change=update_chronic_enabled,
                 help="Auto-whitelist untuk kondisi kronis (diabetes, hypertension, asthma, dll)"
             )
-            st.session_state['settings_chronic_enabled'] = chronic_enabled
 
             st.markdown("#### Provider Exception")
 
             if 'settings_provider_exception_enabled' not in st.session_state:
                 st.session_state['settings_provider_exception_enabled'] = True
 
+            def update_provider_exception_enabled():
+                st.session_state['settings_provider_exception_enabled'] = st.session_state['settings_provider_exception_enabled_widget']
+
             provider_exception_enabled = st.toggle(
                 "Aktifkan Provider Exception System",
                 value=st.session_state.get('settings_provider_exception_enabled', True),
-                key="settings_provider_exception_enabled",
+                key="settings_provider_exception_enabled_widget",
+                on_change=update_provider_exception_enabled,
                 help="Allow manual provider volume exceptions"
             )
-            st.session_state['settings_provider_exception_enabled'] = provider_exception_enabled
 
         # Phase 2 Toggle
         st.markdown("---")
@@ -537,13 +548,16 @@ def show_settings_page():
         if 'settings_phase2_enabled' not in st.session_state:
             st.session_state['settings_phase2_enabled'] = True
 
+        def update_phase2_enabled():
+            st.session_state['settings_phase2_enabled'] = st.session_state['settings_phase2_toggle_widget']
+
         phase2_enabled = st.toggle(
             "Aktifkan Phase 2 Features (Adaptive Thresholds, Context-Aware Scoring, Historical Learning)",
             value=st.session_state.get('settings_phase2_enabled', True),
-            key="settings_phase2_toggle",
+            key="settings_phase2_toggle_widget",
+            on_change=update_phase2_enabled,
             help="Nonaktifkan untuk fallback ke Phase 1 saja (Robust Outlier + Whitelist)"
         )
-        st.session_state['settings_phase2_enabled'] = phase2_enabled
 
         if not phase2_enabled:
             st.warning("⚠️ Phase 2 dinonaktifkan. Sistem akan menggunakan Phase 1 features saja.")
