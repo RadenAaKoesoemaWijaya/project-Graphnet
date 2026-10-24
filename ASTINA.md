@@ -1283,6 +1283,8 @@ ASTINA_MAX_EXCEL_MB=150
 # Memory thresholds
 ASTINA_MIN_AVAILABLE_RAM_MB=128
 ASTINA_CRITICAL_RAM_MB=64
+ASTINA_MEMORY_HEALTH_THRESHOLD=95  # Health check threshold (default 95%)
+ASTINA_DISK_HEALTH_THRESHOLD=90   # Disk health check threshold (default 90%)
 
 # LLM Configuration
 LLM_PROVIDER=gemini  # or openai, ollama, heuristic
@@ -1532,6 +1534,30 @@ Solutions:
   3. Adjust threshold:
      export ASTINA_MIN_AVAILABLE_RAM_MB=64
   4. Restart application after freeing RAM
+```
+
+#### Issue 1.5: Memory Usage UNHEALTHY in System Status
+```
+Symptom:
+  "❌ Memory Usage UNHEALTHY" in System Status page
+
+Cause:
+  - Memory health check threshold too aggressive (was 90%)
+  - Windows uses 70-80% RAM for file caching (normal behavior)
+  - Previous threshold didn't account for Windows memory management
+
+Solutions:
+  1. **Automatic Fix (Applied)**: Threshold increased to 95% by default
+  2. **Custom Threshold**: Set environment variable:
+     export ASTINA_MEMORY_HEALTH_THRESHOLD=95
+  3. **Check Available Memory**: Focus on available RAM, not usage percentage:
+     - In System Status page, check "Available" value in GB
+     - If > 2GB available, system is healthy even at 90% usage
+  4. **Optimize Memory Usage**:
+     - Close unnecessary applications
+     - Restart browser with multiple tabs
+     - Disable browser extensions
+  5. **Increase System RAM**: If consistently low available memory (< 1GB)
 ```
 
 #### Issue 2: Import Error for PyTorch

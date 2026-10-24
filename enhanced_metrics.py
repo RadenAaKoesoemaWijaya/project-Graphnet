@@ -307,23 +307,29 @@ class MetricsCollector:
         """Register default health checks"""
         import psutil
         import os
-        
+
+        # Get configurable thresholds from environment variables
+        memory_threshold = int(os.getenv('ASTINA_MEMORY_HEALTH_THRESHOLD', '95'))
+        disk_threshold = int(os.getenv('ASTINA_DISK_HEALTH_THRESHOLD', '90'))
+
         def check_memory_usage() -> bool:
             """Check if memory usage is acceptable"""
             try:
                 memory_percent = psutil.virtual_memory().percent
-                return memory_percent < 90  # Alert if > 90% memory usage
+                # Use 95% threshold by default (more realistic for Windows caching)
+                # Windows typically uses 70-80% for file caching, which is normal
+                return memory_percent < memory_threshold
             except:
                 return True  # Assume healthy if check fails
-        
+
         def check_disk_space() -> bool:
             """Check if disk space is acceptable"""
             try:
                 disk_usage = psutil.disk_usage(os.getcwd())
-                return disk_usage.percent < 90  # Alert if > 90% disk usage
+                return disk_usage.percent < disk_threshold
             except:
                 return True
-        
+
         self.health.register_check('memory_usage', check_memory_usage)
         self.health.register_check('disk_space', check_disk_space)
     
