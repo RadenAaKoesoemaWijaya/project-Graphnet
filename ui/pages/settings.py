@@ -133,49 +133,89 @@ def show_settings_page():
             if "Gemini" in provider_choice:
                 if 'settings_gemini_model' not in st.session_state:
                     st.session_state['settings_gemini_model'] = "gemini-1.5-flash"
-                
+
                 def update_gemini_model():
                     st.session_state['settings_gemini_model'] = st.session_state['settings_gemini_model_widget']
-                
+
+                # Updated list with current available Gemini models
+                gemini_models = [
+                    "gemini-1.5-flash",
+                    "gemini-1.5-flash-8b",
+                    "gemini-1.5-pro",
+                    "gemini-2.0-flash-exp",
+                    "gemini-2.5-pro-exp"
+                ]
+
+                # Ensure the saved model is in the list, otherwise use default
+                if st.session_state['settings_gemini_model'] not in gemini_models:
+                    st.session_state['settings_gemini_model'] = "gemini-1.5-flash"
+
                 model_choice = st.selectbox(
                     "Model Gemini:",
-                    ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash"],
-                    index=["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash"].index(
-                        st.session_state['settings_gemini_model']
-                    ),
+                    gemini_models,
+                    index=gemini_models.index(st.session_state['settings_gemini_model']),
                     key="settings_gemini_model_widget",
                     on_change=update_gemini_model,
-                    help="Pilih model Gemini. Flash lebih cepat, Pro lebih akurat."
+                    help="Pilih model Gemini. Flash lebih cepat dan hemat kuota, Pro lebih akurat. Model dengan -exp adalah experimental."
                 )
                 
             elif "OpenAI" in provider_choice:
                 if 'settings_openai_model' not in st.session_state:
                     st.session_state['settings_openai_model'] = "gpt-4o-mini"
-                
+
                 def update_openai_model():
                     st.session_state['settings_openai_model'] = st.session_state['settings_openai_model_widget']
-                
-                model_choice = st.text_input(
-                    "Model Name:",
-                    value=st.session_state['settings_openai_model'],
+
+                # Updated list with current available OpenAI models
+                openai_models = [
+                    "gpt-4o-mini",
+                    "gpt-4o",
+                    "gpt-4-turbo",
+                    "gpt-3.5-turbo"
+                ]
+
+                # Ensure the saved model is in the list, otherwise use default
+                if st.session_state['settings_openai_model'] not in openai_models:
+                    st.session_state['settings_openai_model'] = "gpt-4o-mini"
+
+                model_choice = st.selectbox(
+                    "Model OpenAI:",
+                    openai_models,
+                    index=openai_models.index(st.session_state['settings_openai_model']),
                     key="settings_openai_model_widget",
                     on_change=update_openai_model,
-                    help="Contoh: gpt-4o-mini, gpt-4o, gpt-3.5-turbo"
+                    help="Pilih model OpenAI. gpt-4o-mini lebih cepat dan hemat, gpt-4o lebih akurat."
                 )
                 
             elif "Ollama" in provider_choice:
                 if 'settings_ollama_model' not in st.session_state:
-                    st.session_state['settings_ollama_model'] = "llama3"
-                
+                    st.session_state['settings_ollama_model'] = "llama3.2"
+
                 def update_ollama_model():
                     st.session_state['settings_ollama_model'] = st.session_state['settings_ollama_model_widget']
-                
-                model_choice = st.text_input(
-                    "Ollama Model Name:",
-                    value=st.session_state['settings_ollama_model'],
+
+                # Updated list with popular Ollama models
+                ollama_models = [
+                    "llama3.2",
+                    "llama3.1",
+                    "llama3",
+                    "mistral",
+                    "codellama",
+                    "phi3",
+                    "gemma2"
+                ]
+
+                # Ensure the saved model is in the list, otherwise use default
+                if st.session_state['settings_ollama_model'] not in ollama_models:
+                    st.session_state['settings_ollama_model'] = "llama3.2"
+
+                model_choice = st.selectbox(
+                    "Model Ollama:",
+                    ollama_models,
+                    index=ollama_models.index(st.session_state['settings_ollama_model']),
                     key="settings_ollama_model_widget",
                     on_change=update_ollama_model,
-                    help="Model yang tersedia di Ollama lokal (contoh: llama3, mistral, codellama)"
+                    help="Pilih model Ollama yang tersedia. Pastikan model sudah di-download dengan 'ollama pull <model>'."
                 )
         
         with col_adv2:
@@ -243,6 +283,56 @@ def show_settings_page():
                         else:
                             st.error(f"❌ {conn_result['message']}")
                             st.info("💡 Jika koneksi gagal, sistem akan otomatis menggunakan Heuristic Engine sebagai fallback.")
+
+                            # Provide specific troubleshooting tips based on provider
+                            if "Gemini" in provider_choice:
+                                with st.expander("🔧 Troubleshooting Gemini", expanded=False):
+                                    st.markdown("""
+                                    **Langkah-langkah troubleshooting:**
+                                    1. Pastikan API Key valid dan belum kadaluarsa
+                                    2. Cek quota di [Google AI Studio](https://aistudio.google.com/app/apikey)
+                                    3. Pastikan model yang dipilih tersedia:
+                                       - gemini-1.5-flash (recommended - cepat & hemat)
+                                       - gemini-1.5-pro (lebih akurat)
+                                       - gemini-2.0-flash-exp (experimental)
+                                    4. Cek koneksi internet Anda
+                                    5. Jika masih gagal, gunakan Heuristic Engine (offline)
+                                    """)
+                            elif "OpenAI" in provider_choice:
+                                with st.expander("🔧 Troubleshooting OpenAI", expanded=False):
+                                    st.markdown("""
+                                    **Langkah-langkah troubleshooting:**
+                                    1. Pastikan API Key valid dan belum kadaluarsa
+                                    2. Cek quota dan billing di [OpenAI Platform](https://platform.openai.com/account/usage)
+                                    3. Pastikan model yang dipilih tersedia:
+                                       - gpt-4o-mini (recommended - cepat & hemat)
+                                       - gpt-4o (lebih akurat)
+                                       - gpt-4-turbo
+                                       - gpt-3.5-turbo
+                                    4. Jika menggunakan custom endpoint, pastikan URL benar
+                                    5. Cek koneksi internet Anda
+                                    6. Jika masih gagal, gunakan Heuristic Engine (offline)
+                                    """)
+                            elif "Ollama" in provider_choice:
+                                with st.expander("🔧 Troubleshooting Ollama", expanded=False):
+                                    st.markdown("""
+                                    **Langkah-langkah troubleshooting:**
+                                    1. Pastikan Ollama sudah terinstall: [Download Ollama](https://ollama.com)
+                                    2. Pastikan `ollama serve` sudah berjalan:
+                                       ```bash
+                                       ollama serve
+                                       ```
+                                    3. Download model yang dipilih:
+                                       ```bash
+                                       ollama pull llama3.2
+                                       ```
+                                    4. Cek list model yang tersedia:
+                                       ```bash
+                                       ollama list
+                                       ```
+                                    5. Pastikan endpoint URL benar (default: http://localhost:11434/api/generate)
+                                    6. Jika masih gagal, gunakan Heuristic Engine (offline)
+                                    """)
                     except Exception as e:
                         st.error(f"❌ Error saat testing koneksi: {str(e)}")
             elif test_button and "Heuristic" in provider_choice:

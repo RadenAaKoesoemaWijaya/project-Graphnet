@@ -42,6 +42,8 @@ def show_training_page():
     edge_index = None
     node_features = None   # declared here so Python never treats it as unbound
     training_status_path = None
+    training_metadata = None  # Initialize training_metadata to avoid UnboundLocalError
+    label_column = None  # Initialize label_column to avoid UnboundLocalError
     st.title("Pelatihan Model Deteksi Anomali")
     st.info("Training mempelajari pola dataset yang sudah diproses. Pilih algoritma sesuai kebutuhan: model tabular untuk pola fitur dan GNN untuk hubungan antar klaim.")
 
@@ -1224,6 +1226,21 @@ def show_training_page():
                                     "gnn_epochs": gnn_epochs,
                                     "graph_method": graph_method
                                 }
+
+                                # Build training_metadata if not available (for heuristic mode without training)
+                                if training_metadata is None:
+                                    training_metadata = {
+                                        "training_features": selected_features,
+                                        "feature_selection_method": st.session_state.get("feature_selection_method", "Semua Fitur (Bawaan)"),
+                                        "training_mode": training_mode,
+                                        "label_column": label_column if training_mode == TRAINING_MODE_SUPERVISED else None,
+                                        "graph_method": graph_method,
+                                        "graph_k": graph_k if graph_method == "knn" else None,
+                                        "graph_node_count": st.session_state.get("graph_node_count", 0),
+                                        "graph_edge_count": st.session_state.get("graph_edge_count", 0),
+                                        "preprocessing_contract_version": st.session_state.get("preprocessing_metadata", {}).get("preprocessing_contract_version"),
+                                        "preprocessing_fit_stats": st.session_state.get("preprocessing_metadata", {}).get("fit_statistics"),
+                                    }
 
                                 # Capture complete context
                                 context = interpreter.capture_training_context(

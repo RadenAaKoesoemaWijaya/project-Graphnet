@@ -668,28 +668,28 @@ Sajikan dokumen dalam Markdown resmi yang rapi, ringkas, dan to-the-point menggu
 
         if self.provider == "gemini":
             if not self.api_key:
-                return {"ok": False, "provider": "Gemini", "message": "❌ API Key kosong.", "latency_ms": None}
+                return {"ok": False, "provider": "Gemini", "message": "❌ API Key kosong. Masukkan API Key Google Gemini dari https://aistudio.google.com/app/apikey", "latency_ms": None}
             resp = self._call_gemini_raw(ping_prompt)
             ms = int((time.time() - t0) * 1000)
             if resp:
-                return {"ok": True, "provider": f"Gemini ({self.model_name})", "message": f"✅ Koneksi berhasil ({ms} ms).", "latency_ms": ms}
-            return {"ok": False, "provider": "Gemini", "message": f"❌ Koneksi gagal — periksa API Key dan quota.", "latency_ms": ms}
+                return {"ok": True, "provider": f"Gemini ({self.model_name})", "message": f"✅ Koneksi berhasil ({ms} ms). Model: {self.model_name}", "latency_ms": ms}
+            return {"ok": False, "provider": "Gemini", "message": f"❌ Koneksi gagal dengan model '{self.model_name}'. Periksa: 1) API Key valid, 2) Model tersedia, 3) Quota tersedia, 4) Koneksi internet aktif.", "latency_ms": ms}
 
         if self.provider in ("openai", "azure"):
             if not self.api_key:
-                return {"ok": False, "provider": "OpenAI", "message": "❌ API Key kosong.", "latency_ms": None}
+                return {"ok": False, "provider": "OpenAI", "message": "❌ API Key kosong. Masukkan API Key OpenAI dari https://platform.openai.com/api-keys", "latency_ms": None}
             resp = self._call_openai_raw(ping_prompt)
             ms = int((time.time() - t0) * 1000)
             if resp:
-                return {"ok": True, "provider": f"OpenAI ({self.model_name})", "message": f"✅ Koneksi berhasil ({ms} ms).", "latency_ms": ms}
-            return {"ok": False, "provider": "OpenAI/Azure", "message": f"❌ Koneksi gagal — periksa endpoint, API Key, dan model name.", "latency_ms": ms}
+                return {"ok": True, "provider": f"OpenAI ({self.model_name})", "message": f"✅ Koneksi berhasil ({ms} ms). Model: {self.model_name}", "latency_ms": ms}
+            return {"ok": False, "provider": "OpenAI/Azure", "message": f"❌ Koneksi gagal dengan model '{self.model_name}'. Periksa: 1) API Key valid, 2) Model tersedia, 3) Endpoint URL benar, 4) Quota tersedia.", "latency_ms": ms}
 
         if self.provider == "ollama":
             resp = self._call_ollama_raw(ping_prompt)
             ms = int((time.time() - t0) * 1000)
             if resp:
-                return {"ok": True, "provider": f"Ollama ({self.model_name})", "message": f"✅ Ollama lokal merespons ({ms} ms).", "latency_ms": ms}
-            return {"ok": False, "provider": "Ollama", "message": f"❌ Ollama tidak merespons di `{self.endpoint_url}`. Pastikan `ollama serve` sudah berjalan.", "latency_ms": ms}
+                return {"ok": True, "provider": f"Ollama ({self.model_name})", "message": f"✅ Ollama lokal merespons ({ms} ms). Model: {self.model_name}", "latency_ms": ms}
+            return {"ok": False, "provider": "Ollama", "message": f"❌ Ollama tidak merespons di `{self.endpoint_url}` dengan model '{self.model_name}'. Periksa: 1) 'ollama serve' sudah berjalan, 2) Model sudah di-download (ollama pull {self.model_name}), 3) Endpoint URL benar.", "latency_ms": ms}
 
         return {"ok": False, "provider": self.provider, "message": f"❌ Provider '{self.provider}' tidak dikenal.", "latency_ms": None}
 
