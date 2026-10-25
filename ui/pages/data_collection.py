@@ -261,11 +261,13 @@ def show_data_collection_page():
                         # Load first file sample to get columns
                         first_file = uploaded_files[0]
                         first_ext = normalize_upload_type("", first_file.name)
-                        temp_path = ingest_file_to_raw_parquet(
+                        temp_result = ingest_file_to_raw_parquet(
                             first_file,
                             first_ext,
                             progress_callback=None
                         )
+                        # ingest_file_to_raw_parquet returns (path, rows, schema)
+                        temp_path = temp_result[0] if isinstance(temp_result, tuple) else temp_result
                         sample_df = get_parquet_sample(temp_path, n=100)
                         available_columns = list(sample_df.columns)
                         os.unlink(temp_path)  # Clean up temp file
