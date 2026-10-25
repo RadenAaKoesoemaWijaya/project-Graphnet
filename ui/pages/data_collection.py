@@ -254,72 +254,128 @@ def show_data_collection_page():
                 if merge_mode == "Key-Based Join (Enrichment)":
                     st.markdown("##### 🔑 Konfigurasi Key-Based Merge")
                     
-                    # Load sample to show available columns
-                    sample_df = None
-                    available_columns = []
-                    try:
-                        # Load first file sample to get columns
-                        first_file = uploaded_files[0]
-                        first_ext = normalize_upload_type("", first_file.name)
-                        temp_result = ingest_file_to_raw_parquet(
-                            first_file,
-                            first_ext,
-                            progress_callback=None
-                        )
-                        # ingest_file_to_raw_parquet returns (path, rows, schema)
-                        temp_path = temp_result[0] if isinstance(temp_result, tuple) else temp_result
-                        sample_df = get_parquet_sample(temp_path, n=100)
-                        available_columns = list(sample_df.columns)
-                        os.unlink(temp_path)  # Clean up temp file
-                    except Exception as e:
-                        st.warning(f"Tidak dapat memuat kolom sampel: {e}")
-                        available_columns = []
+                    # Show column preview for each uploaded file
+                    st.markdown("###### 📋 Preview Kolom dari Setiap Dataset")
                     
-                    if available_columns:
-                        st.info(f"📋 Kolom tersedia untuk join: {', '.join(available_columns[:10])}{'...' if len(available_columns) > 10 else ''}")
+                    file_columns_info = []
+                    all_available_columns = set()
+                    
+                    try:
+                        for idx, uploaded_file in enumerate(uploaded_files):
+                            fname = uploaded_file.name
+                            ftype = normalize_upload_type("", fname)
+                            
+                            # Use Polars scan to get schema without full ingest
+                            try:
+                                # Create temp path for this file
+                                temp_result = ingest_file_to_raw_parquet(
+                                    uploaded_file,
+                                    ftype,
+                                    progress_callback=None
+                                )
+                                temp_path = temp_result[0] if isinstance(temp_result, tuple) else temp_result
+                                
+                                # Get schema using Polars (lazy, no data load)
+                                lf = pl.scan_parquet(temp_path)
+                                schema = lf.collect_schema()
+                                file_columns = list(schema.names())
+                                
+                                file_columns_info.append({
+                                    "file_name": fname,
+                                    "columns": file_columns,
+                                    "column_count": len(file_columns)
+                                })
+                                
+                                all_available_columns.update(file_columns)
+                                
+                                # Clean up temp file
+                                os.unlink(temp_path)
+                                
+                            except Exception as e:
+                                st.warning(f"⚠️ Gagal membaca kolom dari {fname}: {e}")
+                                file_columns_info.append({
+                                    "file_name": fname,
+                                    "columns": [],
+                                    "column_count": 0,
+                                    "error": str(e)
+                                })
                         
-                        # Multi-select for join columns
-                        join_columns = st.multiselect(
-                            "Pilih Kolom Join (Key)",
-                            options=available_columns,
-                            help="Pilih satu atau lebih kolom sebagai kunci untuk penggabungan",
-                            max_selections=5
-                        )
+                        # Display column preview in a table
+                        if file_columns_info:
+                            preview_data = []
+                            for info in file_columns_info:
+                                cols_str = ", ".join(info["columns"][:5]) + ("..." if len(info["columns"]) > 5 else "")
+                                preview_data.append({
+                                    "📁 File": info["file_name"],
+                                    "📊 Jumlah Kolom": info["column_count"],
+                                    "📋 Kolom (Preview)": cols_str
+                                })
+                            
+                            st.dataframe(pd.DataFrame(preview_data), hide_index=True, width='stretch')
+                            
+                            # Show intersection of columns (common columns across all files)
+                            if len(file_columns_info) > 1:
+                                common_columns = set(file_columns_info[0]["columns"])
+                                for info in file_columns_info[1:]:
+                                    common_columns = common_columns.intersection(set(info["columns"]))
+                                
+                                if common_columns:
+                                    st.success(f"✅ Kolom yang sama di semua file ({len(common_columns)}): {', '.join(sorted(common_columns))}")
+                                    st.info("💡 Kolom yang sama ini cocok digunakan sebagai join key.")
+                                else:
+                                    st.warning("⚠️ Tidak ada kolom yang sama di semua file. Pastikan dataset memiliki kolom yang relevan untuk join.")
                         
-                        if not join_columns:
-                            st.warning("⚠️ Pilih minimal 1 kolom join untuk mode Key-Based.")
-                            st.stop()
+                        # Show all unique columns across all files
+                        available_columns = sorted(list(all_available_columns))
                         
-                        # Join type selection
-                        join_type = st.selectbox(
-                            "Tipe Join",
-                            options=["inner", "left", "outer", "cross"],
-                            index=0,
-                            help=(
-                                "Inner: Hanya baris dengan key cocok di semua dataset. "
-                                "Left: Semua baris dari dataset pertama. "
-                                "Outer: Semua baris dari semua dataset. "
-                                "Cross: Cartesian product (hati-hati dengan data besar)."
+                        if available_columns:
+                            st.info(f"📋 Total kolom unik di semua file: {len(available_columns)}")
+                            
+                            # Multi-select for join columns
+                            join_columns = st.multiselect(
+                                "Pilih Kolom Join (Key)",
+                                options=available_columns,
+                                help="Pilih satu atau lebih kolom sebagai kunci untuk penggabungan",
+                                max_selections=5
                             )
-                        )
-                        
-                        # Show join type explanation
-                        join_explanations = {
-                            "inner": "✅ Hanya baris dengan key yang cocok di SEMUA dataset",
-                            "left": "⬅️ Semua baris dari dataset pertama + yang cocok dari dataset lain",
-                            "outer": "🔲 Semua baris dari SEMUA dataset (dengan NULL untuk yang tidak cocok)",
-                            "cross": "❌ Cartesian product (baris1 × baris2) - HATI-HATI: bisa sangat besar!"
-                        }
-                        st.info(join_explanations.get(join_type, ""))
-                        
-                        # Warning for cross join
-                        if join_type == "cross":
-                            st.error("⚠️ CROSS JOIN dapat menghasilkan dataset yang sangat besar!")
-                            confirm_cross = st.checkbox("Saya mengerti risikonya dan ingin melanjutkan", value=False)
-                            if not confirm_cross:
+                            
+                            if not join_columns:
+                                st.warning("⚠️ Pilih minimal 1 kolom join untuk mode Key-Based.")
                                 st.stop()
-                    else:
-                        st.error("❌ Tidak dapat menampilkan kolom untuk pilihan join.")
+                            
+                            # Join type selection
+                            join_type = st.selectbox(
+                                "Tipe Join",
+                                options=["inner", "left", "outer", "cross"],
+                                index=0,
+                                help=(
+                                    "Inner: Hanya baris dengan key cocok di semua dataset. "
+                                    "Left: Semua baris dari dataset pertama. "
+                                    "Outer: Semua baris dari semua dataset. "
+                                    "Cross: Cartesian product (hati-hati dengan data besar)."
+                                )
+                            )
+                            
+                            # Show join type explanation
+                            join_explanations = {
+                                "inner": "✅ Hanya baris dengan key yang cocok di SEMUA dataset",
+                                "left": "⬅️ Semua baris dari dataset pertama + yang cocok dari dataset lain",
+                                "outer": "🔲 Semua baris dari SEMUA dataset (dengan NULL untuk yang tidak cocok)",
+                                "cross": "❌ Cartesian product (baris1 × baris2) - HATI-HATI: bisa sangat besar!"
+                            }
+                            st.info(join_explanations.get(join_type, ""))
+                            
+                            # Warning for cross join
+                            if join_type == "cross":
+                                st.error("⚠️ CROSS JOIN dapat menghasilkan dataset yang sangat besar!")
+                                confirm_cross = st.checkbox("Saya mengerti risikonya dan ingin melanjutkan", value=False)
+                                if not confirm_cross:
+                                    st.stop()
+                        else:
+                            st.error("❌ Tidak dapat menampilkan kolom dari file yang diunggah.")
+                            st.stop()
+                    except Exception as e:
+                        st.error(f"❌ Error saat membaca kolom file: {e}")
                         st.stop()
                 else:
                     # Diagonal concat mode (default)
