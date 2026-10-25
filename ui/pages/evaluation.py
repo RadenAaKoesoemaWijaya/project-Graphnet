@@ -4,6 +4,20 @@ import numpy as np
 from ui.utils import *
 from state_manager import *
 from model_explainer import ModelExplainer, SUPPORTED_EXPLAINABILITY_MODELS
+from fraud_detection_metrics import (
+    calculate_all_fraud_metrics,
+    get_threshold_tradeoff_analysis,
+    get_optimal_threshold
+)
+from sklearn.metrics import (
+    precision_score,
+    recall_score,
+    f1_score,
+    roc_auc_score,
+    confusion_matrix,
+    classification_report,
+    precision_recall_curve
+)
 import logging
 import io
 
@@ -354,6 +368,193 @@ def show_evaluation_page():
         except Exception as metrics_error:
             st.error(f"❌ Error dalam perhitungan metrik supervisi: {str(metrics_error)}")
             st.info("Dataset mungkin tidak memiliki distribusi kelas yang valid untuk metrik ini.")
+
+        # Fraud Detection Specific Metrics
+        st.markdown("---")
+        st.subheader("🎯 Metrik Khusus Deteksi Fraud")
+
+        with st.expander("💡 Mengapa Metrik Ini Penting?", expanded=False):
+            st.markdown("""
+            - **PR-AUC**: Lebih relevan untuk data imbalanced daripada ROC-AUC, fokus pada performa kelas positif (fraud)
+            - **F2-Score**: Memberi bobot 2x pada recall - krusial untuk fraud karena missing fraud lebih mahal daripada false positive
+            - **Specificity**: Persentase non-fraud yang benar diklasifikasikan
+            - **False Negative Rate**: Persentase fraud yang lolos (critical metric untuk asuransi)
+            - **Matthews Correlation Coefficient (MCC)**: Metrik yang lebih robust untuk data imbalanced
+            """)
+
+        try:
+            fraud_metrics = calculate_all_fraud_metrics(y_true, test_predictions, test_probabilities)
+
+            fraud_col1, fraud_col2, fraud_col3, fraud_col4 = st.columns(4)
+            with fraud_col1:
+                st.metric("PR-AUC", f"{fraud_metrics.get('pr_auc', 0):.4f}",
+                         help="Precision-Recall AUC - lebih informatif untuk data imbalanced")
+            with fraud_col2:
+                st.metric("F2-Score", f"{fraud_metrics.get('f2_score', 0):.4f}",
+                         help="Memberi bobot 2x pada recall - ideal untuk fraud detection")
+            with fraud_col3:
+                st.metric("Specificity", f"{fraud_metrics.get('specificity', 0):.4f}",
+                         help="True Negative Rate - persentase non-fraud yang benar diklasifikasikan")
+            with fraud_col4:
+                st.metric("MCC", f"{fraud_metrics.get('mcc', 0):.4f}",
+                         help="Matthews Correlation Coefficient - robust untuk data imbalanced")
+
+            # Critical fraud metrics
+            st.markdown("#### ⚠️ Metrik Kritis untuk Bisnis")
+            fraud_crit_col1, fraud_crit_col2 = st.columns(2)
+            with fraud_crit_col1:
+                fnr = fraud_metrics.get('false_negative_rate', 0)
+                st.metric("False Negative Rate", f"{fnr:.2%}",
+                         delta_color="inverse",
+                         help="Persentase fraud yang lolos - lebih rendah lebih baik")
+            with fraud_crit_col2:
+                fpr = fraud_metrics.get('false_positive_rate', 0)
+                st.metric("False Positive Rate", f"{fpr:.2%}",
+                         help="Persentase non-fraud yang salah diklasifikasikan")
+
+            # Confusion matrix details
+            st.markdown("#### 📊 Detail Confusion Matrix")
+            cm_details = pd.DataFrame([
+                {'Kategori': 'True Negatives (Non-fraud benar)', 'Jumlah': fraud_metrics.get('true_negatives', 0)},
+                {'Kategori': 'False Positives (Non-fraud salah)', 'Jumlah': fraud_metrics.get('false_positives', 0)},
+                {'Kategori': 'False Negatives (Fraud lolos)', 'Jumlah': fraud_metrics.get('false_negatives', 0)},
+                {'Kategori': 'True Positives (Fraud tertangkap)', 'Jumlah': fraud_metrics.get('true_positives', 0)},
+            ])
+            st.dataframe(cm_details, width='stretch', hide_index=True)
+
+        except Exception as fraud_metrics_error:
+            st.error(f"❌ Error dalam perhitungan metrik fraud: {str(fraud_metrics_error)}")
+            logger.error(f"Error calculating fraud metrics: {fraud_metrics_error}", exc_info=True)
+
+        # Threshold Trade-off Analysis
+        st.markdown("---")
+        st.subheader("📈 Analisis Trade-off Threshold")
+
+        with st.expander("💡 Cara Menggunakan Analisis Ini", expanded=False):
+            st.markdown("""
+            Analisis ini menunjukkan bagaimana precision dan recall berubah pada berbagai threshold.
+            - **Threshold rendah**: Recall tinggi (lebih banyak fraud tertangkap) tapi precision rendah (banyak false positive)
+            - **Threshold tinggi**: Precision tinggi (sedikit false positive) tapi recall rendah (banyak fraud lolos)
+            - Pilih threshold berdasarkan prioritas bisnis Anda!
+            """)
+
+        try:
+            tradeoff_data = get_threshold_tradeoff_analysis(y_true, test_probabilities)
+
+            # Create trade-off plot
+            import plotly.graph_objects as go
+            from plotly.subplots import make_subplots
+
+            fig_tradeoff = make_subplots(
+                rows=2, cols=2,
+                subplot_titles=('Precision vs Recall', 'F1 & F2 Scores vs Threshold',
+                               'Precision vs Threshold', 'Recall vs Threshold'),
+                specs=[[{"secondary_y": False}, {"secondary_y": False}],
+                       [{"secondary_y": False}, {"secondary_y": False}]]
+            )
+
+            # Precision vs Recall
+            fig_tradeoff.add_trace(
+                go.Scatter(x=tradeoff_data['recall'], y=tradeoff_data['precision'],
+                          mode='lines+markers', name='Precision-Recall Curve',
+                          line=dict(color='blue')),
+                row=1, col=1
+            )
+            fig_tradeoff.add_trace(
+                go.Scatter(x=[recall], y=[precision],
+                          mode='markers', name='Current Threshold',
+                          marker=dict(size=15, color='red', symbol='star')),
+                row=1, col=1
+            )
+
+            # F1 & F2 vs Threshold
+            fig_tradeoff.add_trace(
+                go.Scatter(x=tradeoff_data['thresholds'], y=tradeoff_data['f1'],
+                          mode='lines', name='F1-Score', line=dict(color='green')),
+                row=1, col=2
+            )
+            fig_tradeoff.add_trace(
+                go.Scatter(x=tradeoff_data['thresholds'], y=tradeoff_data['f2'],
+                          mode='lines', name='F2-Score', line=dict(color='orange')),
+                row=1, col=2
+            )
+            fig_tradeoff.add_vline(x=_active_thr, line_dash="dash", line_color="red",
+                                   annotation_text="Current", row=1, col=2)
+
+            # Precision vs Threshold
+            fig_tradeoff.add_trace(
+                go.Scatter(x=tradeoff_data['thresholds'], y=tradeoff_data['precision'],
+                          mode='lines', name='Precision', line=dict(color='blue')),
+                row=2, col=1
+            )
+            fig_tradeoff.add_vline(x=_active_thr, line_dash="dash", line_color="red",
+                                   annotation_text="Current", row=2, col=1)
+
+            # Recall vs Threshold
+            fig_tradeoff.add_trace(
+                go.Scatter(x=tradeoff_data['thresholds'], y=tradeoff_data['recall'],
+                          mode='lines', name='Recall', line=dict(color='green')),
+                row=2, col=2
+            )
+            fig_tradeoff.add_vline(x=_active_thr, line_dash="dash", line_color="red",
+                                   annotation_text="Current", row=2, col=2)
+
+            fig_tradeoff.update_xaxes(title_text="Recall", row=1, col=1)
+            fig_tradeoff.update_yaxes(title_text="Precision", row=1, col=1)
+            fig_tradeoff.update_xaxes(title_text="Threshold", row=1, col=2)
+            fig_tradeoff.update_yaxes(title_text="Score", row=1, col=2)
+            fig_tradeoff.update_xaxes(title_text="Threshold", row=2, col=1)
+            fig_tradeoff.update_yaxes(title_text="Precision", row=2, col=1)
+            fig_tradeoff.update_xaxes(title_text="Threshold", row=2, col=2)
+            fig_tradeoff.update_yaxes(title_text="Recall", row=2, col=2)
+            fig_tradeoff.update_layout(height=800, showlegend=True,
+                                        title_text="Threshold Trade-off Analysis")
+
+            st.plotly_chart(fig_tradeoff, width='stretch')
+
+            # Optimal threshold recommendations
+            st.markdown("#### 🎯 Rekomendasi Threshold Optimal")
+            opt_f1_th, opt_f1_score = get_optimal_threshold(y_true, test_probabilities, metric='f1')
+            opt_f2_th, opt_f2_score = get_optimal_threshold(y_true, test_probabilities, metric='f2')
+            opt_prec_th, opt_prec_score = get_optimal_threshold(y_true, test_probabilities, metric='precision')
+            opt_rec_th, opt_rec_score = get_optimal_threshold(y_true, test_probabilities, metric='recall')
+
+            opt_col1, opt_col2, opt_col3, opt_col4 = st.columns(4)
+            with opt_col1:
+                st.metric("Optimal F1", f"{opt_f1_th:.3f}",
+                         help=f"Threshold untuk F1-Score maksimal: {opt_f1_score:.4f}")
+            with opt_col2:
+                st.metric("Optimal F2", f"{opt_f2_th:.3f}",
+                         help=f"Threshold untuk F2-Score maksimal: {opt_f2_score:.4f}")
+            with opt_col3:
+                st.metric("Optimal Precision", f"{opt_prec_th:.3f}",
+                         help=f"Threshold untuk Precision maksimal: {opt_prec_score:.4f}")
+            with opt_col4:
+                st.metric("Optimal Recall", f"{opt_rec_th:.3f}",
+                         help=f"Threshold untuk Recall maksimal: {opt_rec_score:.4f}")
+
+            # Quick apply buttons
+            st.markdown("#### ⚡ Terapkan Threshold Optimal")
+            opt_btn_col1, opt_btn_col2, opt_btn_col3 = st.columns(3)
+            with opt_btn_col1:
+                if st.button("Gunakan Optimal F2 (Rekomendasi untuk Fraud)", key="apply_f2"):
+                    st.session_state['eval_threshold'] = opt_f2_th
+                    st.success(f"✅ Threshold diubah ke {opt_f2_th:.3f}")
+                    st.rerun()
+            with opt_btn_col2:
+                if st.button("Gunakan Optimal F1 (Balance)", key="apply_f1"):
+                    st.session_state['eval_threshold'] = opt_f1_th
+                    st.success(f"✅ Threshold diubah ke {opt_f1_th:.3f}")
+                    st.rerun()
+            with opt_btn_col3:
+                if st.button("Gunakan Optimal Precision (Minimalkan False Positive)", key="apply_prec"):
+                    st.session_state['eval_threshold'] = opt_prec_th
+                    st.success(f"✅ Threshold diubah ke {opt_prec_th:.3f}")
+                    st.rerun()
+
+        except Exception as tradeoff_error:
+            st.error(f"❌ Error dalam analisis threshold trade-off: {str(tradeoff_error)}")
+            logger.error(f"Error in threshold trade-off analysis: {tradeoff_error}", exc_info=True)
     else:
         st.subheader("🧪 Analisis Diagnostik")
         st.info(
@@ -510,18 +711,29 @@ def show_evaluation_page():
     _m_recall = None
     _m_f1 = None
     _m_roc_auc = None
+    _m_f2_score = None
+    _m_pr_auc = None
+    _m_mcc = None
 
     if _has_supervised_labels:
         try:
-            from sklearn.metrics import precision_score as _ps, recall_score as _rs, f1_score as _f1, roc_auc_score as _roc
             _m_accuracy = float((test_predictions == y_true).mean())
-            _m_precision = float(_ps(y_true, test_predictions, zero_division=0))
-            _m_recall = float(_rs(y_true, test_predictions, zero_division=0))
-            _m_f1 = float(_f1(y_true, test_predictions, zero_division=0))
+            _m_precision = float(precision_score(y_true, test_predictions, zero_division=0))
+            _m_recall = float(recall_score(y_true, test_predictions, zero_division=0))
+            _m_f1 = float(f1_score(y_true, test_predictions, zero_division=0))
             try:
-                _m_roc_auc = float(_roc(y_true, test_probabilities))
+                _m_roc_auc = float(roc_auc_score(y_true, test_probabilities))
             except Exception:
                 _m_roc_auc = 0.0
+
+            # Calculate fraud-specific metrics
+            try:
+                fraud_metrics = calculate_all_fraud_metrics(y_true, test_predictions, test_probabilities)
+                _m_f2_score = fraud_metrics.get('f2_score', 0.0)
+                _m_pr_auc = fraud_metrics.get('pr_auc', 0.0)
+                _m_mcc = fraud_metrics.get('mcc', 0.0)
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -539,6 +751,9 @@ def show_evaluation_page():
             'recall': _m_recall,
             'f1_score': _m_f1,
             'roc_auc': _m_roc_auc if _m_roc_auc is not None else 0.0,
+            'f2_score': _m_f2_score if _m_f2_score is not None else 0.0,
+            'pr_auc': _m_pr_auc if _m_pr_auc is not None else 0.0,
+            'mcc': _m_mcc if _m_mcc is not None else 0.0,
         }
         st.session_state['performance_monitor'].log_performance(current_metrics)
         
@@ -628,7 +843,7 @@ def show_evaluation_page():
                 try:
                     from pdf_generator import PDFReportGenerator
                     import plotly.graph_objects as go
-                    from sklearn.metrics import confusion_matrix, roc_curve, precision_recall_curve, auc
+                    from sklearn.metrics import roc_curve, auc
                     import matplotlib.pyplot as plt
                     import io
 
@@ -684,9 +899,8 @@ def show_evaluation_page():
 
                     # Add supervised metrics if available
                     if y_true is not None and len(np.unique(y_true)) == 2:
-                        from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
                         report_data['evaluation_metrics'] = {
-                            'Accuracy': accuracy_score(y_true, test_predictions),
+                            'Accuracy': float((test_predictions == y_true).mean()),
                             'Precision': precision_score(y_true, test_predictions, zero_division=0),
                             'Recall': recall_score(y_true, test_predictions, zero_division=0),
                             'F1-Score': f1_score(y_true, test_predictions, zero_division=0),
@@ -695,6 +909,18 @@ def show_evaluation_page():
                             report_data['evaluation_metrics']['ROC-AUC'] = roc_auc_score(y_true, test_probabilities)
                         except:
                             pass
+
+                        # Add fraud-specific metrics
+                        try:
+                            fraud_metrics = calculate_all_fraud_metrics(y_true, test_predictions, test_probabilities)
+                            report_data['evaluation_metrics']['PR-AUC'] = fraud_metrics.get('pr_auc', 0.0)
+                            report_data['evaluation_metrics']['F2-Score'] = fraud_metrics.get('f2_score', 0.0)
+                            report_data['evaluation_metrics']['Specificity'] = fraud_metrics.get('specificity', 0.0)
+                            report_data['evaluation_metrics']['False Negative Rate'] = fraud_metrics.get('false_negative_rate', 0.0)
+                            report_data['evaluation_metrics']['False Positive Rate'] = fraud_metrics.get('false_positive_rate', 0.0)
+                            report_data['evaluation_metrics']['Matthews Correlation Coefficient'] = fraud_metrics.get('mcc', 0.0)
+                        except Exception as e:
+                            logger.warning(f"Failed to add fraud metrics to PDF: {e}")
 
                     # Prepare charts
                     charts = {}
@@ -750,10 +976,10 @@ def show_evaluation_page():
                     # Precision-Recall Curve chart
                     if y_true is not None and len(np.unique(y_true)) == 2:
                         try:
-                            precision, recall, _ = precision_recall_curve(y_true, test_probabilities)
+                            precision_vals, recall_vals, _ = precision_recall_curve(y_true, test_probabilities)
                             fig_pr = go.Figure()
                             fig_pr.add_trace(go.Scatter(
-                                x=recall, y=precision,
+                                x=recall_vals, y=precision_vals,
                                 mode='lines',
                                 name='Precision-Recall Curve',
                                 line=dict(color='green', width=2)
@@ -766,6 +992,37 @@ def show_evaluation_page():
                             charts['precision_recall_curve'] = plotly_to_bytes(fig_pr)
                         except Exception as e:
                             logger.warning(f"Failed to create precision-recall curve chart: {e}")
+
+                    # Threshold Trade-off Analysis chart
+                    if y_true is not None and len(np.unique(y_true)) == 2:
+                        try:
+                            tradeoff_data = get_threshold_tradeoff_analysis(y_true, test_probabilities)
+
+                            fig_tradeoff = go.Figure()
+                            fig_tradeoff.add_trace(go.Scatter(
+                                x=tradeoff_data['thresholds'],
+                                y=tradeoff_data['precision'],
+                                mode='lines',
+                                name='Precision',
+                                line=dict(color='blue')
+                            ))
+                            fig_tradeoff.add_trace(go.Scatter(
+                                x=tradeoff_data['thresholds'],
+                                y=tradeoff_data['recall'],
+                                mode='lines',
+                                name='Recall',
+                                line=dict(color='green')
+                            ))
+                            fig_tradeoff.add_vline(x=eval_threshold, line_dash="dash", line_color="red",
+                                                   annotation_text=f"Current ({eval_threshold:.2f})")
+                            fig_tradeoff.update_layout(
+                                title='Threshold Trade-off Analysis',
+                                xaxis_title='Threshold',
+                                yaxis_title='Score'
+                            )
+                            charts['threshold_tradeoff'] = plotly_to_bytes(fig_tradeoff)
+                        except Exception as e:
+                            logger.warning(f"Failed to create threshold trade-off chart: {e}")
 
                     # Probability Distribution chart
                     try:

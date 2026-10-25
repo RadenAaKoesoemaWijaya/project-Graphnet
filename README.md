@@ -29,6 +29,7 @@
 - **Auto BAP Generation**: Pembuatan Berita Acara Pemeriksaan (BAP) formal secara otomatis
 - **Model Interpretation**: Laporan naratif training model dengan AI generatif dan PDF export lengkap
 - **PDF Report dengan Grafik & Tabel**: Laporan PDF berisi semua grafik (pie chart, GNN visualization) dan tabel (metrik model, hasil optimasi) dari pelatihan
+- **Enhanced PDF Reports**: Layout PDF yang lebih elegan dengan styling profesional dan tipografi yang lebih baik
 - **PII Masking**: Proteksi data sensitif sesuai UU PDP dan HIPAA
 
 ### 🔐 Enterprise Security
@@ -50,6 +51,9 @@
 - **Explainable AI**: SHAP & LIME untuk transparansi model
 - **Real-Time Telemetry**: Monitoring CPU, RAM, GPU/VRAM, dan latensi inferensi
 - **Multi-Format Export**: CSV, Excel, JSON untuk audit trail
+- **Advanced Fraud Metrics**: PR-AUC, F2-Score, Specificity, FNR, FPR, MCC untuk evaluasi model yang lebih akurat
+- **Threshold Trade-off Analysis**: Visualisasi precision vs recall di berbagai threshold dengan rekomendasi optimal
+- **PDF Evaluation Reports**: Laporan PDF evaluasi model lengkap dengan confusion matrix, ROC curve, precision-recall curve, dan metrik fraud detection
 
 ### 🎯 False Alarm Reduction (Phase 1 & 2)
 - **Robust Outlier Detection**: MAD, IQR, Modified Z-Score
@@ -77,6 +81,7 @@ project-Graphnet/
 ├── model.py                         # Arsitektur ML Ensemble
 ├── agentic_copilot.py               # AI Copilot investigasi
 ├── pdf_generator.py                 # Generator laporan PDF
+├── fraud_detection_metrics.py       # Metrik khusus fraud detection
 ├── requirements.txt                 # Dependensi Python
 ├── ui/                              # Antarmuka Streamlit
 │   ├── sidebar.py                   # Navigasi & status
@@ -291,9 +296,9 @@ export GEMINI_API_KEY="your-api-key"
 
 ---
 
-## � Laporan PDF Pelatihan Model
+## 📊 Laporan PDF
 
-### Fitur Laporan PDF
+### Laporan PDF Pelatihan Model
 
 ASTINA menyediakan fitur laporan PDF komprehensif yang berisi:
 - **Ringkasan Eksekutif**: Gambaran singkat hasil pelatihan model
@@ -304,13 +309,41 @@ ASTINA menyediakan fitur laporan PDF komprehensif yang berisi:
 - **Metrik Performa**: Status model dan distribusi bobot ensemble
 - **Rekomendasi**: Saran untuk pengembangan model selanjutnya
 - **Grafik Visual**:
-  - 📊 Pie chart distribusi bobot ensemble
-  - 🕸️ Visualisasi jaringan anomali GNN (jika GNN dilatih)
+  - Pie chart distribusi bobot ensemble
+  - Visualisasi jaringan anomali GNN (jika GNN dilatih)
+  - Grafik loss autoencoder (jika dilatih)
+  - Grafik cross-validation (jika diaktifkan)
 - **Tabel Data**:
-  - 📋 Tabel metrik model lengkap (status, bobot, detail)
-  - 📈 Tabel hasil optimasi Optuna (jika digunakan)
+  - Tabel metrik model lengkap (status, bobot, detail)
+  - Tabel hasil optimasi Optuna (jika digunakan)
+- **Layout Profesional**: Styling modern dengan color scheme konsisten, typography yang lebih baik, dan formatting yang rapi
+
+### Laporan PDF Evaluasi Model
+
+Laporan PDF evaluasi model tersedia di halaman Evaluasi dan mencakup:
+- **Metadata Evaluasi**: Tanggal, threshold, dan tingkat anomali terdeteksi
+- **Analisis Dataset**: Statistik dataset evaluasi dan probabilitas
+- **Grafik Evaluasi**:
+  - Confusion Matrix (jika label tersedia)
+  - ROC Curve (jika label tersedia)
+  - Precision-Recall Curve (jika label tersedia)
+  - Distribusi Probabilitas Anomali
+  - Threshold Trade-off Analysis
+  - SHAP Summary Plot (jika explainer tersedia)
+  - SHAP Feature Importance (jika explainer tersedia)
+- **Metrik Supervised** (jika label tersedia):
+  - Accuracy, Precision, Recall, F1-Score, ROC-AUC
+  - **PR-AUC** (Precision-Recall AUC - lebih relevan untuk data imbalanced)
+  - **F2-Score** (memberi bobot 2x pada recall - ideal untuk fraud detection)
+  - **Specificity** (True Negative Rate)
+  - **False Negative Rate** (persentase fraud yang lolos - critical!)
+  - **False Positive Rate** (persentase false positive)
+  - **Matthews Correlation Coefficient** (robust untuk data imbalanced)
+- **Rekomendasi**: Saran threshold optimal dan trade-off precision/recall
 
 ### Cara Menggunakan Laporan PDF
+
+#### Laporan Pelatihan Model:
 
 1. **Selesaikan Pelatihan Model**
    - Buka halaman **Pelatihan Model**
@@ -325,6 +358,17 @@ ASTINA menyediakan fitur laporan PDF komprehensif yang berisi:
 3. **Unduh PDF**
    - Klik **"📄 Unduh Laporan Interpretasi (PDF)"**
    - PDF akan diunduh dengan nama: `ASTINA_Model_Training_Report_YYYYMMDD_HHMMSS.pdf`
+
+#### Laporan Evaluasi Model:
+
+1. **Selesaikan Evaluasi Model**
+   - Buka halaman **Evaluasi Model**
+   - Upload dan preprocessing data
+   - Latih model dan jalankan evaluasi
+
+2. **Unduh PDF Evaluasi**
+   - Klik **"📥 Unduh Laporan Evaluasi (PDF)"**
+   - PDF akan diunduh dengan nama: `ASTINA_Model_Evaluation_Report_YYYYMMDD_HHMMSS.pdf`
 
 ### Konten Laporan PDF
 
@@ -386,6 +430,28 @@ pip install torch-geometric==2.6.0
 
 ### Versi Terbaru (2026-10-25)
 
+**Metrik & Evaluasi Fraud Detection yang Ditingkatkan:**
+- 🎯 Added PR-AUC (Precision-Recall AUC) - lebih relevan untuk data imbalanced
+- 🎯 Added F2-Score - memberi bobot 2x pada recall untuk fraud detection
+- 🎯 Added Specificity (True Negative Rate) - persentase non-fraud yang benar diklasifikasikan
+- 🎯 Added False Negative Rate (FNR) - persentase fraud yang lolos (critical!)
+- 🎯 Added False Positive Rate (FPR) - persentase false positive
+- 🎯 Added Matthews Correlation Coefficient (MCC) - robust untuk data imbalanced
+- 📈 Added Threshold Trade-off Analysis - visualisasi precision vs recall di berbagai threshold
+- 📈 Added optimal threshold recommendations (F1, F2, Precision, Recall)
+- ⚡ Added quick-apply buttons untuk menerapkan threshold optimal
+- 📄 Added PDF Evaluation Report - laporan PDF khusus evaluasi model
+- 📊 Added confusion matrix, ROC curve, precision-recall curve dalam PDF evaluasi
+- 🧠 Added SHAP plots dalam PDF evaluasi (jika explainer tersedia)
+
+**Perbaikan Layout PDF:**
+- 🎨 Enhanced PDF styling dengan color scheme profesional
+- 📝 Improved typography dengan font sizes yang lebih baik
+- 📋 Improved table styling dengan alternating row colors
+- 🎯 Improved section headings dengan border dan padding
+- ✨ Added decorative lines di title page
+- 📊 Enhanced chart embedding dengan proportional sizing
+
 **Security Enhancements:**
 - 🔐 Added password complexity validation (12+ chars, uppercase, lowercase, numbers, special chars)
 - 🛡️ Added SQL injection pattern detection in column name sanitization
@@ -432,5 +498,5 @@ Untuk pertanyaan atau bantuan:
 ---
 
 **Last Updated**: 2026-10-25
-**Version**: 2.1.0
+**Version**: 2.2.0
 **Status**: Production Ready ✅
