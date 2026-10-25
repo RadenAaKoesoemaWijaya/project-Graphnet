@@ -8,7 +8,7 @@ import pandas as pd
 MAX_CSV_FILE_SIZE = int(os.getenv("ASTINA_MAX_CSV_MB", "3072")) * 1024 * 1024        # 3GiB for CSV / CSV.GZ
 MAX_PARQUET_FILE_SIZE = int(os.getenv("ASTINA_MAX_PARQUET_MB", "1024")) * 1024 * 1024  # 1GiB for Parquet (compressed columnar)
 MAX_EXCEL_FILE_SIZE = int(os.getenv("ASTINA_MAX_EXCEL_MB", "150")) * 1024 * 1024      # 150MiB for Excel (.xlsx/.xls)
-MAX_FILE_SIZE = MAX_CSV_FILE_SIZE  # Overall 3GiB maximum file size
+MAX_FILE_SIZE = max(MAX_CSV_FILE_SIZE, MAX_PARQUET_FILE_SIZE, MAX_EXCEL_FILE_SIZE)  # Overall maximum file size (fixes inconsistency)
 MAX_DIRECT_DETECTION_FILE_SIZE = 500 * 1024 * 1024  # Direct detection still uses an in-memory DataFrame
 CHUNK_SIZE = 50 * 1024 * 1024  # 50MB chunks for processing
 VISUALIZATION_SAMPLE_SIZE = 5000

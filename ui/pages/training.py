@@ -502,6 +502,11 @@ def show_training_page():
     # Training
     if st.button("🚀 Mulai Training", type="primary"):
         with st.spinner("Sedang melatih model..."):
+            # Check if training is already in progress
+            if st.session_state.get('training_in_progress', False):
+                st.error("❌ Training sedang berjalan. Tunggu hingga selesai atau refresh halaman.")
+                return
+
             # Ensure train_df and test_df are available
             if 'train_df' not in st.session_state or 'test_df' not in st.session_state:
                 st.error("❌ Data latih/test belum tersedia. Silakan coba lagi atau refresh halaman.")
@@ -954,9 +959,19 @@ def show_training_page():
                         },
                     )
                 except Exception as e:
+                    import traceback
+                    error_message = str(e)
+                    error_trace = traceback.format_exc()
+                    logger.error(f"Training error: {error_message}\n{error_trace}")
                     _write_training_status(
                         status_path,
-                        {"status": "error", "progress": 0.0, "message": str(e)},
+                        {
+                            "status": "error",
+                            "progress": 0.0,
+                            "message": error_message,
+                            "error_type": type(e).__name__,
+                            "traceback": error_trace[:1000]  # Limit traceback length
+                        },
                     )
 
             st.session_state['training_in_progress'] = True
