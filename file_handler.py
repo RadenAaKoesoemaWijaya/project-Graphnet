@@ -136,16 +136,30 @@ def sniff_csv_dialect(file_path, sample_size=None):
 
     last_error = None
     for encoding in encodings:
+        handle = None
         try:
-            with _open_csv_text(file_path, encoding, errors="strict") as handle:
-                sample = handle.read(sample_size)
+            handle = _open_csv_text(file_path, encoding, errors="strict")
+            sample = handle.read(sample_size)
+            handle.close()
         except UnicodeDecodeError as exc:
             last_error = exc
+            if handle:
+                handle.close()
+            continue
+        except PermissionError as exc:
+            logger.error(f"Permission denied reading file {file_path}: {exc}")
+            last_error = exc
+            if handle:
+                handle.close()
             continue
         except Exception as exc:
             last_error = exc
+            if handle:
+                handle.close()
             continue
         if not sample:
+            if handle:
+                handle.close()
             continue
         try:
             dialect = _csv.Sniffer().sniff(sample, delimiters=",;\t|")

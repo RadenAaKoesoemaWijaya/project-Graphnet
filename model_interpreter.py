@@ -37,6 +37,8 @@ class ModelTrainingContext:
         self.hyperparameters = {}
         self.timing_info = {}
         self.validation_results = {}
+        self.charts = {}  # Dictionary to store chart images as bytes
+        self.tables = {}  # Dictionary to store table data
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for LLM context."""
@@ -86,7 +88,7 @@ class ModelInterpreter:
             "total_samples": len(df_processed),
             "features_total": len(feature_columns),
             "features_selected": len(selected_features),
-            "feature_reduction_pct": ((len(feature_columns) - len(selected_features)) / len(feature_columns) * 100) if feature_columns else 0,
+            "feature_reduction_pct": ((len(feature_columns) - len(selected_features)) / len(feature_columns) * 100) if feature_columns and len(feature_columns) > 0 else 0,
             "has_partition_column": "__astina_partition" in df_processed.columns,
             "preprocessing_version": training_metadata.get("preprocessing_contract_version", "unknown"),
             "fit_scope": training_metadata.get("preprocessing_fit_scope", "unknown")
@@ -112,6 +114,10 @@ class ModelInterpreter:
             "training_mode": training_mode,
             "algorithms_used": algo_options,
             "ensemble_strategy": "weighted_ensemble" if len(algo_options) > 1 else "single_model"
+        } if algo_options else {
+            "training_mode": training_mode,
+            "algorithms_used": [],
+            "ensemble_strategy": "single_model"
         }
 
         # Extract training metrics from detector
@@ -172,6 +178,14 @@ class ModelInterpreter:
 
         return ctx
 
+    def add_chart(self, context: ModelTrainingContext, chart_name: str, chart_bytes: bytes):
+        """Add a chart image to the training context."""
+        context.charts[chart_name] = chart_bytes
+
+    def add_table(self, context: ModelTrainingContext, table_name: str, table_data: List):
+        """Add a table to the training context."""
+        context.tables[table_name] = table_data
+
     def generate_training_report(
         self,
         context: ModelTrainingContext,
@@ -193,7 +207,9 @@ class ModelInterpreter:
             "model_architecture": self._generate_model_architecture(context),
             "training_process": self._generate_training_process(context),
             "performance_metrics": self._generate_performance_metrics(context),
-            "recommendations": self._generate_recommendations(context)
+            "recommendations": self._generate_recommendations(context),
+            "charts": context.charts,
+            "tables": context.tables
         }
 
         return report
@@ -210,10 +226,12 @@ class ModelInterpreter:
                 logger.warning(f"LLM executive summary failed: {e}, using heuristic")
 
         # Heuristic fallback
-        dataset_size = ctx.dataset_info["total_samples"]
-        n_features = ctx.dataset_info["features_selected"]
-        n_algos = len(ctx.model_config["algorithms_used"])
-        mode = ctx.model_config["training_mode"]
+        dataset_size = ctx.dataset_info.get("total_samples", 0)
+        n_features = ctx.dataset_info.get("features_selected", 0)
+        n_algos = len(ctx.model_config.get("algorithms_used", []))
+        mode = ctx.model_config.get("training_mode", "unknown")
+        ensemble_strategy = ctx.model_config.get("ensemble_strategy", "single_model")
+        algos_used = ctx.model_config.get("algorithms_used", [])
 
         summary = f"""
 ## Ringkasan Eksekutif
@@ -223,14 +241,14 @@ dengan {n_features} fitur yang telah dipilih secara selektif.
 
 **Konfigurasi Pelatihan:**
 - Mode pelatihan: {mode}
-- Algoritma yang digunakan: {', '.join(ctx.model_config['algorithms_used'])}
+- Algoritma yang digunakan: {', '.join(algos_used) if algos_used else 'Tidak ada'}
 - Jumlah algoritma: {n_algos}
-- Strategi ensemble: {ctx.model_config['ensemble_strategy']}
+- Strategi ensemble: {ensemble_strategy}
 
 **Hasil Utama:**
-- Reduksi fitur: {ctx.dataset_info['feature_reduction_pct']:.1f}%
-- Metode seleksi fitur: {ctx.preprocessing_info['method']}
-- Status preprocessing: Versi {ctx.dataset_info['preprocessing_version']} dengan scope {ctx.dataset_info['fit_scope']}
+- Reduksi fitur: {ctx.dataset_info.get('feature_reduction_pct', 0):.1f}%
+- Metode seleksi fitur: {ctx.preprocessing_info.get('method', 'Unknown')}
+- Status preprocessing: Versi {ctx.dataset_info.get('preprocessing_version', 'unknown')} dengan scope {ctx.dataset_info.get('fit_scope', 'unknown')}
 
 Model ini siap digunakan untuk deteksi anomali transaksi asuransi dengan kombinasi
 pendekatan {mode} yang menggabungkan keunggulan masing-masing algoritma dalam ensemble.
@@ -243,39 +261,39 @@ pendekatan {mode} yang menggabungkan keunggulan masing-masing algoritma dalam en
 ## Analisis Dataset
 
 **Ukuran Dataset:**
-- Total sampel: {ctx.dataset_info['total_samples']:,}
-- Fitur awal: {ctx.dataset_info['features_total']}
-- Fitur terpilih: {ctx.dataset_info['features_selected']}
-- Reduksi fitur: {ctx.dataset_info['feature_reduction_pct']:.1f}%
+- Total sampel: {ctx.dataset_info.get('total_samples', 0):,}
+- Fitur awal: {ctx.dataset_info.get('features_total', 0)}
+- Fitur terpilih: {ctx.dataset_info.get('features_selected', 0)}
+- Reduksi fitur: {ctx.dataset_info.get('feature_reduction_pct', 0):.1f}%
 
 **Preprocessing:**
-- Metode seleksi: {ctx.preprocessing_info['method']}
-- Versi preprocessing: {ctx.dataset_info['preprocessing_version']}
-- Scope fit: {ctx.dataset_info['fit_scope']}
-- Kolom partisi tersedia: {'Ya' if ctx.dataset_info['has_partition_column'] else 'Tidak'}
+- Metode seleksi: {ctx.preprocessing_info.get('method', 'Unknown')}
+- Versi preprocessing: {ctx.dataset_info.get('preprocessing_version', 'unknown')}
+- Scope fit: {ctx.dataset_info.get('fit_scope', 'unknown')}
+- Kolom partisi tersedia: {'Ya' if ctx.dataset_info.get('has_partition_column', False) else 'Tidak'}
 
 **Fitur yang Digunakan:**
-{self._format_feature_list(ctx.feature_info['selected_features'])}
+{self._format_feature_list(ctx.feature_info.get('selected_features', []))}
 """
 
     def _generate_feature_analysis(self, ctx: ModelTrainingContext) -> str:
         """Generate feature analysis section."""
-        selected = ctx.feature_info['selected_features']
-        total = ctx.feature_info['total_features']
+        selected = ctx.feature_info.get('selected_features', [])
+        total = ctx.feature_info.get('total_features', [])
 
         return f"""
 ## Analisis Fitur
 
 **Seleksi Fitur:**
-- Metode: {ctx.feature_info['selection_method']}
-- Dari {total} fitur awal dipilih {len(selected)} fitur
-- Efisiensi: {((total - len(selected)) / total * 100):.1f}% fitur dieliminasi
+- Metode: {ctx.feature_info.get('selection_method', 'Unknown')}
+- Dari {len(total)} fitur awal dipilih {len(selected)} fitur
+- Efisiensi: {((len(total) - len(selected)) / len(total) * 100) if total else 0:.1f}% fitur dieliminasi
 
 **Fitur yang Digunakan:**
 {self._format_feature_list(selected, max_display=20)}
 
 **Rasional Seleksi:**
-Metode seleksi fitur yang digunakan ({ctx.feature_info['selection_method']}) bertujuan untuk:
+Metode seleksi fitur yang digunakan ({ctx.feature_info.get('selection_method', 'Unknown')}) bertujuan untuk:
 1. Mengurangi dimensi untuk meningkatkan efisiensi komputasi
 2. Menghilangkan fitur yang tidak relevan atau redundant
 3. Meningkatkan akurasi model dengan fokus pada fitur yang paling informatif
@@ -287,20 +305,21 @@ Metode seleksi fitur yang digunakan ({ctx.feature_info['selection_method']}) ber
         sections = []
         sections.append("## Arsitektur Model\n")
 
-        sections.append(f"**Strategi Ensemble:** {ctx.model_config['ensemble_strategy']}\n")
-        sections.append(f"**Mode Pelatihan:** {ctx.model_config['training_mode']}\n")
-        sections.append(f"**Algoritma yang Digunakan:** {', '.join(ctx.model_config['algorithms_used'])}\n\n")
+        sections.append(f"**Strategi Ensemble:** {ctx.model_config.get('ensemble_strategy', 'single_model')}\n")
+        sections.append(f"**Mode Pelatihan:** {ctx.model_config.get('training_mode', 'unknown')}\n")
+        algos_used = ctx.model_config.get('algorithms_used', [])
+        sections.append(f"**Algoritma yang Digunakan:** {', '.join(algos_used) if algos_used else 'Tidak ada'}\n\n")
 
         sections.append("### Detail Algoritma:\n")
         for algo_name, details in ctx.algorithm_details.items():
             sections.append(f"**{algo_name.replace('_', ' ').title()}**")
-            sections.append(f"- Tipe: {details['type']}")
-            sections.append(f"- Mekanisme: {details['mechanism']}")
-            sections.append(f"- Bobot dalam ensemble: {details['weight']:.3f}\n")
+            sections.append(f"- Tipe: {details.get('type', 'unknown')}")
+            sections.append(f"- Mekanisme: {details.get('mechanism', 'unknown')}")
+            sections.append(f"- Bobot dalam ensemble: {details.get('weight', 0.0):.3f}\n")
 
         sections.append("### Distribusi Bobot Ensemble:\n")
         for algo_name, details in ctx.algorithm_details.items():
-            sections.append(f"- {algo_name}: {details['weight']:.1%}")
+            sections.append(f"- {algo_name}: {details.get('weight', 0.0):.1%}")
 
         return "\n".join(sections)
 
@@ -327,8 +346,8 @@ Metode seleksi fitur yang digunakan ({ctx.feature_info['selection_method']}) ber
 
         if ctx.validation_results.get("optuna_used"):
             sections.append("\n### Optimasi dengan Optuna:\n")
-            sections.append(f"- Jumlah trials: {ctx.validation_results['n_trials']}")
-            sections.append(f"- Reduksi FPR: {ctx.validation_results['fpr_reduction']:.1f}%")
+            sections.append(f"- Jumlah trials: {ctx.validation_results.get('n_trials', 0)}")
+            sections.append(f"- Reduksi FPR: {ctx.validation_results.get('fpr_reduction', 0.0):.1f}%")
             sections.append("- Metrik yang dioptimasi: False Positive Rate")
 
         return "\n".join(sections)
@@ -340,21 +359,21 @@ Metode seleksi fitur yang digunakan ({ctx.feature_info['selection_method']}) ber
 
         sections.append("### Status Model:\n")
         metrics = ctx.training_metrics
-        sections.append(f"- Isolation Forest: {'✅ Terlatih' if metrics['has_isolation_forest'] else '❌ Tidak terlatih'}")
-        sections.append(f"- Autoencoder: {'✅ Terlatih' if metrics['has_autoencoder'] else '❌ Tidak terlatih'}")
-        sections.append(f"- GNN: {'✅ Terlatih' if metrics['has_gnn'] else '❌ Tidak terlatih'}")
-        sections.append(f"- XGBoost: {'✅ Terlatih' if metrics['has_xgboost'] else '❌ Tidak terlatih'}")
+        sections.append(f"- Isolation Forest: {'✅ Terlatih' if metrics.get('has_isolation_forest', False) else '❌ Tidak terlatih'}")
+        sections.append(f"- Autoencoder: {'✅ Terlatih' if metrics.get('has_autoencoder', False) else '❌ Tidak terlatih'}")
+        sections.append(f"- GNN: {'✅ Terlatih' if metrics.get('has_gnn', False) else '❌ Tidak terlatih'}")
+        sections.append(f"- XGBoost: {'✅ Terlatih' if metrics.get('has_xgboost', False) else '❌ Tidak terlatih'}")
 
         sections.append("\n### Bobot Ensemble:\n")
-        sections.append(f"- Isolation Forest: {metrics['isolation_weight']:.3f}")
-        sections.append(f"- Autoencoder: {metrics['autoencoder_weight']:.3f}")
-        sections.append(f"- DBSCAN: {metrics['dbscan_weight']:.3f}")
-        sections.append(f"- GNN: {metrics['gnn_weight']:.3f}")
-        sections.append(f"- XGBoost: {metrics['xgboost_weight']:.3f}")
+        sections.append(f"- Isolation Forest: {metrics.get('isolation_weight', 0.0):.3f}")
+        sections.append(f"- Autoencoder: {metrics.get('autoencoder_weight', 0.0):.3f}")
+        sections.append(f"- DBSCAN: {metrics.get('dbscan_weight', 0.0):.3f}")
+        sections.append(f"- GNN: {metrics.get('gnn_weight', 0.0):.3f}")
+        sections.append(f"- XGBoost: {metrics.get('xgboost_weight', 0.0):.3f}")
 
         if ctx.validation_results.get("optuna_used"):
             sections.append("\n### Hasil Optimasi Optuna:\n")
-            opt_metrics = ctx.validation_results['optimized_metrics']
+            opt_metrics = ctx.validation_results.get('optimized_metrics', {})
             sections.append(f"- False Positive Rate: {opt_metrics.get('fpr', 0):.2%}")
             sections.append(f"- Precision: {opt_metrics.get('precision', 0):.2%}")
             sections.append(f"- Recall: {opt_metrics.get('recall', 0):.2%}")
@@ -369,19 +388,19 @@ Metode seleksi fitur yang digunakan ({ctx.feature_info['selection_method']}) ber
         recommendations.append("## Rekomendasi\n")
 
         # Dataset recommendations
-        if ctx.dataset_info['total_samples'] < 1000:
+        if ctx.dataset_info.get('total_samples', 0) < 1000:
             recommendations.append("### Dataset:")
             recommendations.append("- Pertimbangkan untuk menambah ukuran dataset untuk meningkatkan generalisasi model")
             recommendations.append("- Dataset kecil mungkin menyebabkan overfitting")
 
         # Feature recommendations
-        if ctx.dataset_info['feature_reduction_pct'] > 50:
+        if ctx.dataset_info.get('feature_reduction_pct', 0) > 50:
             recommendations.append("### Fitur:")
             recommendations.append("- Reduksi fitur yang signifikan (>50%) - verifikasi bahwa fitur penting tidak tereliminasi")
             recommendations.append("- Pertimbangkan untuk menggunakan metode seleksi fitur yang lebih konservatif")
 
         # Model recommendations
-        n_algos = len(ctx.model_config['algorithms_used'])
+        n_algos = len(ctx.model_config.get('algorithms_used', []))
         if n_algos == 1:
             recommendations.append("### Model:")
             recommendations.append("- Hanya menggunakan satu algoritma - pertimbangkan ensemble untuk robustness")
@@ -391,7 +410,7 @@ Metode seleksi fitur yang digunakan ({ctx.feature_info['selection_method']}) ber
 
         # Performance recommendations
         if ctx.validation_results.get("optuna_used"):
-            fpr_red = ctx.validation_results['fpr_reduction']
+            fpr_red = ctx.validation_results.get('fpr_reduction', 0.0)
             if fpr_red < 10:
                 recommendations.append("### Optimasi:")
                 recommendations.append("- Optimasi bobot ensemble hanya memberikan sedikit peningkatan (<10%)")

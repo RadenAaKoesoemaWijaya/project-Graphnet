@@ -27,7 +27,8 @@
 - **Multi-Provider LLM**: Google Gemini (2.x, 2.5.x, 3.x), OpenAI, Local Ollama, Offline Heuristic Engine
 - **RAG Knowledge Base**: FAISS vector search dengan regulasi medis (ICD-10, CPT, JKN)
 - **Auto BAP Generation**: Pembuatan Berita Acara Pemeriksaan (BAP) formal secara otomatis
-- **Model Interpretation**: Laporan naratif training model dengan AI generatif dan PDF export
+- **Model Interpretation**: Laporan naratif training model dengan AI generatif dan PDF export lengkap
+- **PDF Report dengan Grafik & Tabel**: Laporan PDF berisi semua grafik (pie chart, GNN visualization) dan tabel (metrik model, hasil optimasi) dari pelatihan
 - **PII Masking**: Proteksi data sensitif sesuai UU PDP dan HIPAA
 
 ### 🔐 Enterprise Security
@@ -283,7 +284,74 @@ export GEMINI_API_KEY="your-api-key"
 
 ---
 
-## 🔧 Troubleshooting
+## � Laporan PDF Pelatihan Model
+
+### Fitur Laporan PDF
+
+ASTINA menyediakan fitur laporan PDF komprehensif yang berisi:
+- **Ringkasan Eksekutif**: Gambaran singkat hasil pelatihan model
+- **Analisis Dataset**: Informasi ukuran dataset, preprocessing, dan fitur
+- **Analisis Fitur**: Detail seleksi fitur dan metode yang digunakan
+- **Arsitektur Model**: Konfigurasi ensemble dan algoritma yang dilatih
+- **Proses Pelatihan**: Konfigurasi hyperparameter dan alur pelatihan
+- **Metrik Performa**: Status model dan distribusi bobot ensemble
+- **Rekomendasi**: Saran untuk pengembangan model selanjutnya
+- **Grafik Visual**:
+  - 📊 Pie chart distribusi bobot ensemble
+  - 🕸️ Visualisasi jaringan anomali GNN (jika GNN dilatih)
+- **Tabel Data**:
+  - 📋 Tabel metrik model lengkap (status, bobot, detail)
+  - 📈 Tabel hasil optimasi Optuna (jika digunakan)
+
+### Cara Menggunakan Laporan PDF
+
+1. **Selesaikan Pelatihan Model**
+   - Buka halaman **Pelatihan Model**
+   - Upload dan preprocessing data
+   - Konfigurasi dan jalankan training
+
+2. **Generate Laporan Interpretasi**
+   - Setelah training selesai, klik **"🚀 Generate Laporan Interpretasi"**
+   - Pilih provider AI (heuristic/gemini/openai/ollama)
+   - Sistem akan otomatis menangkap semua grafik dan tabel
+
+3. **Unduh PDF**
+   - Klik **"📄 Unduh Laporan Interpretasi (PDF)"**
+   - PDF akan diunduh dengan nama: `ASTINA_Model_Training_Report_YYYYMMDD_HHMMSS.pdf`
+
+### Konten Laporan PDF
+
+Laporan PDF secara otomatis menyertakan:
+
+**📊 Grafik yang Disertakan:**
+- **Distribusi Bobot Ensemble**: Pie chart menampilkan persentase kontribusi setiap algoritma (Isolation Forest, Autoencoder, GNN, XGBoost)
+- **Visualisasi Jaringan Anomali GNN**: Network graph menampilkan node anomali (seed) dan tetangga 1-hopnya dengan skor GNN
+
+**📋 Tabel yang Disertakan:**
+- **Tabel Metrik Model**: Status pelatihan, bobot ensemble, dan detail konfigurasi untuk setiap algoritma
+- **Tabel Hasil Optimasi Optuna**: Perbandingan metrik sebelum dan sesudah optimasi (FPR, Precision, Recall, F1-Score)
+
+**📝 Bagian Naratif:**
+- Ringkasan eksekutif dengan analisis AI generatif (jika provider AI aktif)
+- Analisis dataset dan preprocessing
+- Analisis fitur dan seleksi
+- Arsitektur model ensemble
+- Proses pelatihan dan hyperparameter
+- Metrik performa dan hasil optimasi
+- Rekomendasi untuk pengembangan selanjutnya
+
+### Provider AI untuk Laporan
+
+| Provider | Deskripsi | Kelebihan |
+|----------|-----------|-----------|
+| **heuristic** | Mode offline tanpa API key | Cepat, tidak perlu koneksi internet |
+| **gemini** | Google Gemini 2.x, 2.5.x, 3.x | Laporan naratif yang lebih kaya dan akurat |
+| **openai** | OpenAI GPT models | Integrasi dengan ekosistem OpenAI |
+| **ollama** | Local LLM (Llama, Mistral, dll) | Privacy dan kontrol penuh data |
+
+---
+
+## �🔧 Troubleshooting
 
 ### Error: "PyTorch tidak tersedia"
 ```bash
@@ -318,9 +386,15 @@ pip install torch-geometric==2.6.0
 - ✅ Improved error handling with stack trace
 - ✅ Added Gemini 2.x, 2.5.x, 3.x model support
 - ✅ Improved LLM connection test with detailed troubleshooting
+- ✅ Fixed PDF generation with charts and tables
+- ✅ Fixed reportlab style conflicts and alignment issues
 
 **Fitur Baru:**
-- 📄 Tombol download laporan PDF untuk training model
+- 📄 Laporan PDF lengkap dengan grafik dan tabel dari pelatihan model
+- 📊 Grafik distribusi bobot ensemble dalam PDF (pie chart)
+- 🕸️ Visualisasi jaringan anomali GNN dalam PDF
+- 📋 Tabel metrik model lengkap dalam PDF
+- 📈 Tabel hasil optimasi Optuna dalam PDF
 - 🤖 Model Gemini 2, 2.5, dan 3 tersedia
 - 🔧 Improved configuration validation
 
@@ -341,6 +415,6 @@ Untuk pertanyaan atau bantuan:
 
 ---
 
-**Last Updated**: 2026-10-25  
-**Version**: 2.0.0  
+**Last Updated**: 2026-10-25
+**Version**: 2.1.0
 **Status**: Production Ready ✅

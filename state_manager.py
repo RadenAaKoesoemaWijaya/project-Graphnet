@@ -128,6 +128,11 @@ def hydrate_processed_data_reference_from_cache(file_hash):
 
 def reset_downstream_state():
     """Clear data-dependent state so a newly processed dataset starts from a clean pipeline."""
+    # Check if training is in progress before clearing
+    if st.session_state.get('training_in_progress', False):
+        logger.warning("Cannot reset downstream state while training is in progress")
+        return False
+    
     keys_to_clear = [
         'train_df',
         'validation_df',
@@ -171,10 +176,16 @@ def reset_downstream_state():
         'last_drift_detected',  # Clear drift detection status
         'drift_detector',  # Clear drift detector instance
     ]
-    for key in keys_to_clear:
-        st.session_state.pop(key, None)
     
-    logger.info("Downstream state reset completed")
+    # Validate each key exists before clearing to avoid KeyError
+    cleared_count = 0
+    for key in keys_to_clear:
+        if key in st.session_state:
+            st.session_state.pop(key, None)
+            cleared_count += 1
+    
+    logger.info(f"Downstream state reset completed: {cleared_count}/{len(keys_to_clear)} keys cleared")
+    return True
 
 def validate_session_state(required_keys, context=""):
     """
@@ -440,3 +451,102 @@ def split_processed_dataset_with_validation(df_processed, test_size=0.2, validat
     if min(len(train_df), len(validation_df), len(test_df)) == 0:
         raise ValueError("Split menghasilkan partisi kosong.")
     return train_df, validation_df, test_df, stratify_label
+
+
+def monitor_memory_usage(log_interval: int = 5) -> dict[str, float]:
+    """
+    Monitor current memory usage of the application
+    
+    Args:
+        log_interval: Only log if interval minutes passed since last log
+    
+    Returns:
+        Dictionary with memory statistics
+    """
+    try:
+        import psutil
+        from datetime import datetime, timedelta
+    except ImportError:
+        logger.warning("psutil not available, skipping memory monitoring")
+        return {}
+    
+    process = psutil.Process()
+    memory_info = process.memory_info()
+    system_memory = psutil.virtual_memory()
+    
+    stats = {
+        'process_rss_mb': memory_info.rss / 1024 / 1024,
+        'process_vms_mb': memory_info.vms / 1024 / 1024,
+        'system_total_mb': system_memory.total / 1024 / 1024,
+        'system_available_mb': system_memory.available / 1024 / 1024,
+        'system_percent': system_memory.percent,
+        'timestamp': datetime.now().isoformat()
+    }
+    
+    # Log at interval
+    last_log_key = '_last_memory_log_time'
+    if last_log_key not in st.session_state:
+        st.session_state[last_log_key] = datetime.now() - timedelta(minutes=log_interval + 1)
+    
+    if datetime.now() - st.session_state[last_log_key] > timedelta(minutes=log_interval):
+        logger.info(
+            f"Memory: Process RSS={stats['process_rss_mb']:.2f}MB, "
+            f"System Available={stats['system_available_mb']:.2f}MB ({stats['system_percent']:.1f}%)"
+        )
+        st.session_state[last_log_key] = datetime.now()
+    
+    # Warn if memory critical
+    if stats['system_percent'] > 90:
+        logger.warning(f"CRITICAL: System memory usage {stats['system_percent']:.1f}%")
+    
+    return stats
+
+
+def safe_state_update(key: str, value: any, validate_type: bool = True) -> bool:
+    """
+    Safely update session state with validation
+    
+    Args:
+        key: Session state key
+        value: Value to set
+        validate_type: Whether to validate type consistency
+    
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        # Check if key exists and validate type
+        if key in st.session_state and validate_type:
+            existing_value = st.session_state[key]
+            if existing_value is not None and value is not None:
+                if type(existing_value) != type(value):
+                    logger.warning(
+                        f"Type mismatch for '{key}': existing={type(existing_value)}, "
+                        f"new={type(value)}. Update may cause issues."
+                    )
+        
+        st.session_state[key] = value
+        logger.debug(f"Updated session state: {key}")
+        return True
+    
+    except Exception as e:
+        logger.error(f"Failed to update session state '{key}': {e}")
+        return False
+
+
+def safe_state_get(key: str, default: any = None) -> any:
+    """
+    Safely get value from session state with default
+    
+    Args:
+        key: Session state key
+        default: Default value if key not found
+    
+    Returns:
+        Value from session state or default
+    """
+    try:
+        return st.session_state.get(key, default)
+    except Exception as e:
+        logger.error(f"Failed to get session state '{key}': {e}")
+        return default

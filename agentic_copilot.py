@@ -420,8 +420,8 @@ class AgenticInvestigatorCopilot:
                     actor=str(context.get('claim_id', 'unknown_claim')),
                     details={"reason": guard_detail, "blocked_query": user_question[:100]}
                 )
-            except Exception:
-                pass
+            except Exception as audit_err:
+                logger.error(f"Failed to log audit trail for blocked query: {audit_err}")
             return (
                 "⚠️ **[SECURITY ALERT - AKSES DITOLAK]**\n\n"
                 "Pertanyaan Anda terdeteksi melanggar kebijakan keamanan siber sistem ASTINA "

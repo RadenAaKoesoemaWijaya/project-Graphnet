@@ -28,6 +28,18 @@ if not hasattr(sys, 'get_int_max_str_digits'):
     sys.get_int_max_str_digits = lambda: 4300
     sys.set_int_max_str_digits = lambda maxdigits: None
 
+# Validate configuration and environment
+try:
+    from config_validator import run_all_validations
+    is_valid, errors = run_all_validations()
+    if not is_valid:
+        st.error("❌ Configuration/Environment validation failed:")
+        for error in errors:
+            st.error(f"  - {error}")
+        st.stop()
+except ImportError:
+    logger.warning("config_validator not found, skipping validation")
+
 # Configure thread pool and streaming limits to prevent memory exhaustion and crashes
 max_threads = str(min(4, max(1, (os.cpu_count() or 2) // 2)))
 os.environ.setdefault("POLARS_MAX_THREADS", max_threads)

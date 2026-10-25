@@ -9,6 +9,8 @@ import json
 import os
 import time
 import logging
+import base64
+from io import BytesIO
 try:
     import torch
     _TORCH_AVAILABLE = True
@@ -19,10 +21,21 @@ except (ImportError, OSError, Exception):
     _TORCH_AVAILABLE = False
 from ui.utils import *
 from state_manager import *
+from state_manager import monitor_memory_usage
 
 logger = logging.getLogger(__name__)
 
 _TRAINING_JOB_LOCK = threading.Lock()
+
+
+def plotly_to_bytes(fig, format='png', width=1200, height=800, scale=2):
+    """Convert a Plotly figure to bytes for PDF embedding."""
+    try:
+        img_bytes = fig.to_image(format=format, width=width, height=height, scale=scale)
+        return img_bytes
+    except Exception as e:
+        logger.warning(f"Failed to convert plotly figure to bytes: {e}")
+        return None
 
 
 def _write_training_status(status_path, payload):
@@ -507,10 +520,24 @@ def show_training_page():
                 st.error("❌ Training sedang berjalan. Tunggu hingga selesai atau refresh halaman.")
                 return
 
-            # Ensure train_df and test_df are available
-            if 'train_df' not in st.session_state or 'test_df' not in st.session_state:
-                st.error("❌ Data latih/test belum tersedia. Silakan coba lagi atau refresh halaman.")
+            # Validate prerequisites using helper function
+            training_prerequisites = {
+                'df_processed_path': 'required',
+                'feature_columns': 'required',
+                'train_df': 'required',
+                'test_df': 'required'
+            }
+            is_valid, error_msg = validate_button_action(training_prerequisites, "start training")
+            if not is_valid:
+                st.error(error_msg)
                 return
+
+            # Monitor memory before training
+            memory_stats = monitor_memory_usage()
+            if memory_stats.get('system_percent', 0) > 85:
+                st.warning(f"⚠️ System memory usage high ({memory_stats['system_percent']:.1f}%). Training may be slow.")
+                if not st.checkbox("Lanjutkan training meskipun peringatan memori?", key="continue_high_memory"):
+                    return
 
             train_df = st.session_state['train_df']
             test_df = st.session_state['test_df']
@@ -1269,6 +1296,208 @@ def show_training_page():
                                     training_metadata=training_metadata
                                 )
 
+                                # Capture charts for PDF
+                                # 1. Ensemble weights pie chart
+                                models_used = []
+                                weights = []
+                                if detector.isolation_weight > 0:
+                                    models_used.append("Isolation Forest")
+                                    weights.append(detector.isolation_weight)
+                                if detector.autoencoder_weight > 0:
+                                    models_used.append("Autoencoder")
+                                    weights.append(detector.autoencoder_weight)
+                                if detector.dbscan_weight > 0:
+                                    models_used.append("DBSCAN")
+                                    weights.append(detector.dbscan_weight)
+                                if detector.gnn_weight > 0:
+                                    models_used.append("GNN")
+                                    weights.append(detector.gnn_weight)
+                                if detector.xgboost_weight > 0:
+                                    models_used.append("XGBoost")
+                                    weights.append(detector.xgboost_weight)
+
+                                if sum(weights) > 0:
+                                    pie_fig = px.pie(
+                                        names=models_used,
+                                        values=weights,
+                                        title="Distribusi Bobot Ensemble Model",
+                                        hole=0.4,
+                                        color_discrete_sequence=px.colors.qualitative.Pastel
+                                    )
+                                    pie_fig.update_traces(textposition='inside', textinfo='percent+label')
+                                    pie_bytes = plotly_to_bytes(pie_fig)
+                                    if pie_bytes:
+                                        interpreter.add_chart(context, 'ensemble_weights', pie_bytes)
+
+                                # 2. GNN subgraph visualization if available
+                                _sub = st.session_state.get('gnn_anomaly_subgraph')
+                                if detector.gnn_weight > 0 and hasattr(detector, 'gnn_model') and detector.gnn_model is not None and _sub is not None:
+                                    try:
+                                        import networkx as nx
+                                        sub_node_ids = _sub['sub_node_ids']
+                                        sub_node_labels = _sub.get('node_labels') or [f"Graph node {node_id}" for node_id in sub_node_ids]
+                                        sub_ei = _sub['sub_edge_index']
+                                        sub_et = _sub['sub_edge_type']
+                                        sub_scores = _sub['sub_scores']
+                                        is_seed = _sub['is_seed']
+                                        n_total_nodes = _sub['n_total_nodes']
+                                        n_total_edges = _sub['n_total_edges']
+                                        top_k_used = _sub['top_k_used']
+                                        n_sub = len(sub_node_ids)
+
+                                        # Create compact visualization for PDF
+                                        keep_list = list(range(min(n_sub, 100)))  # Limit to 100 nodes for PDF
+                                        local_remap = {old: new for new, old in enumerate(keep_list)}
+                                        n_viz = len(keep_list)
+
+                                        G_viz = nx.Graph()
+                                        G_viz.add_nodes_from(range(n_viz))
+
+                                        if sub_ei.shape[1] > 0:
+                                            s_arr, d_arr = sub_ei[0], sub_ei[1]
+                                            in_keep_src = np.isin(s_arr, keep_list)
+                                            in_keep_dst = np.isin(d_arr, keep_list)
+                                            valid_edges = in_keep_src & in_keep_dst
+                                            viz_src = np.array([local_remap[v] for v in s_arr[valid_edges]])
+                                            viz_dst = np.array([local_remap[v] for v in d_arr[valid_edges]])
+
+                                            for u, v in zip(viz_src.tolist(), viz_dst.tolist()):
+                                                if u != v:
+                                                    G_viz.add_edge(u, v)
+
+                                        if n_viz <= 60:
+                                            pos = nx.kamada_kawai_layout(G_viz)
+                                        else:
+                                            pos = nx.spring_layout(G_viz, seed=42, k=0.5, iterations=30)
+
+                                        # Create node traces
+                                        scores_viz = sub_scores[keep_list]
+                                        is_seed_viz = is_seed[keep_list]
+
+                                        node_x = [pos[i][0] for i in range(n_viz)]
+                                        node_y = [pos[i][1] for i in range(n_viz)]
+                                        node_colors = ['red' if is_seed_viz[i] else 'blue' for i in range(n_viz)]
+                                        node_sizes = [15 if is_seed_viz[i] else 8 for i in range(n_viz)]
+
+                                        gnn_fig = go.Figure(data=go.Scatter(
+                                            x=node_x,
+                                            y=node_y,
+                                            mode='markers',
+                                            marker=dict(
+                                                size=node_sizes,
+                                                color=node_colors,
+                                                line=dict(width=1, color='black')
+                                            ),
+                                            text=[f"Score: {scores_viz[i]:.3f}" for i in range(n_viz)],
+                                            hoverinfo='text+x+y'
+                                        ))
+
+                                        # Add edges
+                                        edge_x = []
+                                        edge_y = []
+                                        for edge in G_viz.edges():
+                                            x0, y0 = pos[edge[0]]
+                                            x1, y1 = pos[edge[1]]
+                                            edge_x.extend([x0, x1, None])
+                                            edge_y.extend([y0, y1, None])
+
+                                        gnn_fig.add_trace(go.Scatter(
+                                            x=edge_x, y=edge_y,
+                                            mode='lines',
+                                            line=dict(width=0.5, color='gray'),
+                                            hoverinfo='none'
+                                        ))
+
+                                        gnn_fig.update_layout(
+                                            title=f"Visualisasi Jaringan Anomali GNN ({n_viz} node)",
+                                            showlegend=False,
+                                            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                                            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                                            margin=dict(b=20, l=20, r=20, t=60),
+                                            height=600
+                                        )
+
+                                        gnn_bytes = plotly_to_bytes(gnn_fig)
+                                        if gnn_bytes:
+                                            interpreter.add_chart(context, 'gnn_subgraph', gnn_bytes)
+                                    except Exception as e:
+                                        logger.warning(f"Failed to capture GNN visualization for PDF: {e}")
+
+                                # 3. Model metrics table
+                                model_metrics_table = [
+                                    ['Model', 'Status', 'Bobot', 'Detail'],
+                                ]
+                                if detector.isolation_weight > 0:
+                                    model_metrics_table.append([
+                                        'Isolation Forest',
+                                        '✅ Trained',
+                                        f"{detector.isolation_weight:.3f}",
+                                        f"Contamination: {iso_contamination}"
+                                    ])
+                                if detector.autoencoder_weight > 0:
+                                    model_metrics_table.append([
+                                        'Autoencoder',
+                                        '✅ Trained',
+                                        f"{detector.autoencoder_weight:.3f}",
+                                        f"Encoding Dim: {ae_encoding_dim}"
+                                    ])
+                                if detector.dbscan_weight > 0:
+                                    model_metrics_table.append([
+                                        'DBSCAN',
+                                        '✅ Trained',
+                                        f"{detector.dbscan_weight:.3f}",
+                                        f"eps: {dbscan_eps}"
+                                    ])
+                                if detector.gnn_weight > 0:
+                                    if hasattr(detector, 'gnn_model') and detector.gnn_model is not None:
+                                        model_metrics_table.append([
+                                            'GNN',
+                                            '✅ Trained',
+                                            f"{detector.gnn_weight:.3f}",
+                                            f"Hidden: {gnn_hidden}, Heads: {gnn_heads}"
+                                        ])
+                                    else:
+                                        model_metrics_table.append([
+                                            'GNN',
+                                            '⚠️ Skipped',
+                                            f"{detector.gnn_weight:.3f}",
+                                            'Model not initialized'
+                                        ])
+                                if detector.xgboost_weight > 0:
+                                    if hasattr(detector, 'xgboost_model') and detector.xgboost_model is not None:
+                                        model_metrics_table.append([
+                                            'XGBoost',
+                                            '✅ Trained',
+                                            f"{detector.xgboost_weight:.3f}",
+                                            f"Estimators: {xgb_n_estimators}"
+                                        ])
+                                    else:
+                                        model_metrics_table.append([
+                                            'XGBoost',
+                                            '⚠️ Skipped',
+                                            f"{detector.xgboost_weight:.3f}",
+                                            'Model not initialized'
+                                        ])
+
+                                interpreter.add_table(context, 'model_metrics', model_metrics_table)
+
+                                # 4. Optimization results table if available
+                                if getattr(detector, 'weight_optimization_results', None):
+                                    opt_res = detector.weight_optimization_results
+                                    cmp = opt_res.get('metric_comparison', {})
+                                    def_m = cmp.get('default', {})
+                                    opt_m = cmp.get('optimized', {})
+                                    fpr_red = cmp.get('fpr_reduction_pct', 0.0)
+
+                                    opt_table = [
+                                        ['Metrik', 'Default', 'Optimized', 'Perubahan'],
+                                        ['False Positive Rate', f"{def_m.get('fpr', 0):.2%}", f"{opt_m.get('fpr', 0):.2%}", f"{-fpr_red:.1f}%"],
+                                        ['Precision', f"{def_m.get('precision', 0):.2%}", f"{opt_m.get('precision', 0):.2%}", f"{(opt_m.get('precision', 0) - def_m.get('precision', 0)):.2%}"],
+                                        ['Recall', f"{def_m.get('recall', 0):.2%}", f"{opt_m.get('recall', 0):.2%}", f"{(opt_m.get('recall', 0) - def_m.get('recall', 0)):.2%}"],
+                                        ['F1-Score', f"{def_m.get('f1', 0):.2%}", f"{opt_m.get('f1', 0):.2%}", f"{(opt_m.get('f1', 0) - def_m.get('f1', 0)):.2%}"],
+                                    ]
+                                    interpreter.add_table(context, 'optimization_results', opt_table)
+
                                 # Generate report
                                 report = interpreter.generate_training_report(context, language="id")
 
@@ -1314,7 +1543,9 @@ def show_training_page():
                                 from pdf_generator import generate_training_report_pdf
 
                                 report_data = st.session_state['model_interpretation_report']
-                                pdf_buffer = generate_training_report_pdf(report_data)
+                                charts = report_data.get('charts', {})
+                                tables = report_data.get('tables', {})
+                                pdf_buffer = generate_training_report_pdf(report_data, charts=charts, tables=tables)
 
                                 st.download_button(
                                     label="⬇️ Klik untuk Mengunduh PDF",

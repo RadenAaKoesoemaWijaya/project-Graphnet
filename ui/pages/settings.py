@@ -79,8 +79,12 @@ def show_settings_page():
                     type="password",
                     key="settings_apikey_widget",
                     on_change=update_api_key,
-                    help="Masukkan API key dari provider. Key akan disimpan di session state."
+                    help="Masukkan API key dari provider. Key akan disimpan di session state. Format: string minimal 20 karakter."
                 )
+                
+                # Validate API key format
+                if api_key_input and len(api_key_input) < 20:
+                    st.warning("⚠️ API key terlalu pendek. Gunakan API key yang valid dari provider.")
                 
                 # API Key help text
                 if "Gemini" in provider_choice:

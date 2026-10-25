@@ -76,6 +76,32 @@ warnings.filterwarnings('ignore')
 TRAINING_MODE_UNSUPERVISED = "unsupervised"
 TRAINING_MODE_SUPERVISED = "supervised"
 
+def validate_button_action(prerequisites: dict[str, any], action_name: str) -> tuple[bool, str]:
+    """
+    Validate prerequisites before executing button action
+    
+    Args:
+        prerequisites: Dictionary of {key: value} to check in session state
+        action_name: Name of the action for error messages
+    
+    Returns:
+        (is_valid, error_message)
+    """
+    missing = []
+    for key, expected_value in prerequisites.items():
+        if key not in st.session_state:
+            missing.append(f"'{key}' not in session state")
+        elif expected_value == 'required' and st.session_state[key] is None:
+            missing.append(f"'{key}' is None")
+        elif expected_value is not None and expected_value != 'required' and st.session_state[key] != expected_value:
+            missing.append(f"'{key}' has unexpected value")
+    
+    if missing:
+        error_msg = f"❌ Cannot {action_name}: " + ", ".join(missing)
+        return False, error_msg
+    
+    return True, ""
+
 def sample_dataframe_for_visualization(df, max_rows=VISUALIZATION_SAMPLE_SIZE, random_state=42):
     """Return a bounded, deterministic DataFrame sample for charts and previews."""
     if df is None:

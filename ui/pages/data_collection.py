@@ -5,6 +5,7 @@ import os
 import hashlib
 from ui.utils import *
 from state_manager import *
+from ui.utils import validate_button_action
 from data_validator import validate_parquet_dataset
 from rate_limit import check_upload_quota, increment_quota
 from cache_manager import get_file_hash
@@ -682,6 +683,14 @@ def show_data_collection_page():
                 
                 # Button to use filtered dataset for preprocessing
                 if st.button("✅ Gunakan Dataset Terfilter untuk Preprocessing", key="use_filtered"):
+                    # Validate prerequisites
+                    prerequisites = {
+                        'df_filtered': 'required'
+                    }
+                    is_valid, error_msg = validate_button_action(prerequisites, "use filtered dataset")
+                    if not is_valid:
+                        st.error(error_msg)
+                        return
                     # Save filtered dataset to temp parquet
                     import uuid
                     import tempfile
