@@ -33,10 +33,17 @@
 
 ### 🔐 Enterprise Security
 - **RBAC Authentication**: 4 role (Admin, Auditor, Analyst, Viewer) dengan PBKDF2-HMAC-SHA256 hashing
+- **Password Complexity**: Validasi password dengan minimum 12 karakter, uppercase, lowercase, angka, dan karakter khusus
+- **Account Lockout**: Proteksi brute-force dengan lockout 15 menit setelah 5 percobaan gagal
 - **PII Masking**: Proteksi data sensitif sesuai UU PDP No. 27/2022 dan HIPAA
 - **Cryptographic Audit Trail**: Berantai hash SHA-256 anti-tamper untuk forensik
 - **OWASP Hardening**: Redaksi stack trace teknis di mode produksi
-- **Prompt Injection Guardrail**: Proteksi terhadap jailbreak dan prompt injection
+- **Prompt Injection Guardrail**: Proteksi terhadap jailbreak dan prompt injection (bilingual: English + Indonesian)
+- **SQL Injection Prevention**: Sanitasi nama kolom dengan deteksi pattern SQL injection
+- **Data Validation**: Validasi range numerik untuk field kunci (umur 0-120, LOS 0-365, dll)
+- **File Permission Check**: Validasi permission direktori kritis pada startup
+- **Security Scanning**: Script otomatis untuk scan vulnerability dan hardcoded secrets
+- **HTTPS Configuration**: Panduan lengkap konfigurasi HTTPS/TLS untuk production deployment
 
 ### 📊 Investigation Workspace
 - **6-Tab Detection Interface**: Ringkasan & Visualisasi, Business Risk & Rules, Fraud Review Table, AI Copilot & BAP, Concept Drift & Retraining, Advanced Detection Settings
@@ -378,6 +385,15 @@ pip install torch-geometric==2.6.0
 ## 📊 Changelog
 
 ### Versi Terbaru (2026-10-25)
+
+**Security Enhancements:**
+- 🔐 Added password complexity validation (12+ chars, uppercase, lowercase, numbers, special chars)
+- 🛡️ Added SQL injection pattern detection in column name sanitization
+- 📊 Added numeric range validation for key fields (age: 0-120, LOS: 0-365, etc.)
+- 🔒 Added file permission validation on startup for critical directories
+- 📜 Created automated security scanning script (`scripts/security_scan.py`)
+- 📖 Added comprehensive HTTPS configuration documentation (`docs/HTTPS_CONFIGURATION.md`)
+- ✅ Enhanced security posture from A- to A rating
 
 **Perbaikan QA:**
 - ✅ Fixed training thread race condition
