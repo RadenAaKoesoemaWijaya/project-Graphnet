@@ -40,6 +40,49 @@ try:
 except ImportError:
     logger.warning("config_validator not found, skipping validation")
 
+# Validate file permissions for security directories
+def validate_file_permissions():
+    """Validate that critical directories have appropriate permissions."""
+    import stat
+    from pathlib import Path
+    
+    critical_dirs = ['models', 'cache', 'logs', 'studies']
+    warnings = []
+    
+    for dir_name in critical_dirs:
+        dir_path = Path(dir_name)
+        if not dir_path.exists():
+            dir_path.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Created directory: {dir_name}")
+            continue
+        
+        try:
+            # Check directory permissions
+            mode = dir_path.stat().st_mode
+            # On Unix, check if directory is writable
+            if os.name != 'nt':  # Unix-like systems
+                if not (mode & stat.S_IWUSR):
+                    warnings.append(f"Directory {dir_name} is not writable by owner")
+                # Warn if group/others have write permission (security risk)
+                if (mode & stat.S_IWGRP) or (mode & stat.S_IWOTH):
+                    warnings.append(f"Directory {dir_name} has write permission for group/others (security risk)")
+        except Exception as e:
+            logger.warning(f"Could not check permissions for {dir_name}: {e}")
+    
+    if warnings:
+        logger.warning("File permission warnings: " + "; ".join(warnings))
+        if os.getenv('ASTINA_ENVIRONMENT', '').lower() in ('production', 'prod'):
+            logger.error("File permission issues detected in production mode")
+            return False
+    
+    return True
+
+try:
+    if not validate_file_permissions():
+        st.warning("⚠️ File permission warnings detected. Check logs for details.")
+except Exception as e:
+    logger.warning(f"File permission validation failed: {e}")
+
 # Configure thread pool and streaming limits to prevent memory exhaustion and crashes
 max_threads = str(min(4, max(1, (os.cpu_count() or 2) // 2)))
 os.environ.setdefault("POLARS_MAX_THREADS", max_threads)

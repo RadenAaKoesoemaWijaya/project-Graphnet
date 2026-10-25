@@ -77,6 +77,19 @@ class DataSanitizer:
         if not isinstance(name, str):
             name = str(name)
         
+        # Check for SQL injection patterns first
+        sql_injection_patterns = [
+            r'(?i)(\bor\b|\band\b|;|--|\/\*|\*\/)',
+            r'(?i)(drop|delete|insert|update|select|union|exec|execute)',
+            r'(?i)(script|javascript|onerror|onload|onclick)',
+            r'(?i)(<script|<iframe|<object|<embed)',
+        ]
+        
+        for pattern in sql_injection_patterns:
+            if re.search(pattern, name):
+                logger.warning(f"SQL injection pattern detected in column name: {name}. Replacing with safe name.")
+                name = re.sub(pattern, '', name)
+        
         # Remove special characters except alphanumeric and underscore
         sanitized = re.sub(r'[^a-zA-Z0-9_]', '_', name)
         
@@ -237,13 +250,50 @@ class DataValidator:
         """
         results = {
             'outliers': [],
-            'suspicious_values': []
+            'suspicious_values': [],
+            'range_violations': []
         }
         
         numeric_cols = df.select_dtypes(include=[np.number]).columns
         
+        # Define expected ranges for known fields
+        field_ranges = {
+            'age': (0, 120),
+            'patient_age': (0, 120),
+            'length_of_stay': (0, 365),
+            'los': (0, 365),
+            'quantity': (0, 1000),
+            'amount': (0, 1e9),  # Up to 1 billion
+            'billed_amount': (0, 1e9),
+            'paid_amount': (0, 1e9),
+            'allowed_amount': (0, 1e9),
+        }
+        
         for col in numeric_cols:
             try:
+                # Check specific field ranges
+                col_lower = col.lower()
+                for field_name, (min_val, max_val) in field_ranges.items():
+                    if field_name in col_lower:
+                        below_min = (df[col] < min_val).sum()
+                        above_max = (df[col] > max_val).sum()
+                        
+                        if below_min > 0:
+                            results['range_violations'].append({
+                                'column': col,
+                                'issue': 'below_minimum',
+                                'minimum': min_val,
+                                'count': below_min
+                            })
+                        
+                        if above_max > 0:
+                            results['range_violations'].append({
+                                'column': col,
+                                'issue': 'above_maximum',
+                                'maximum': max_val,
+                                'count': above_max
+                            })
+                
                 # Check for extreme values using IQR method
                 Q1 = df[col].quantile(0.25)
                 Q3 = df[col].quantile(0.75)
@@ -264,7 +314,7 @@ class DataValidator:
                         })
                 
                 # Check for negative values in columns that shouldn't have them
-                if any(keyword in col.lower() for keyword in ['amount', 'price', 'cost', 'age', 'count']):
+                if any(keyword in col_lower for keyword in ['amount', 'price', 'cost', 'age', 'count', 'quantity']):
                     negative_count = (df[col] < 0).sum()
                     if negative_count > 0:
                         results['suspicious_values'].append({

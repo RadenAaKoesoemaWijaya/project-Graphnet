@@ -13,6 +13,7 @@ import hmac
 import secrets
 import time
 import logging
+import re
 from typing import Dict, Any, List, Optional, Tuple
 import streamlit as st
 
@@ -34,6 +35,37 @@ _DEV_DEFAULT_PASSWORDS: Dict[str, str] = {
 }
 
 
+def validate_password_complexity(password: str) -> Tuple[bool, str]:
+    """
+    Validate password complexity requirements.
+    
+    Requirements:
+    - Minimum 12 characters
+    - At least 1 uppercase letter
+    - At least 1 lowercase letter
+    - At least 1 number
+    - At least 1 special character (!@#$%^&*()_+-=[]{}|;:,.<>?)
+    
+    Returns: (is_valid, error_message)
+    """
+    if not password or len(password) < 12:
+        return False, "Password harus memiliki minimal 12 karakter."
+    
+    if not re.search(r'[A-Z]', password):
+        return False, "Password harus memiliki minimal 1 huruf kapital (A-Z)."
+    
+    if not re.search(r'[a-z]', password):
+        return False, "Password harus memiliki minimal 1 huruf kecil (a-z)."
+    
+    if not re.search(r'\d', password):
+        return False, "Password harus memiliki minimal 1 angka (0-9)."
+    
+    if not re.search(r'[!@#$%^&*()_+\-=\[\]{}|;:,.<>?]', password):
+        return False, "Password harus memiliki minimal 1 karakter khusus (!@#$%^&*()_+-=[]{}|;:,.<>?)."
+    
+    return True, ""
+
+
 def validate_production_auth_configuration() -> None:
     """Fail closed when a production deployment lacks mandatory authentication."""
     environment = os.getenv(
@@ -48,14 +80,28 @@ def validate_production_auth_configuration() -> None:
             "Deployment produksi ditolak: AUTH_ENABLED harus bernilai true."
         )
 
-    missing = [
-        env_key for env_key in _AUTH_PASSWORD_ENV_MAP.values()
-        if len(os.getenv(env_key, "").strip()) < 12
-    ]
+    missing = []
+    weak_passwords = []
+    
+    for env_key in _AUTH_PASSWORD_ENV_MAP.values():
+        password = os.getenv(env_key, "").strip()
+        if not password:
+            missing.append(env_key)
+        else:
+            is_valid, error_msg = validate_password_complexity(password)
+            if not is_valid:
+                weak_passwords.append(f"{env_key}: {error_msg}")
+    
     if missing:
         raise RuntimeError(
-            "Deployment produksi ditolak: kredensial minimum 12 karakter belum "
-            f"dikonfigurasi untuk: {', '.join(missing)}."
+            "Deployment produksi ditolak: kredensial belum dikonfigurasi untuk: "
+            f"{', '.join(missing)}."
+        )
+    
+    if weak_passwords:
+        raise RuntimeError(
+            "Deployment produksi ditolak: password tidak memenuhi requirement kompleksitas:\n"
+            f"{chr(10).join(weak_passwords)}"
         )
 
 
