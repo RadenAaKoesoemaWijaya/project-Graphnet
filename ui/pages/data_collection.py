@@ -24,6 +24,7 @@ from large_file_processor import (
     prepare_train_validation_test_parquet,
     preprocess_dataset_with_train_only_stats,
 )
+from metadata_analyzer import MetadataAnalyzer, RulePriority
 
 def load_and_validate_raw_data(uploaded_files, add_source_column=True):
     """
@@ -351,6 +352,108 @@ def show_data_collection_page():
             
             # Info about filtering
             st.info("💡 Gunakan fitur filter di bawah untuk menyaring dataset sebelum preprocessing (opsional).")
+            
+            # NEW: Metadata Analysis Section
+            st.markdown("---")
+            st.subheader("Analisis Metadata & Kecukupan Fitur")
+            st.info("Analisis otomatis kecukupan fitur dataset terhadap 9 rules bisnis deteksi fraud ASTINA.")
+            
+            # Option to upload manual metadata
+            with st.expander("Upload Metadata Manual (Opsional)", expanded=False):
+                metadata_file = st.file_uploader(
+                    "Upload metadata file (JSON/YAML)",
+                    type=["json", "yaml", "yml"],
+                    help="Upload metadata untuk enrichment analisis (opsional). Jika tidak diupload, sistem akan auto-detect."
+                )
+                
+                manual_metadata = None
+                if metadata_file:
+                    try:
+                        import json
+                        import yaml
+                        if metadata_file.name.endswith('.json'):
+                            manual_metadata = json.load(metadata_file)
+                        else:
+                            manual_metadata = yaml.safe_load(metadata_file)
+                        st.success(f"Metadata manual dimuat: {metadata_file.name}")
+                    except Exception as e:
+                        st.error(f"Gagal memuat metadata: {e}")
+                        manual_metadata = None
+            
+            # Run metadata analysis
+            try:
+                with st.spinner("Menganalisis metadata..."):
+                    analyzer = MetadataAnalyzer()
+                    analysis_result = analyzer.analyze_dataset(df, manual_metadata)
+                
+                # Display analysis results
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Fitur Tersedia", f"{analysis_result.features_available}/{analysis_result.total_features_required}")
+                with col2:
+                    st.metric("Rules Aktif", f"{len(analysis_result.rules_enabled)}/9")
+                with col3:
+                    avg_coverage = sum(analysis_result.rule_coverage.values()) / 9
+                    st.metric("Coverage Rata-rata", f"{avg_coverage:.1%}")
+                
+                # Display column mapping
+                st.markdown("### Mapping Kolom User → Kolom Kanonikal")
+                if analysis_result.column_mapping:
+                    mapping_data = []
+                    for user_col, canonical in analysis_result.column_mapping.items():
+                        confidence = analysis_result.mapping_confidence.get(user_col, 0)
+                        conf_status = "High" if confidence >= 0.9 else "Medium" if confidence >= 0.7 else "Low"
+                        mapping_data.append({
+                            "Kolom User": user_col,
+                            "Kolom Kanonikal": canonical,
+                            "Confidence": f"{confidence:.0%}",
+                            "Status": conf_status
+                        })
+                    st.dataframe(pd.DataFrame(mapping_data), hide_index=True, width='stretch')
+                else:
+                    st.warning("Tidak ada kolom yang terdeteksi secara otomatis. Pastikan nama kolom sesuai dengan semantic mapping.")
+                
+                # Display missing features
+                if analysis_result.features_missing:
+                    st.markdown("### Fitur yang Kurang")
+                    for feature in analysis_result.features_missing:
+                        req = analyzer.CANONICAL_COLUMNS[feature]
+                        from metadata_analyzer import RulePriority
+                        priority_label = "CRITICAL" if req.priority == RulePriority.CRITICAL else "IMPORTANT"
+                        affected_rules = ", ".join([f"Rule {r}" for r in req.required_by_rules])
+                        st.warning(f"{priority_label}: **{feature}** ({req.data_type}) - Required by: {affected_rules}")
+                else:
+                    st.success("Semua fitur yang diperlukan tersedia!")
+                
+                # Display rule coverage
+                st.markdown("### Coverage per Rule")
+                rule_coverage_data = []
+                for rule_id, coverage in analysis_result.rule_coverage.items():
+                    rule_name = analyzer._get_rule_name(rule_id)
+                    status = "Aktif" if coverage >= 0.5 else "Tidak Aktif"
+                    rule_coverage_data.append({
+                        "Rule": f"Rule {rule_id}",
+                        "Nama": rule_name,
+                        "Coverage": f"{coverage:.1%}",
+                        "Status": status
+                    })
+                st.dataframe(pd.DataFrame(rule_coverage_data), hide_index=True, width='stretch')
+                
+                # Display recommendations
+                st.markdown("### Rekomendasi Preprocessing")
+                for i, rec in enumerate(analysis_result.recommendations, 1):
+                    st.info(f"{i}. {rec}")
+                
+                # Button to save analysis
+                if st.button("Simpan Analisis Metadata", key="save_metadata"):
+                    st.session_state['metadata_analysis'] = analysis_result
+                    st.session_state['column_mapping'] = analysis_result.column_mapping
+                    st.success("Analisis metadata disimpan! Mapping akan digunakan di preprocessing.")
+            
+            except Exception as e:
+                st.error(f"❌ Error saat analisis metadata: {e}")
+                logger.error(f"Metadata analysis error: {e}")
+
 
             # Log data upload to audit trail (only once per unique upload key)
             if st.session_state.get('last_logged_upload_key') != raw_cache_key:
@@ -837,6 +940,8 @@ def show_data_collection_page():
                         import gc
                         gc.collect()
 
+                        # Get column mapping from metadata analysis if available
+                        column_mapping = st.session_state.get('column_mapping', None)
                         result = preprocess_dataset_with_train_only_stats(
                             input_target,
                             enable_outlier_detection=st.session_state.get('enable_outlier_detection', True),
@@ -844,6 +949,7 @@ def show_data_collection_page():
                             test_size=preprocessing_test_size / 100,
                             validation_size=preprocessing_validation_size / 100,
                             drop_columns=columns_to_drop,
+                            column_mapping=column_mapping,
                         )
                         for temporary_path in temporary_input_paths:
                             if os.path.exists(temporary_path):

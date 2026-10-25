@@ -602,11 +602,14 @@ def show_detection_page():
                             "initial_features", []
                         )
                     else:
+                        # Get column mapping from metadata analysis if available
+                        column_mapping = st.session_state.get('column_mapping', None)
                         df_processed, feature_columns_proc, _ = preprocess_insurance_claims_optimized(
                             raw_df,
                             enable_large_file_handling=st.session_state.get('enable_large_file_handling', True),
                             enable_outlier_detection=st.session_state.get('enable_outlier_detection', True),
-                            enable_data_validation=st.session_state.get('enable_data_validation', True)
+                            enable_data_validation=st.session_state.get('enable_data_validation', True),
+                            column_mapping=column_mapping
                         )
                     st.session_state['detection_processed_df'] = df_processed
                     st.session_state['detection_feature_columns'] = feature_columns_proc
@@ -681,10 +684,31 @@ def show_detection_page():
 
                 # 6. Integrated Claim Risk Pipeline (9 Business Rules + Composite Scoring)
                 from fraud_risk_pipeline import run_integrated_claim_risk_pipeline
+                
+                # Get disabled rules from metadata analysis if available
+                metadata_analysis = st.session_state.get('metadata_analysis', None)
+                disabled_rules = None
+                if metadata_analysis and hasattr(metadata_analysis, 'rules_disabled'):
+                    # Map rule IDs to rule names used in pipeline
+                    rule_id_to_name = {
+                        1: "repeat_billing",
+                        2: "phantom_service",
+                        3: "provider_capacity",
+                        4: "duplicate_payment",
+                        5: "upcoding_unbundling",
+                        6: "inflated_bill_cloning",
+                        7: "prolonged_stay_readmission",
+                        8: "medication_device_fraud",
+                        9: "fuzzy_similarity",
+                    }
+                    disabled_rules = [rule_id_to_name.get(rid) for rid in metadata_analysis.rules_disabled if rid in rule_id_to_name]
+                    disabled_rules = [r for r in disabled_rules if r is not None]
+                
                 df_risk, risk_summary = run_integrated_claim_risk_pipeline(
                     df_result,
                     ml_scores=probabilities,
                     risk_threshold=threshold,
+                    disabled_rules=disabled_rules,
                 )
                 df_result = df_risk
                 df_result["analysis_scope"] = (

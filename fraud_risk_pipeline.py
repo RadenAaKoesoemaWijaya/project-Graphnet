@@ -148,7 +148,7 @@ def derive_risk_category(row: pd.Series) -> str:
     return 'Normal / Low Risk'
 
 
-def enrich_claims_with_business_risk_features(df: pd.DataFrame, enable_phase2: bool = True) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+def enrich_claims_with_business_risk_features(df: pd.DataFrame, enable_phase2: bool = True, disabled_rules: Optional[List[str]] = None) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     clean = normalize_claims_dataframe(df)
     if clean.empty:
         return clean, {
@@ -279,14 +279,19 @@ def enrich_claims_with_business_risk_features(df: pd.DataFrame, enable_phase2: b
 
     # Dynamic Weight Re-normalization (Circuit Breaker)
     readiness = SchemaHarmonizer.evaluate_rule_readiness(clean)
+    
+    # Override readiness with metadata analysis if available
+    # This allows disabling rules based on user's metadata analysis decisions
+    metadata_analysis_disabled_rules = disabled_rules if disabled_rules else []
+    
     active_weights: Dict[str, float] = {}
-    if readiness.get("repeat_billing", {}).get("ready", True):
+    if readiness.get("repeat_billing", {}).get("ready", True) and "repeat_billing" not in metadata_analysis_disabled_rules:
         active_weights["repeat_billing"] = 0.40
-    if readiness.get("phantom_service", {}).get("ready", True):
+    if readiness.get("phantom_service", {}).get("ready", True) and "phantom_service" not in metadata_analysis_disabled_rules:
         active_weights["phantom_service"] = 0.20
-    if readiness.get("provider_capacity", {}).get("ready", True):
+    if readiness.get("provider_capacity", {}).get("ready", True) and "provider_capacity" not in metadata_analysis_disabled_rules:
         active_weights["provider_capacity"] = 0.15
-    if readiness.get("fuzzy_similarity", {}).get("ready", True):
+    if readiness.get("fuzzy_similarity", {}).get("ready", True) and "fuzzy_similarity" not in metadata_analysis_disabled_rules:
         active_weights["fuzzy_similarity"] = 0.15
 
     # Additional fraud is active if any of its sub-modules is ready
@@ -431,6 +436,7 @@ def run_integrated_claim_risk_pipeline(
     ml_model=None,
     ml_scores=None,
     risk_threshold: float = 0.65,
+    disabled_rules: Optional[List[str]] = None,
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     if not 0.0 <= float(risk_threshold) <= 1.0:
         raise ValueError("risk_threshold harus berada pada rentang 0 sampai 1.")
@@ -450,7 +456,7 @@ def run_integrated_claim_risk_pipeline(
             "final_high_risk_claims": 0,
         }
 
-    enriched, summary = enrich_claims_with_business_risk_features(df)
+    enriched, summary = enrich_claims_with_business_risk_features(df, disabled_rules=disabled_rules)
     validator = ClaimStatusValidator(db_connection=db_connection)
     status_flags = []
     for idx, claim in enriched.iterrows():

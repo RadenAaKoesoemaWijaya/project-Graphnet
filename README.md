@@ -18,6 +18,7 @@ Aplikasi ini dilengkapi antarmuka interaktif berbasis **Streamlit**, mendukung i
 
 ### 🔄 Smart Data Processing
 - **Semantic Schema Harmonizer**: Penyelarasan otomatis sinonim kolom bahasa Indonesia/standar medis ke kolom kanonikal
+- **Metadata Analysis System (NEW)**: Analisis otomatis kecukupan fitur dataset terhadap 9 rules bisnis deteksi fraud dengan gap analysis dan rekomendasi preprocessing
 - **Pydantic Data Validation**: Type-safe validation dengan automatic validators untuk claim data (Phase 1)
 - **Circuit Breaker**: Evaluasi kesiapan aturan bisnis otomatis dengan bobot dinamis
 - **Multi-Format Ingestion**: Dukungan CSV, Excel (.xlsx, .xls), dan Parquet dengan streaming chunk processing
@@ -104,6 +105,7 @@ project-Graphnet/
 ├── auth_manager.py                  # Autentikasi RBAC & PBKDF2 hashing
 ├── config.py                        # Konfigurasi global
 ├── schema_harmonizer.py             # Harmonizer skema & semantic aliasing
+├── metadata_analyzer.py             # Analisis kecukupan fitur terhadap 9 rules bisnis
 ├── fraud_risk_pipeline.py           # Pipeline skoring risiko hybrid
 ├── preprocessing_optimized.py       # Preprocessing & feature engineering
 ├── model.py                         # Arsitektur ML Ensemble (IF, AE, XGB, GNN)
@@ -312,15 +314,39 @@ Sistem otomatis menyelaraskan sinonim kolom bahasa Indonesia:
 - `lama_rawat` → `length_of_stay`
 - Dan banyak lagi...
 
+### Metadata Analysis System (NEW)
+
+Sistem analisis otomatis kecukupan fitur dataset terhadap 9 rules bisnis deteksi fraud:
+
+**Fitur Utama:**
+- Auto-detect mapping kolom user ke kolom kanonikal (50+ variasi nama kolom)
+- Gap analysis untuk fitur yang kurang dengan prioritas (CRITICAL, HIGH, MEDIUM)
+- Coverage analysis per rule (berdasarkan fitur yang tersedia)
+- Rekomendasi preprocessing spesifik untuk dataset Anda
+- Support manual metadata upload (JSON/YAML) untuk custom mapping
+- Integrasi otomatis dengan preprocessing dan detection pipeline
+
+**Dokumentasi Lengkap:**
+- Lihat `METADATA_ANALYSIS_GUIDE.md` untuk panduan penggunaan lengkap
+- Lihat `METADATA_ANALYSIS_DESIGN.md` untuk desain teknis
+
+**Workflow:**
+1. Upload dataset di halaman "Unggah Data Transaksi"
+2. Sistem otomatis analisis metadata dan mapping kolom
+3. Review gap analysis dan rekomendasi
+4. Simpan analisis untuk digunakan di preprocessing
+5. Rules dengan coverage < 50% otomatis disabled di detection
+
 ---
 
 ## 🧠 Alur Kerja
 
 ```mermaid
 flowchart TD
-    A[Data Klaim Mentah] --> B[Pydantic Data Validation]
-    B --> C[Validasi & ID Unik]
-    C --> D[Preprocessing & Feature Engineering]
+    A[Data Klaim Mentah] --> B[Metadata Analysis]
+    B --> C[Pydantic Data Validation]
+    C --> D[Validasi & ID Unik]
+    D --> E[Preprocessing & Feature Engineering]
     D --> E[ML Ensemble Detection]
     D --> F[GNN Analysis]
     D --> G[Business Rules Audit]

@@ -425,6 +425,7 @@ def preprocess_large_dataset(
     enable_outlier_detection=True,
     enable_data_validation=True,
     drop_columns=None,
+    column_mapping=None,
 ):
     """
     Optimized streaming preprocessing for large datasets with bounded memory consumption.
@@ -432,6 +433,14 @@ def preprocess_large_dataset(
     """
     temp_input_created = False
     drop_set = set(drop_columns) if drop_columns else set()
+    column_mapping_applied = {}
+    
+    # Apply column mapping if DataFrame is provided
+    if isinstance(df_or_path, pd.DataFrame) and column_mapping:
+        for user_col, canonical_col in column_mapping.items():
+            if user_col in df_or_path.columns and canonical_col not in df_or_path.columns:
+                df_or_path = df_or_path.rename(columns={user_col: canonical_col})
+                column_mapping_applied[user_col] = canonical_col
     
     if isinstance(df_or_path, str) and os.path.exists(df_or_path):
         parquet_input_path = df_or_path
@@ -686,8 +695,15 @@ def preprocess_dataset_with_train_only_stats(
     test_size=0.2,
     validation_size=0.15,
     drop_columns=None,
+    column_mapping=None,
 ):
     """Fit preprocessing statistics on train rows and transform all rows consistently."""
+    # Apply column mapping if input is DataFrame
+    if isinstance(input_data, pd.DataFrame) and column_mapping:
+        for user_col, canonical_col in column_mapping.items():
+            if user_col in input_data.columns and canonical_col not in input_data.columns:
+                input_data = input_data.rename(columns={user_col: canonical_col})
+    
     partitioned_path, owns_partitioned_path = prepare_train_validation_test_parquet(
         input_data,
         test_size=test_size,

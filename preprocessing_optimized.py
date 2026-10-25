@@ -557,6 +557,7 @@ def preprocess_insurance_claims_optimized(
     enable_outlier_detection=True,
     enable_data_validation=True,
     drop_columns=None,
+    column_mapping=None,
 ):
     """
     Enhanced preprocessing with large file support - adapts to any dataset structure
@@ -567,6 +568,7 @@ def preprocess_insurance_claims_optimized(
         enable_outlier_detection: Enable outlier detection and handling
         enable_data_validation: Enable data range validation
         drop_columns: Optional list of columns to exclude/drop before preprocessing
+        column_mapping: Optional dict mapping user columns to canonical columns
     
     Returns:
         df_processed: Processed dataframe
@@ -582,6 +584,7 @@ def preprocess_insurance_claims_optimized(
             enable_outlier_detection=enable_outlier_detection,
             enable_data_validation=enable_data_validation,
             drop_columns=drop_columns,
+            column_mapping=column_mapping,
         )
 
     if enable_large_file_handling and len(df) > 50000:
@@ -590,10 +593,20 @@ def preprocess_insurance_claims_optimized(
             enable_outlier_detection=enable_outlier_detection,
             enable_data_validation=enable_data_validation,
             drop_columns=drop_columns,
+            column_mapping=column_mapping,
         )
     
     # Original preprocessing for smaller datasets
     df_processed = df
+    
+    # Apply column mapping if provided (from metadata analyzer)
+    column_mapping_applied = {}
+    if column_mapping:
+        for user_col, canonical_col in column_mapping.items():
+            if user_col in df_processed.columns and canonical_col not in df_processed.columns:
+                df_processed = df_processed.rename(columns={user_col: canonical_col})
+                column_mapping_applied[user_col] = canonical_col
+    
     if drop_set:
         cols_to_drop = [c for c in drop_set if c in df_processed.columns]
         if cols_to_drop:
@@ -945,7 +958,9 @@ def preprocess_insurance_claims_optimized(
         'validation_metadata': validation_metadata,
         'processing_method': 'optimized_standard_with_validation',
         'outlier_detection_enabled': enable_outlier_detection,
-        'data_validation_enabled': enable_data_validation
+        'data_validation_enabled': enable_data_validation,
+        'column_mapping_applied': column_mapping_applied,
+        'column_mapping_count': len(column_mapping_applied)
     }
     
     return df_processed, final_features, preprocessing_metadata
