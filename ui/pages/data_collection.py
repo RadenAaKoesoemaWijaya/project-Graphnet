@@ -19,24 +19,20 @@ from file_handler import (
     show_file_size_warning, save_processed_data, remove_duplicates_from_parquet,
     normalize_upload_type, check_ingest_resources,
     merge_multiple_raw_parquets, ingest_multiple_files_to_raw_parquet,
-    validate_join_columns, estimate_merge_size,
 )
 from large_file_processor import (
     prepare_train_validation_test_parquet,
     preprocess_dataset_with_train_only_stats,
 )
 
-def load_and_validate_raw_data(uploaded_files, add_source_column=True, merge_mode="diagonal", join_columns=None, join_type="inner"):
+def load_and_validate_raw_data(uploaded_files, add_source_column=True):
     """
-    Ingest single or multiple uploaded files, merge into a master Parquet dataset,
-    and run comprehensive validation.
+    Ingest single or multiple uploaded files, merge into a master Parquet dataset
+    using diagonal concat, and run comprehensive validation.
     
     Args:
         uploaded_files: Uploaded file object(s)
         add_source_column: Whether to add source_file column
-        merge_mode: 'diagonal' or 'key_based'
-        join_columns: List of columns for key-based join
-        join_type: Type of join (inner, left, outer, cross)
     """
     if not isinstance(uploaded_files, (list, tuple)):
         file_list = [uploaded_files]
@@ -62,9 +58,6 @@ def load_and_validate_raw_data(uploaded_files, add_source_column=True, merge_mod
         raw_parquet_path, total_rows, schema_dict, summaries = ingest_multiple_files_to_raw_parquet(
             file_list,
             add_source_column=add_source_column if len(file_list) > 1 else False,
-            merge_mode=merge_mode,
-            join_columns=join_columns,
-            join_type=join_type,
             progress_callback=on_progress,
         )
 
@@ -225,166 +218,18 @@ def show_data_collection_page():
             is_multi_file = len(uploaded_files) > 1
 
             if is_multi_file:
-                st.markdown("#### 🔗 Integrasi & Penggabungan Multi-Dataset")
-                
-                # Mode selection
-                col_m1, col_m2 = st.columns([2, 1])
+                st.markdown("#### 🔗 Integrasi Multi-Dataset")
+                col_m1, col_m2 = st.columns([3, 2])
                 with col_m1:
-                    merge_mode = st.radio(
-                        "Mode Penggabungan",
-                        options=["Diagonal Concat (Stacking)", "Key-Based Join (Enrichment)"],
-                        help=(
-                            "Diagonal: Menumpuk semua baris dari semua file. "
-                            "Key-Based: Menggabungkan berdasarkan kesamaan nilai kolom tertentu."
-                        ),
-                        horizontal=True
-                    )
-                
+                    st.info(f"📂 Terdeteksi **{len(uploaded_files)} file** diunggah. Seluruh berkas akan digabungkan secara streaming (*zero-RAM spike*) menjadi satu dataset master terpadu.")
                 with col_m2:
                     add_source_col = st.checkbox(
                         "🏷️ Sertakan kolom 'source_file'",
                         value=True,
-                        help="Menyertakan nama file sumber pada tiap baris"
+                        help="Menyertakan nama file sumber pada tiap baris transaksi untuk memudahkan penelusuran asal data pada audit trail."
                     )
-                
-                # Key-based merge options
-                join_columns = None
-                join_type = "inner"
-                
-                if merge_mode == "Key-Based Join (Enrichment)":
-                    st.markdown("##### 🔑 Konfigurasi Key-Based Merge")
-                    
-                    # Show column preview for each uploaded file
-                    st.markdown("###### 📋 Preview Kolom dari Setiap Dataset")
-                    
-                    file_columns_info = []
-                    all_available_columns = set()
-                    
-                    try:
-                        for idx, uploaded_file in enumerate(uploaded_files):
-                            fname = uploaded_file.name
-                            ftype = normalize_upload_type("", fname)
-                            
-                            # Use Polars scan to get schema without full ingest
-                            try:
-                                # Create temp path for this file
-                                temp_result = ingest_file_to_raw_parquet(
-                                    uploaded_file,
-                                    ftype,
-                                    progress_callback=None
-                                )
-                                temp_path = temp_result[0] if isinstance(temp_result, tuple) else temp_result
-                                
-                                # Get schema using Polars (lazy, no data load)
-                                lf = pl.scan_parquet(temp_path)
-                                schema = lf.collect_schema()
-                                file_columns = list(schema.names())
-                                
-                                file_columns_info.append({
-                                    "file_name": fname,
-                                    "columns": file_columns,
-                                    "column_count": len(file_columns)
-                                })
-                                
-                                all_available_columns.update(file_columns)
-                                
-                                # Clean up temp file
-                                os.unlink(temp_path)
-                                
-                            except Exception as e:
-                                st.warning(f"⚠️ Gagal membaca kolom dari {fname}: {e}")
-                                file_columns_info.append({
-                                    "file_name": fname,
-                                    "columns": [],
-                                    "column_count": 0,
-                                    "error": str(e)
-                                })
-                        
-                        # Display column preview in a table
-                        if file_columns_info:
-                            preview_data = []
-                            for info in file_columns_info:
-                                cols_str = ", ".join(info["columns"][:5]) + ("..." if len(info["columns"]) > 5 else "")
-                                preview_data.append({
-                                    "📁 File": info["file_name"],
-                                    "📊 Jumlah Kolom": info["column_count"],
-                                    "📋 Kolom (Preview)": cols_str
-                                })
-                            
-                            st.dataframe(pd.DataFrame(preview_data), hide_index=True, width='stretch')
-                            
-                            # Show intersection of columns (common columns across all files)
-                            if len(file_columns_info) > 1:
-                                common_columns = set(file_columns_info[0]["columns"])
-                                for info in file_columns_info[1:]:
-                                    common_columns = common_columns.intersection(set(info["columns"]))
-                                
-                                if common_columns:
-                                    st.success(f"✅ Kolom yang sama di semua file ({len(common_columns)}): {', '.join(sorted(common_columns))}")
-                                    st.info("💡 Kolom yang sama ini cocok digunakan sebagai join key.")
-                                else:
-                                    st.warning("⚠️ Tidak ada kolom yang sama di semua file. Pastikan dataset memiliki kolom yang relevan untuk join.")
-                        
-                        # Show all unique columns across all files
-                        available_columns = sorted(list(all_available_columns))
-                        
-                        if available_columns:
-                            st.info(f"📋 Total kolom unik di semua file: {len(available_columns)}")
-                            
-                            # Multi-select for join columns
-                            join_columns = st.multiselect(
-                                "Pilih Kolom Join (Key)",
-                                options=available_columns,
-                                help="Pilih satu atau lebih kolom sebagai kunci untuk penggabungan",
-                                max_selections=5
-                            )
-                            
-                            if not join_columns:
-                                st.warning("⚠️ Pilih minimal 1 kolom join untuk mode Key-Based.")
-                                st.stop()
-                            
-                            # Join type selection
-                            join_type = st.selectbox(
-                                "Tipe Join",
-                                options=["inner", "left", "outer", "cross"],
-                                index=0,
-                                help=(
-                                    "Inner: Hanya baris dengan key cocok di semua dataset. "
-                                    "Left: Semua baris dari dataset pertama. "
-                                    "Outer: Semua baris dari semua dataset. "
-                                    "Cross: Cartesian product (hati-hati dengan data besar)."
-                                )
-                            )
-                            
-                            # Show join type explanation
-                            join_explanations = {
-                                "inner": "✅ Hanya baris dengan key yang cocok di SEMUA dataset",
-                                "left": "⬅️ Semua baris dari dataset pertama + yang cocok dari dataset lain",
-                                "outer": "🔲 Semua baris dari SEMUA dataset (dengan NULL untuk yang tidak cocok)",
-                                "cross": "❌ Cartesian product (baris1 × baris2) - HATI-HATI: bisa sangat besar!"
-                            }
-                            st.info(join_explanations.get(join_type, ""))
-                            
-                            # Warning for cross join
-                            if join_type == "cross":
-                                st.error("⚠️ CROSS JOIN dapat menghasilkan dataset yang sangat besar!")
-                                confirm_cross = st.checkbox("Saya mengerti risikonya dan ingin melanjutkan", value=False)
-                                if not confirm_cross:
-                                    st.stop()
-                        else:
-                            st.error("❌ Tidak dapat menampilkan kolom dari file yang diunggah.")
-                            st.stop()
-                    except Exception as e:
-                        st.error(f"❌ Error saat membaca kolom file: {e}")
-                        st.stop()
-                else:
-                    # Diagonal concat mode (default)
-                    st.info(f"📂 Terdeteksi **{len(uploaded_files)} file** diunggah. Seluruh berkas akan digabungkan secara streaming (*zero-RAM spike*) menjadi satu dataset master terpadu.")
             else:
                 add_source_col = False
-                merge_mode = "diagonal"
-                join_columns = None
-                join_type = "inner"
 
             # Show file info metrics
             if not is_multi_file:
@@ -427,10 +272,12 @@ def show_data_collection_page():
                     st.dataframe(pd.DataFrame(file_table_data), hide_index=True, width='stretch')
 
             # Clear old processing state if new file selection uploaded
-            merge_config = f":mode={merge_mode}:join={','.join(join_columns) if join_columns else 'none'}:type={join_type}"
-            current_files_key = ";".join(f"{f.name}:{f.size}" for f in uploaded_files) + f":source={add_source_col}{merge_config}"
+            current_files_key = ";".join(f"{f.name}:{f.size}" for f in uploaded_files) + f":source={add_source_col}"
             if st.session_state.get('last_uploaded_filename') != current_files_key:
                 st.session_state.pop('df_processed_path', None)
+                st.session_state.pop('df_filtered', None)
+                st.session_state.pop('is_filtered', None)
+                st.session_state.pop('filter_applied', None)
                 for cache_key in (
                     'raw_data_cache_key', 'raw_data_cache_df',
                     'raw_data_cache_path', 'raw_data_cache_sample',
@@ -469,13 +316,7 @@ def show_data_collection_page():
                         is_valid,
                         validation_results,
                         summaries,
-                    ) = load_and_validate_raw_data(
-                        uploaded_files, 
-                        add_source_column=add_source_col,
-                        merge_mode=merge_mode,
-                        join_columns=join_columns,
-                        join_type=join_type
-                    )
+                    ) = load_and_validate_raw_data(uploaded_files, add_source_column=add_source_col)
 
                 st.session_state['raw_data_cache_key'] = raw_cache_key
                 st.session_state['raw_data_cache_path'] = raw_parquet_path
@@ -504,11 +345,12 @@ def show_data_collection_page():
                 return
 
             if is_multi_file:
-                merge_mode_display = "Key-Based Join" if merge_mode == "key_based" else "Diagonal Concat"
-                join_info = f" (key: {', '.join(join_columns)}, type: {join_type})" if merge_mode == "key_based" else ""
-                st.success(f"✅ Seluruh {len(uploaded_files)} file berhasil digabungkan ({merge_mode_display}{join_info}) dan divalidasi! Total baris: {total_rows:,}, Jumlah kolom: {total_cols}")
+                st.success(f"✅ Seluruh {len(uploaded_files)} file berhasil digabungkan dan divalidasi! Total baris: {total_rows:,}, Jumlah kolom: {total_cols}")
             else:
                 st.success(f"✅ File berhasil dimuat dan divalidasi! Jumlah baris: {total_rows:,}, Jumlah kolom: {total_cols}")
+            
+            # Info about filtering
+            st.info("💡 Gunakan fitur filter di bawah untuk menyaring dataset sebelum preprocessing (opsional).")
 
             # Log data upload to audit trail (only once per unique upload key)
             if st.session_state.get('last_logged_upload_key') != raw_cache_key:
@@ -595,6 +437,167 @@ def show_data_collection_page():
                         fig = create_correlation_heatmap(corr, title="Peta Korelasi (20 Fitur Numerik Teratas)")
                         if fig is not None:
                             st.plotly_chart(fig, width='stretch')
+            
+            # NEW: Filter Dataset Section (after successful load)
+            st.markdown("---")
+            st.subheader("🔍 Filter Dataset Berdasarkan Nilai Kolom")
+            st.info("Filter dataset yang sudah digabungkan berdasarkan nilai kolom tertentu (seperti WHERE clause di SQL).")
+            
+            # Load full dataset for filtering (not just sample)
+            st.info("⚠️ Dataset akan dimuat secara penuh untuk filter. Pastikan RAM mencukupi.")
+            
+            # Column selection for filtering
+            filter_column = st.selectbox(
+                "Pilih Kolom untuk Filter",
+                options=["-- Pilih Kolom --"] + list(df.columns),
+                help="Pilih kolom yang ingin digunakan sebagai filter"
+            )
+            
+            if filter_column != "-- Pilih Kolom --":
+                col_dtype = str(df[filter_column].dtype)
+                st.info(f"📊 Tipe data kolom '{filter_column}': {col_dtype}")
+                
+                # Show unique values for categorical columns
+                if df[filter_column].nunique() <= 50:
+                    unique_values = sorted(df[filter_column].dropna().unique().tolist())
+                    st.info(f"📋 Nilai unik di kolom ini ({len(unique_values)}): {', '.join(map(str, unique_values[:10]))}{'...' if len(unique_values) > 10 else ''}")
+                
+                # Filter based on data type
+                if col_dtype in ['int64', 'int32', 'int16', 'int8', 'float64', 'float32']:
+                    # Numeric filter
+                    filter_type = st.selectbox(
+                        "Tipe Filter",
+                        options=["= (Sama)", "> (Lebih Besar)", "< (Lebih Kecil)", ">=", "<=", "Bertween"],
+                        index=0
+                    )
+                    
+                    if filter_type == "Bertween":
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            min_val = st.number_input("Nilai Minimum", value=float(df[filter_column].min()))
+                        with col2:
+                            max_val = st.number_input("Nilai Maximum", value=float(df[filter_column].max()))
+                        
+                        if st.button("🔎 Terapkan Filter", key="filter_numeric_between"):
+                            filtered_df = df[(df[filter_column] >= min_val) & (df[filter_column] <= max_val)]
+                            st.success(f"✅ Filter diterapkan! {len(filtered_df):,} baris dari {len(df):,} baris ({len(filtered_df)/len(df)*100:.1f}%)")
+                            st.session_state['df_filtered'] = filtered_df
+                            st.session_state['is_filtered'] = True
+                            st.session_state['filter_applied'] = f"{filter_column} BETWEEN {min_val} AND {max_val}"
+                    
+                    elif filter_type in ["=", ">", "<", ">=", "<="]:
+                        filter_value = st.number_input(
+                            f"Nilai untuk Filter ({filter_type})",
+                            value=float(df[filter_column].median())
+                        )
+                        
+                        if st.button("🔎 Terapkan Filter", key="filter_numeric_single"):
+                            if filter_type == "=":
+                                filtered_df = df[df[filter_column] == filter_value]
+                            elif filter_type == ">":
+                                filtered_df = df[df[filter_column] > filter_value]
+                            elif filter_type == "<":
+                                filtered_df = df[df[filter_column] < filter_value]
+                            elif filter_type == ">=":
+                                filtered_df = df[df[filter_column] >= filter_value]
+                            elif filter_type == "<=":
+                                filtered_df = df[df[filter_column] <= filter_value]
+                            
+                            st.success(f"✅ Filter diterapkan! {len(filtered_df):,} baris dari {len(df):,} baris ({len(filtered_df)/len(df)*100:.1f}%)")
+                            st.session_state['df_filtered'] = filtered_df
+                            st.session_state['is_filtered'] = True
+                            st.session_state['filter_applied'] = f"{filter_column} {filter_type} {filter_value}"
+                
+                else:
+                    # Categorical/String filter
+                    st.info("📝 Filter untuk kolom kategorikal/teks")
+                    
+                    filter_method = st.radio(
+                        "Metode Filter",
+                        options=["Sama dengan (Exact Match)", "Mengandung (Contains)", "Di antara (In List)"],
+                        horizontal=True
+                    )
+                    
+                    if filter_method == "Sama dengan (Exact Match)":
+                        unique_values = sorted(df[filter_column].dropna().unique().tolist())
+                        if unique_values:
+                            filter_value = st.selectbox(
+                                "Pilih Nilai",
+                                options=["-- Pilih Nilai --"] + unique_values
+                            )
+                            
+                            if filter_value != "-- Pilih Nilai --" and st.button("🔎 Terapkan Filter", key="filter_exact"):
+                                filtered_df = df[df[filter_column] == filter_value]
+                                st.success(f"✅ Filter diterapkan! {len(filtered_df):,} baris dari {len(df):,} baris ({len(filtered_df)/len(df)*100:.1f}%)")
+                                st.session_state['df_filtered'] = filtered_df
+                                st.session_state['is_filtered'] = True
+                                st.session_state['filter_applied'] = f"{filter_column} = '{filter_value}'"
+                    
+                    elif filter_method == "Mengandung (Contains)":
+                        filter_text = st.text_input("Masukkan teks yang dicari (case-sensitive)")
+                        
+                        if filter_text and st.button("🔎 Terapkan Filter", key="filter_contains"):
+                            filtered_df = df[df[filter_column].astype(str).str.contains(filter_text, na=False)]
+                            st.success(f"✅ Filter diterapkan! {len(filtered_df):,} baris dari {len(df):,} baris ({len(filtered_df)/len(df)*100:.1f}%)")
+                            st.session_state['df_filtered'] = filtered_df
+                            st.session_state['is_filtered'] = True
+                            st.session_state['filter_applied'] = f"{filter_column} LIKE '%{filter_text}%'"
+                    
+                    elif filter_method == "Di antara (In List)":
+                        unique_values = sorted(df[filter_column].dropna().unique().tolist())
+                        selected_values = st.multiselect(
+                            "Pilih Nilai yang Diinginkan",
+                            options=unique_values,
+                            max_selections=10
+                        )
+                        
+                        if selected_values and st.button("🔎 Terapkan Filter", key="filter_in_list"):
+                            filtered_df = df[df[filter_column].isin(selected_values)]
+                            st.success(f"✅ Filter diterapkan! {len(filtered_df):,} baris dari {len(df):,} baris ({len(filtered_df)/len(df)*100:.1f}%)")
+                            st.session_state['df_filtered'] = filtered_df
+                            st.session_state['is_filtered'] = True
+                            st.session_state['filter_applied'] = f"{filter_column} IN ({', '.join(map(str, selected_values))})"
+            
+            # Show filtered data or reset filter
+            if st.session_state.get('is_filtered', False):
+                st.markdown("---")
+                st.success(f"🎯 Filter Aktif: {st.session_state.get('filter_applied', '')}")
+                
+                col_filter1, col_filter2 = st.columns([3, 1])
+                with col_filter1:
+                    st.info(f"📊 Dataset terfilter: {len(st.session_state['df_filtered']):,} baris")
+                with col_filter2:
+                    if st.button("🔄 Reset Filter", key="reset_filter"):
+                        st.session_state.pop('df_filtered', None)
+                        st.session_state.pop('is_filtered', None)
+                        st.session_state.pop('filter_applied', None)
+                        st.rerun()
+                
+                # Show filtered data preview
+                st.subheader("Preview Data Terfilter")
+                st.dataframe(st.session_state['df_filtered'].head(20))
+                
+                # Button to use filtered dataset for preprocessing
+                if st.button("✅ Gunakan Dataset Terfilter untuk Preprocessing", key="use_filtered"):
+                    # Save filtered dataset to temp parquet
+                    import uuid
+                    import tempfile
+                    filtered_path = os.path.join(
+                        tempfile.gettempdir(),
+                        f"filtered_{uuid.uuid4().hex}.parquet"
+                    )
+                    st.session_state['df_filtered'].to_parquet(filtered_path, index=False, compression="zstd")
+                    st.session_state['df_processed_path'] = filtered_path
+                    st.session_state['use_filtered_data'] = True
+                    st.success(f"✅ Dataset terfilter ({len(st.session_state['df_filtered']):,} baris) disimpan untuk preprocessing")
+                    st.info("🚀 Lanjut ke halaman Pelatihan Model untuk preprocessing dan training")
+            else:
+                # Button to use full dataset for preprocessing
+                if st.button("✅ Gunakan Dataset Lengkap untuk Preprocessing", key="use_full"):
+                    st.session_state['df_processed_path'] = raw_parquet_path
+                    st.session_state['use_filtered_data'] = False
+                    st.success("✅ Dataset lengkap akan digunakan untuk preprocessing")
+                    st.info("🚀 Lanjut ke halaman Pelatihan Model untuk preprocessing dan training")
 
             # Preprocessing options
             st.markdown("---")
