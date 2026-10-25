@@ -22,59 +22,64 @@ COLUMN_ALIASES: Dict[str, List[str]] = {
     "claim_id": [
         "no_klaim", "id_klaim", "claim_no", "nomor_klaim", "claim_number",
         "claimid", "claim", "no_tagihan", "id_transaksi", "nomor_transaksi",
+        "no_sep", "nomor_sep", "sep", "sep_no",
     ],
     "patient_id": [
         "no_peserta", "nomor_kartu", "id_pasien", "no_kartu", "patient_number",
         "patientid", "nik", "patient", "id_peserta", "nomor_peserta", "no_rekam_medis", "no_rm",
+        "pstv01", "pstv02", "nomor_keluarga", "no_keluarga", "no_kk",
     ],
     "provider_id": [
         "kode_faskes", "id_provider", "kode_rs", "hospital_id", "provider_code",
         "providerid", "provider", "kode_provider", "id_faskes", "faskes_id",
-        "nama_faskes", "kode_klinik",
+        "nama_faskes", "kode_klinik", "kode_ppk", "ppk", "faskes",
+        "kd_faskes", "kd_ppk", "kd_rs", "nama_ppk", "nama_rs",
     ],
     "service_code": [
         "kode_tindakan", "kode_prosedur", "procedure_code", "kode_layanan",
         "servicecode", "service", "cpt", "cpt_code", "kode_tarif", "tindakan",
+        "kd_tindakan", "kd_prosedur", "kd_tarif",
     ],
     "diagnosis_code": [
         "diagnosa", "kode_icd", "icd10", "icd_10", "diagnosa_utama",
         "diagnosis", "diagnosiscode", "primary_diagnosis", "icd_code",
-        "kode_diagnosa", "diagnosa_primer",
+        "kode_diagnosa", "diagnosa_primer", "kd_diagnosa", "kd_icd",
     ],
     "billing_date": [
         "tgl_klaim", "tgl_tagihan", "tanggal_klaim", "tgl_billing",
         "billingdate", "claim_date", "bill_date", "tanggal_tagihan",
-        "tgl_pengajuan", "tanggal_pengajuan",
+        "tgl_pengajuan", "tanggal_pengajuan", "tgl_sep", "tanggal_sep",
     ],
     "service_date": [
         "tgl_pelayanan", "tgl_masuk", "tanggal_layanan", "tgl_tindakan",
         "servicedate", "date_of_service", "treatment_date", "tanggal_masuk",
-        "tgl_rawat", "tanggal_tindakan",
+        "tgl_rawat", "tanggal_tindakan", "tgl_periksa", "tanggal_periksa",
     ],
     "billed_amount": [
         "amount", "biaya_tagihan", "total_tagihan", "biaya_klaim",
         "nominal_klaim", "billedamount", "tagihan", "biaya",
-        "total_biaya", "tarif_tagihan", "total_klaim",
+        "total_biaya", "tarif_tagihan", "total_klaim", "nilai_klaim",
     ],
     "paid_amount": [
         "biaya_dibayar", "nominal_bayar", "jumlah_bayar", "total_bayar",
         "paidamount", "dibayar", "tarif_riil", "realisasi_bayar",
+        "nilai_bayar", "nominal_pembayaran",
     ],
     "allowed_amount": [
         "biaya_disetujui", "nominal_setuju", "plafon", "allowedamount",
-        "disetujui", "tarif_disetujui", "klaim_disetujui",
+        "disetujui", "tarif_disetujui", "klaim_disetujui", "biaya_sesuai",
     ],
     "claim_status": [
         "status", "status_klaim", "status_pembayaran", "claimstatus",
-        "status_tagihan", "approval_status",
+        "status_tagihan", "approval_status", "status_kepesertaan", "pstv17",
     ],
     "patient_age": [
         "umur", "usia", "umur_pasien", "patientage", "age",
-        "usia_pasien", "tahun_usia",
+        "usia_pasien", "tahun_usia", "pstv03",
     ],
     "length_of_stay": [
         "lama_rawat", "hari_rawat", "los", "lengthofstay",
-        "lama_inap", "lama_hari_rawat", "durasi_rawat",
+        "lama_inap", "lama_hari_rawat", "durasi_rawat", "los_rawat",
     ],
     "quantity": [
         "jumlah", "banyaknya", "qty", "volume",
@@ -82,11 +87,39 @@ COLUMN_ALIASES: Dict[str, List[str]] = {
     ],
     "admission_date": [
         "tgl_masuk_rs", "tanggal_masuk_rs", "tgl_admisi", "admissiondate",
-        "adm_date", "tgl_checkin",
+        "adm_date", "tgl_checkin", "tgl_masuk_inap",
     ],
     "discharge_date": [
         "tgl_keluar_rs", "tanggal_keluar_rs", "tgl_pulang", "dischargedate",
-        "disch_date", "tgl_checkout",
+        "disch_date", "tgl_checkout", "tgl_keluar_inap",
+    ],
+    # BPJS Kesehatan specific aliases based on metadata
+    "provider_type": [
+        "kepemilikan_faskes", "pstv11", "jenis_kepemilikan", "tipe_faskes",
+    ],
+    "facility_type": [
+        "jenis_faskes", "pstv12", "tipe_fasilitas", "kategori_faskes",
+    ],
+    "patient_class": [
+        "kelas_rawat", "pstv07", "kelas_perawatan", "kelas_peserta",
+    ],
+    "patient_segment": [
+        "segmentasi_peserta", "pstv08", "segmen_peserta", "segmentasi",
+    ],
+    "patient_province": [
+        "provinsi_tempat_tinggal", "pstv09", "pstv09_new", "provinsi_peserta",
+    ],
+    "patient_city": [
+        "kabupaten_kota_tempat_tinggal", "pstv10", "kota_peserta", "kabupaten_peserta",
+    ],
+    "provider_province": [
+        "provinsi_faskes", "pstv13", "provinsi_fasilitas",
+    ],
+    "provider_city": [
+        "kabupaten_kota_faskes", "pstv14", "kota_faskes", "kabupaten_faskes",
+    ],
+    "membership_status": [
+        "status_kepesertaan", "pstv17", "status_peserta", "status_kepesertaan_bpjs",
     ],
 }
 
@@ -156,7 +189,11 @@ class SchemaHarmonizer:
             "claim_id", "patient_id", "provider_id", "service_code",
             "diagnosis_code", "billing_date", "service_date", "amount",
             "billed_amount", "paid_amount", "allowed_amount", "claim_status",
-            "patient_age", "length_of_stay", "quantity"
+            "patient_age", "length_of_stay", "quantity",
+            # BPJS Kesehatan specific columns
+            "provider_type", "facility_type", "patient_class", "patient_segment",
+            "patient_province", "patient_city", "provider_province", "provider_city",
+            "membership_status"
         ]
 
         if df.empty:
@@ -318,6 +355,20 @@ class SchemaHarmonizer:
         else:
             clean["patient_age"] = _clean_numeric_series(clean["patient_age"], default=45.0).astype(int)
 
+        # 7. BPJS Kesehatan Specific Columns (with safe defaults)
+        bpjs_categorical = [
+            "provider_type", "facility_type", "patient_class", "patient_segment",
+            "patient_province", "patient_city", "provider_province", "provider_city",
+            "membership_status"
+        ]
+        
+        for col in bpjs_categorical:
+            if col not in clean.columns:
+                clean[col] = ""
+                imputed_cols.append(col)
+            else:
+                clean[col] = clean[col].fillna("").astype(str)
+
         # Store provenance metadata internally in DataFrame attrs
         clean.attrs["_resolved_aliases"] = resolved_aliases
         clean.attrs["_derived_columns"] = list(set(derived_cols))
@@ -347,7 +398,10 @@ class SchemaHarmonizer:
             if col not in df.columns:
                 return False
             # If wholly imputed as empty string or NaT, it's not clinically or operationally present
-            if col in imputed_cols and (col in ["patient_id", "provider_id", "service_code", "diagnosis_code", "billing_date", "service_date"]):
+            if col in imputed_cols and (col in ["patient_id", "provider_id", "service_code", "diagnosis_code", "billing_date", "service_date",
+                                                "provider_type", "facility_type", "patient_class", "patient_segment",
+                                                "patient_province", "patient_city", "provider_province", "provider_city",
+                                                "membership_status"]):
                 return False
             series = df[col]
             if pd.api.types.is_datetime64_any_dtype(series):
