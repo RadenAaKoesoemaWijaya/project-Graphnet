@@ -39,26 +39,44 @@ class PDFReportGenerator:
         if not _has_reportlab:
             return
 
-        # Title style
+        # Title style - more elegant with gradient color
         if 'CustomTitle' not in self.styles:
             self.styles.add(ParagraphStyle(
                 name='CustomTitle',
                 parent=self.styles['Heading1'],
-                fontSize=18,
-                textColor=colors.HexColor('#1E40AF'),
-                spaceAfter=30,
-                alignment=TA_CENTER
+                fontSize=22,
+                textColor=colors.HexColor('#0F172A'),
+                spaceAfter=20,
+                spaceBefore=10,
+                alignment=TA_CENTER,
+                fontName='Helvetica-Bold'
             ))
 
-        # Section heading style
+        # Subtitle style
+        if 'CustomSubtitle' not in self.styles:
+            self.styles.add(ParagraphStyle(
+                name='CustomSubtitle',
+                parent=self.styles['Heading2'],
+                fontSize=14,
+                textColor=colors.HexColor('#475569'),
+                spaceAfter=30,
+                alignment=TA_CENTER,
+                fontName='Helvetica'
+            ))
+
+        # Section heading style - modern blue
         if 'SectionHeading' not in self.styles:
             self.styles.add(ParagraphStyle(
                 name='SectionHeading',
                 parent=self.styles['Heading2'],
-                fontSize=14,
-                textColor=colors.HexColor('#3B82F6'),
-                spaceAfter=12,
-                spaceBefore=20
+                fontSize=15,
+                textColor=colors.HexColor('#1E40AF'),
+                spaceAfter=15,
+                spaceBefore=25,
+                fontName='Helvetica-Bold',
+                borderPadding=5,
+                borderWidth=1,
+                borderColor=colors.HexColor('#1E40AF')
             ))
 
         # Subsection heading style
@@ -67,20 +85,22 @@ class PDFReportGenerator:
                 name='SubsectionHeading',
                 parent=self.styles['Heading3'],
                 fontSize=12,
-                textColor=colors.HexColor('#64748B'),
-                spaceAfter=8,
-                spaceBefore=12
+                textColor=colors.HexColor('#334155'),
+                spaceAfter=10,
+                spaceBefore=15,
+                fontName='Helvetica-Bold'
             ))
 
-        # Body text style (use unique name to avoid conflict)
+        # Body text style - improved readability
         if 'CustomBodyText' not in self.styles:
             self.styles.add(ParagraphStyle(
                 name='CustomBodyText',
                 parent=self.styles['Normal'],
                 fontSize=10,
-                leading=14,
+                leading=15,
                 alignment=TA_JUSTIFY,
-                spaceAfter=12
+                spaceAfter=10,
+                fontName='Helvetica'
             ))
 
         # Metadata style
@@ -91,7 +111,41 @@ class PDFReportGenerator:
                 fontSize=9,
                 textColor=colors.HexColor('#64748B'),
                 alignment=TA_LEFT,
-                spaceAfter=6
+                spaceAfter=6,
+                fontName='Helvetica'
+            ))
+
+        # Highlight style for important information
+        if 'HighlightText' not in self.styles:
+            self.styles.add(ParagraphStyle(
+                name='HighlightText',
+                parent=self.styles['Normal'],
+                fontSize=10,
+                textColor=colors.HexColor('#059669'),
+                spaceAfter=8,
+                fontName='Helvetica-Oblique'
+            ))
+
+        # Table header style
+        if 'TableHeader' not in self.styles:
+            self.styles.add(ParagraphStyle(
+                name='TableHeader',
+                parent=self.styles['Normal'],
+                fontSize=9,
+                textColor=colors.white,
+                alignment=TA_CENTER,
+                fontName='Helvetica-Bold'
+            ))
+
+        # Footer style
+        if 'FooterText' not in self.styles:
+            self.styles.add(ParagraphStyle(
+                name='FooterText',
+                parent=self.styles['Normal'],
+                fontSize=8,
+                textColor=colors.HexColor('#94A3B8'),
+                alignment=TA_CENTER,
+                fontName='Helvetica'
             ))
 
     def generate_pdf(
@@ -195,6 +249,16 @@ class PDFReportGenerator:
 
         story.append(PageBreak())
 
+        # Evaluation section (confusion matrix, ROC, etc.)
+        if charts or report_data.get('evaluation_metrics'):
+            story.extend(self._add_evaluation_section(report_data, charts))
+            story.append(PageBreak())
+
+        # Explainability section (SHAP, LIME)
+        if charts and any(key in charts for key in ['shap_summary', 'shap_feature_importance', 'lime_explanation']):
+            story.extend(self._add_explainability_section(report_data, charts))
+            story.append(PageBreak())
+
         # Recommendations
         story.extend(self._build_section("Rekomendasi", report_data.get('recommendations', '')))
 
@@ -208,17 +272,25 @@ class PDFReportGenerator:
         """Build title page with metadata."""
         story = []
 
+        # Add decorative line at top
+        line_table = Table([['']], colWidths=[6 * inch], rowHeights=[0.05 * inch])
+        line_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#1E40AF')),
+        ]))
+        story.append(line_table)
+        story.append(Spacer(1, 0.5 * inch))
+
         # Main title
         title = Paragraph("Laporan Analisis Pelatihan Model", self.styles['CustomTitle'])
         story.append(title)
-        story.append(Spacer(1, 0.3 * inch))
+        story.append(Spacer(1, 0.2 * inch))
 
         # Subtitle
-        subtitle = Paragraph("ASTINA - Analisis Sistem Transaksi Identifikasi Nilai Anomali", self.styles['SectionHeading'])
+        subtitle = Paragraph("ASTINA - Analisis Sistem Transaksi Identifikasi Nilai Anomali", self.styles['CustomSubtitle'])
         story.append(subtitle)
-        story.append(Spacer(1, 0.5 * inch))
+        story.append(Spacer(1, 0.8 * inch))
 
-        # Metadata table
+        # Metadata table with improved styling
         metadata = report_data.get('metadata', {})
         metadata_data = [
             ['Tanggal Pembuatan', metadata.get('generated_at', 'N/A')],
@@ -228,26 +300,35 @@ class PDFReportGenerator:
 
         metadata_table = Table(metadata_data, colWidths=[2.5 * inch, 3 * inch])
         metadata_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#F1F5F9')),
+            ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#F8FAFC')),
             ('TEXTCOLOR', (0, 0), (-1, -1), colors.black),
             ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-            ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+            ('FONTNAME', (1, 0), (1, -1), 'Helvetica'),
             ('FONTSIZE', (0, 0), (-1, -1), 10),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 12),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('TOPPADDING', (0, 0), (-1, -1), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 10),
+            ('LEFTPADDING', (0, 0), (-1, -1), 10),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 10),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#E2E8F0')),
+            ('ROWBACKGROUNDS', (0, 0), (-1, -1), [colors.white, colors.HexColor('#F8FAFC')]),
         ]))
         story.append(metadata_table)
-        story.append(Spacer(1, 1 * inch))
+        story.append(Spacer(1, 1.2 * inch))
 
-        # Disclaimer
-        disclaimer = Paragraph(
+        # Disclaimer with better styling
+        disclaimer_box = Paragraph(
             "<b>DISCLAIMER:</b> Dokumen ini dibuat secara otomatis oleh sistem ASTINA. "
             "Informasi yang disajikan berdasarkan hasil pelatihan model dan analisis data yang tersedia. "
             "Selalu verifikasi dengan data aktual sebelum mengambil keputusan bisnis.",
             self.styles['CustomMetadata']
         )
-        story.append(disclaimer)
+        story.append(disclaimer_box)
+        story.append(Spacer(1, 0.3 * inch))
+
+        # Add decorative line at bottom
+        story.append(line_table)
 
         return story
 
@@ -353,7 +434,7 @@ class PDFReportGenerator:
         try:
             from io import BytesIO
             img_buffer = BytesIO(chart_bytes)
-            img = Image(img_buffer, width=6 * inch, height=4 * inch)
+            img = Image(img_buffer, width=6 * inch, height=4 * inch, kind='proportional')
             img.hAlign = 'CENTER'
             story.append(img)
         except Exception as e:
@@ -380,19 +461,33 @@ class PDFReportGenerator:
 
                 table = Table(table_data, colWidths=col_widths)
                 table.setStyle(TableStyle([
+                    # Header row styling
                     ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1E40AF')),
                     ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-                    ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-                    ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                    ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
+                    ('VALIGN', (0, 0), (-1, 0), 'MIDDLE'),
                     ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                    ('FONTSIZE', (0, 0), (-1, 0), 10),
+                    ('FONTSIZE', (0, 0), (-1, 0), 9),
+                    ('TOPPADDING', (0, 0), (-1, 0), 12),
                     ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                    ('LEFTPADDING', (0, 0), (-1, 0), 8),
+                    ('RIGHTPADDING', (0, 0), (-1, 0), 8),
+                    # Data rows styling
                     ('BACKGROUND', (0, 1), (-1, -1), colors.white),
                     ('TEXTCOLOR', (0, 1), (-1, -1), colors.black),
+                    ('ALIGN', (0, 1), (-1, -1), 'LEFT'),
+                    ('VALIGN', (0, 1), (-1, -1), 'MIDDLE'),
                     ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
-                    ('FONTSIZE', (0, 1), (-1, -1), 9),
-                    ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-                    ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F1F5F9')]),
+                    ('FONTSIZE', (0, 1), (-1, -1), 8),
+                    ('TOPPADDING', (0, 1), (-1, -1), 8),
+                    ('BOTTOMPADDING', (0, 1), (-1, -1), 8),
+                    ('LEFTPADDING', (0, 1), (-1, -1), 8),
+                    ('RIGHTPADDING', (0, 1), (-1, -1), 8),
+                    # Grid styling
+                    ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#E2E8F0')),
+                    ('LINEBELOW', (0, 0), (-1, 0), 1.5, colors.HexColor('#1E40AF')),
+                    # Alternating row colors
+                    ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F8FAFC')]),
                 ]))
                 story.append(table)
             else:
@@ -400,6 +495,78 @@ class PDFReportGenerator:
         except Exception as e:
             logger.warning(f"Failed to add table to PDF: {e}")
             story.append(Paragraph(f"[Tabel tidak dapat ditampilkan: {str(e)}]", self.styles['CustomBodyText']))
+
+        return story
+
+    def _add_evaluation_section(self, report_data: Dict[str, Any], charts: Dict[str, bytes] = None) -> List:
+        """Add evaluation metrics section to the PDF."""
+        story = []
+
+        # Section heading
+        heading = Paragraph("Evaluasi Model", self.styles['SectionHeading'])
+        story.append(heading)
+        story.append(Spacer(1, 0.2 * inch))
+
+        # Add confusion matrix if available
+        if charts and 'confusion_matrix' in charts:
+            story.extend(self._add_chart_section("Confusion Matrix", charts['confusion_matrix']))
+            story.append(Spacer(1, 0.3 * inch))
+
+        # Add ROC curve if available
+        if charts and 'roc_curve' in charts:
+            story.extend(self._add_chart_section("ROC Curve", charts['roc_curve']))
+            story.append(Spacer(1, 0.3 * inch))
+
+        # Add precision-recall curve if available
+        if charts and 'precision_recall_curve' in charts:
+            story.extend(self._add_chart_section("Precision-Recall Curve", charts['precision_recall_curve']))
+            story.append(Spacer(1, 0.3 * inch))
+
+        # Add evaluation metrics table if available
+        evaluation_metrics = report_data.get('evaluation_metrics', {})
+        if evaluation_metrics:
+            metrics_data = [['Metrik', 'Nilai']]
+            for metric_name, metric_value in evaluation_metrics.items():
+                if isinstance(metric_value, float):
+                    metrics_data.append([metric_name, f"{metric_value:.4f}"])
+                else:
+                    metrics_data.append([metric_name, str(metric_value)])
+
+            story.extend(self._add_table_section("Metrik Evaluasi", metrics_data))
+
+        return story
+
+    def _add_explainability_section(self, report_data: Dict[str, Any], charts: Dict[str, bytes] = None) -> List:
+        """Add explainability section (SHAP, LIME) to the PDF."""
+        story = []
+
+        # Section heading
+        heading = Paragraph("Explainability AI (SHAP & LIME)", self.styles['SectionHeading'])
+        story.append(heading)
+        story.append(Spacer(1, 0.2 * inch))
+
+        # Add SHAP summary plot if available
+        if charts and 'shap_summary' in charts:
+            story.extend(self._add_chart_section("SHAP Summary Plot", charts['shap_summary']))
+            story.append(Spacer(1, 0.3 * inch))
+
+        # Add SHAP feature importance if available
+        if charts and 'shap_feature_importance' in charts:
+            story.extend(self._add_chart_section("SHAP Feature Importance", charts['shap_feature_importance']))
+            story.append(Spacer(1, 0.3 * inch))
+
+        # Add LIME explanation if available
+        if charts and 'lime_explanation' in charts:
+            story.extend(self._add_chart_section("LIME Explanation", charts['lime_explanation']))
+            story.append(Spacer(1, 0.3 * inch))
+
+        # Add explainability text description
+        explainability_text = report_data.get('explainability_analysis', '')
+        if explainability_text:
+            paragraphs = self._parse_markdown_to_paragraphs(explainability_text)
+            for para in paragraphs:
+                story.append(para)
+                story.append(Spacer(1, 0.1 * inch))
 
         return story
 

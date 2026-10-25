@@ -4,6 +4,19 @@ import numpy as np
 from ui.utils import *
 from state_manager import *
 from model_explainer import ModelExplainer, SUPPORTED_EXPLAINABILITY_MODELS
+import logging
+import io
+
+logger = logging.getLogger(__name__)
+
+def plotly_to_bytes(fig, format='png', width=1200, height=800, scale=2):
+    """Convert a Plotly figure to bytes for PDF embedding."""
+    try:
+        img_bytes = fig.to_image(format=format, width=width, height=height, scale=scale)
+        return img_bytes
+    except Exception as e:
+        logger.warning(f"Failed to convert plotly figure to bytes: {e}")
+        return None
 
 def show_evaluation_page():
     st.title("📊 Evaluasi Model")
@@ -602,10 +615,221 @@ def show_evaluation_page():
 
     st.markdown("---")
     st.subheader("🚀 Langkah Selanjutnya")
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     with col1:
         if st.button("🔍 Lanjut ke Deteksi Anomali", key="eval_to_detection", type="primary"):
             navigate_to_page('detect')
     with col2:
         if st.button("🧠 Kembali ke Training", key="eval_to_training"):
             navigate_to_page('train')
+    with col3:
+        if st.button("📥 Unduh Laporan Evaluasi (PDF)", key="download_eval_pdf"):
+            with st.spinner("Membuat laporan PDF..."):
+                try:
+                    from pdf_generator import PDFReportGenerator
+                    import plotly.graph_objects as go
+                    from sklearn.metrics import confusion_matrix, roc_curve, precision_recall_curve, auc
+                    import matplotlib.pyplot as plt
+                    import io
+
+                    # Generate PDF report for evaluation
+                    generator = PDFReportGenerator()
+
+                    # Prepare report data
+                    report_data = {
+                        'metadata': {
+                            'generated_at': pd.Timestamp.now().strftime('%d %B %Y %H:%M:%S WIB'),
+                            'language': 'Indonesia',
+                            'report_type': 'Model Evaluation'
+                        },
+                        'executive_summary': f"""
+                        Laporan evaluasi model deteksi anomali pada dataset test dengan {len(result_df)} sampel.
+                        Threshold yang digunakan: {eval_threshold:.2f}.
+                        Tingkat anomali terdeteksi: {fraud_rate:.2%}.
+                        """,
+                        'dataset_analysis': f"""
+                        Dataset evaluasi terdiri dari {len(result_df)} sampel dengan {len(training_features)} fitur.
+                        Rata-rata probabilitas anomali: {np.mean(test_probabilities):.4f}.
+                        Simpangan baku probabilitas: {np.std(test_probabilities):.4f}.
+                        """,
+                        'feature_analysis': f"""
+                        Fitur yang digunakan untuk evaluasi: {len(training_features)} fitur.
+                        Fitur dengan korelasi tertinggi dengan anomali dapat dilihat pada tabel analisis fitur.
+                        """,
+                        'model_architecture': f"""
+                        Model dievaluasi menggunakan {len(individual_probs)} algoritma ensemble.
+                        Algoritma yang digunakan: {', '.join(individual_probs.keys())}.
+                        """,
+                        'training_process': """
+                        Model telah dilatih sebelumnya menggunakan data training yang valid.
+                        Evaluasi dilakukan pada data test yang tidak digunakan selama pelatihan.
+                        """,
+                        'performance_metrics': f"""
+                        Tingkat anomali terdeteksi: {fraud_rate:.2%}.
+                        Rata-rata probabilitas anomali: {np.mean(test_probabilities):.4f}.
+                        Simpangan baku probabilitas: {np.std(test_probabilities):.4f}.
+                        """,
+                        'evaluation_metrics': {},
+                        'explainability_analysis': """
+                        Analisis explainability AI digunakan untuk memahami fitur yang paling berpengaruh
+                        dalam prediksi model. SHAP dan LIME dapat digunakan untuk menjelaskan keputusan
+                        model pada level individual.
+                        """,
+                        'recommendations': """
+                        - Sesuaikan threshold berdasarkan trade-off antara precision dan recall.
+                        - Gunakan analisis feature importance untuk memahami faktor utama anomali.
+                        - Lakukan monitoring performa secara berkala untuk mendeteksi drift.
+                        """
+                    }
+
+                    # Add supervised metrics if available
+                    if y_true is not None and len(np.unique(y_true)) == 2:
+                        from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
+                        report_data['evaluation_metrics'] = {
+                            'Accuracy': accuracy_score(y_true, test_predictions),
+                            'Precision': precision_score(y_true, test_predictions, zero_division=0),
+                            'Recall': recall_score(y_true, test_predictions, zero_division=0),
+                            'F1-Score': f1_score(y_true, test_predictions, zero_division=0),
+                        }
+                        try:
+                            report_data['evaluation_metrics']['ROC-AUC'] = roc_auc_score(y_true, test_probabilities)
+                        except:
+                            pass
+
+                    # Prepare charts
+                    charts = {}
+
+                    # Confusion Matrix chart
+                    if y_true is not None and len(np.unique(y_true)) == 2:
+                        try:
+                            cm = confusion_matrix(y_true, test_predictions)
+                            fig_cm = go.Figure(data=go.Heatmap(
+                                z=cm,
+                                x=['Pred 0', 'Pred 1'],
+                                y=['Aktual 0', 'Aktual 1'],
+                                colorscale='Blues',
+                                text=cm,
+                                texttemplate="%{text}",
+                                textfont={"size": 20}
+                            ))
+                            fig_cm.update_layout(
+                                title='Confusion Matrix',
+                                xaxis_title='Predicted',
+                                yaxis_title='Actual'
+                            )
+                            charts['confusion_matrix'] = plotly_to_bytes(fig_cm)
+                        except Exception as e:
+                            logger.warning(f"Failed to create confusion matrix chart: {e}")
+
+                    # ROC Curve chart
+                    if y_true is not None and len(np.unique(y_true)) == 2:
+                        try:
+                            fpr, tpr, _ = roc_curve(y_true, test_probabilities)
+                            fig_roc = go.Figure()
+                            fig_roc.add_trace(go.Scatter(
+                                x=fpr, y=tpr,
+                                mode='lines',
+                                name='ROC Curve',
+                                line=dict(color='blue', width=2)
+                            ))
+                            fig_roc.add_trace(go.Scatter(
+                                x=[0, 1], y=[0, 1],
+                                mode='lines',
+                                name='Random Classifier',
+                                line=dict(color='gray', width=1, dash='dash')
+                            ))
+                            fig_roc.update_layout(
+                                title='ROC Curve',
+                                xaxis_title='False Positive Rate',
+                                yaxis_title='True Positive Rate'
+                            )
+                            charts['roc_curve'] = plotly_to_bytes(fig_roc)
+                        except Exception as e:
+                            logger.warning(f"Failed to create ROC curve chart: {e}")
+
+                    # Precision-Recall Curve chart
+                    if y_true is not None and len(np.unique(y_true)) == 2:
+                        try:
+                            precision, recall, _ = precision_recall_curve(y_true, test_probabilities)
+                            fig_pr = go.Figure()
+                            fig_pr.add_trace(go.Scatter(
+                                x=recall, y=precision,
+                                mode='lines',
+                                name='Precision-Recall Curve',
+                                line=dict(color='green', width=2)
+                            ))
+                            fig_pr.update_layout(
+                                title='Precision-Recall Curve',
+                                xaxis_title='Recall',
+                                yaxis_title='Precision'
+                            )
+                            charts['precision_recall_curve'] = plotly_to_bytes(fig_pr)
+                        except Exception as e:
+                            logger.warning(f"Failed to create precision-recall curve chart: {e}")
+
+                    # Probability Distribution chart
+                    try:
+                        fig_dist = create_probability_distribution(
+                            result_df['anomaly_probability'],
+                            title="Distribusi Probabilitas Anomali",
+                            threshold=eval_threshold
+                        )
+                        charts['probability_distribution'] = plotly_to_bytes(fig_dist)
+                    except Exception as e:
+                        logger.warning(f"Failed to create probability distribution chart: {e}")
+
+                    # Add SHAP charts if explainer is available
+                    if 'model_explainer' in st.session_state:
+                        try:
+                            explainer = st.session_state['model_explainer']
+                            X_sample = sample_dataframe_for_visualization(X_eval_df).values
+
+                            # SHAP summary plot
+                            if 'isolation_forest' in explainer.explainers or 'xgboost' in explainer.explainers:
+                                try:
+                                    import matplotlib
+                                    matplotlib.use('Agg')
+                                    import matplotlib.pyplot as plt
+
+                                    fig_shap, ax = plt.subplots(figsize=(10, 6))
+                                    model_to_plot = 'isolation_forest' if 'isolation_forest' in explainer.explainers else 'xgboost'
+                                    explainer.plot_shap_summary(X_sample, model_to_plot, max_display=10, ax=ax)
+                                    buf = io.BytesIO()
+                                    fig_shap.savefig(buf, format='png', bbox_inches='tight', dpi=150)
+                                    buf.seek(0)
+                                    charts['shap_summary'] = buf.getvalue()
+                                    plt.close(fig_shap)
+                                except Exception as e:
+                                    logger.warning(f"Failed to create SHAP summary chart: {e}")
+
+                            # SHAP feature importance
+                            if 'isolation_forest' in explainer.explainers or 'xgboost' in explainer.explainers:
+                                try:
+                                    fig_fi, ax = plt.subplots(figsize=(10, 6))
+                                    model_to_plot = 'isolation_forest' if 'isolation_forest' in explainer.explainers else 'xgboost'
+                                    explainer.plot_feature_importance(model_to_plot, X_sample, max_features=10, ax=ax)
+                                    buf = io.BytesIO()
+                                    fig_fi.savefig(buf, format='png', bbox_inches='tight', dpi=150)
+                                    buf.seek(0)
+                                    charts['shap_feature_importance'] = buf.getvalue()
+                                    plt.close(fig_fi)
+                                except Exception as e:
+                                    logger.warning(f"Failed to create SHAP feature importance chart: {e}")
+                        except Exception as e:
+                            logger.warning(f"Failed to add SHAP charts to PDF: {e}")
+
+                    # Generate PDF
+                    pdf_buffer = generator.generate_pdf(report_data, charts=charts)
+
+                    st.download_button(
+                        label="⬇️ Klik untuk Mengunduh PDF",
+                        data=pdf_buffer.getvalue(),
+                        file_name=f"ASTINA_Model_Evaluation_Report_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                        mime="application/pdf",
+                        key="download_eval_pdf_button"
+                    )
+                    st.success("✅ Laporan PDF berhasil dibuat!")
+
+                except Exception as e:
+                    st.error(f"❌ Gagal membuat PDF: {str(e)}")
+                    logger.error(f"Error generating evaluation PDF: {e}", exc_info=True)
