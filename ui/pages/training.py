@@ -1014,11 +1014,11 @@ def show_training_page():
                 st.session_state['training_features'] = selected_features
                 st.session_state['training_mode'] = training_mode
                 st.session_state['training_label_column'] = label_column
-                st.session_state['model_version'] = version
-                
+
                 version = status.get("version")
                 if not version:
                     raise RuntimeError("Job selesai tanpa versi model tersimpan.")
+                st.session_state['model_version'] = version
                 st.success(f"✅ Model training completed and saved as version {version}!")
 
                 # ── Persist anomaly subgraph to session_state for visualization ──
