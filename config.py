@@ -261,5 +261,8 @@ LLM_COPILOT_CONFIG = {
 RAG_CONFIG = {
     'enabled': True,
     'top_k': 3,
-    'similarity_threshold': 0.35,
+    'similarity_threshold': 0.35,  # Cosine similarity threshold (0.0-1.0)
+    'max_features': 2500,  # TF-IDF max features
+    'ngram_range': (1, 2),  # TF-IDF n-gram range
+    'knowledge_base_path': 'cache/rag_knowledge_base.json',  # Path to persistent knowledge base
 }

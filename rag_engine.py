@@ -50,7 +50,20 @@ INDONESIAN_STOPWORDS = sorted({
     "tersebut","suatu","bagi","ia","siap","manakah","bagaimanakah","bilamana","dimanakah","sedapat",
 })
 
-MIN_RAG_SIMILARITY_THRESHOLD = 0.06
+# Load from config.py if available, otherwise use defaults
+try:
+    from config import RAG_CONFIG
+    MIN_RAG_SIMILARITY_THRESHOLD = RAG_CONFIG.get('similarity_threshold', 0.35)
+    DEFAULT_RAG_TOP_K = RAG_CONFIG.get('top_k', 3)
+    RAG_MAX_FEATURES = RAG_CONFIG.get('max_features', 2500)
+    RAG_NGRAM_RANGE = tuple(RAG_CONFIG.get('ngram_range', (1, 2)))
+    RAG_KB_PATH = RAG_CONFIG.get('knowledge_base_path', 'cache/rag_knowledge_base.json')
+except ImportError:
+    MIN_RAG_SIMILARITY_THRESHOLD = 0.35
+    DEFAULT_RAG_TOP_K = 3
+    RAG_MAX_FEATURES = 2500
+    RAG_NGRAM_RANGE = (1, 2)
+    RAG_KB_PATH = 'cache/rag_knowledge_base.json'
 
 # =============================================================================
 # DEFAULT REGULATORY & CLINICAL KNOWLEDGE BASE
@@ -171,8 +184,8 @@ class LocalRAGKnowledgeBase:
         self.vectorizer = TfidfVectorizer(
             lowercase=True,
             stop_words=INDONESIAN_STOPWORDS,
-            ngram_range=(1, 2),
-            max_features=2500,
+            ngram_range=RAG_NGRAM_RANGE,
+            max_features=RAG_MAX_FEATURES,
             sublinear_tf=True,
         )
         self.doc_texts = [
@@ -225,6 +238,27 @@ class LocalRAGKnowledgeBase:
         for doc in data:
             self.add_document(doc)
         return len(self.documents) - _count_before
+
+    def load_from_default_path(self) -> bool:
+        """
+        Load knowledge base from default path if file exists.
+        Returns True if loaded successfully, False otherwise.
+        """
+        if os.path.isfile(RAG_KB_PATH):
+            try:
+                loaded = LocalRAGKnowledgeBase.load_knowledge_base(RAG_KB_PATH)
+                self.documents = loaded.documents
+                self.rebuild_index()
+                logger.info(f"RAG knowledge base loaded from {RAG_KB_PATH} with {len(self.documents)} documents")
+                return True
+            except Exception as e:
+                logger.warning(f"Failed to load RAG knowledge base from {RAG_KB_PATH}: {e}")
+                return False
+        return False
+
+    def save_to_default_path(self) -> None:
+        """Save current knowledge base to default path."""
+        self.save_knowledge_base(RAG_KB_PATH)
 
     def save_knowledge_base(self, json_path: str) -> None:
         """Persist current documents to a JSON file (so additions survive restarts)."""
@@ -346,7 +380,7 @@ class LocalRAGKnowledgeBase:
             logger.error(f"Error in RAG retrieval: {e}", exc_info=True)
             return list(self.documents[:top_k])
 
-    def get_regulation_context(self, active_flags: List[str], query_extra: str = "") -> str:
+    def get_regulation_context(self, active_flags: List[str], query_extra: str = "", top_k: Optional[int] = None) -> str:
         """
         Synthesize formatted regulatory text to inject into the LLM Investigator Copilot prompt.
         """
@@ -358,8 +392,9 @@ class LocalRAGKnowledgeBase:
             # claim's own service_code + diagnosis_code for clinical specificity.
             base_outlier_terms = "deviasi biaya anomali statistik outlier multivariat kewajaran tarif kesesuaian klinis"
             search_terms = f"{base_outlier_terms} {query_extra}".strip()
-        
-        matched_docs = self.retrieve(search_terms, top_k=2)
+
+        k = top_k if top_k is not None else DEFAULT_RAG_TOP_K
+        matched_docs = self.retrieve(search_terms, top_k=k)
 
         if not matched_docs:
             return "Tidak ditemukan referensi regulasi spesifik."
@@ -380,4 +415,6 @@ def get_rag_knowledge_base() -> LocalRAGKnowledgeBase:
     global _rag_instance
     if _rag_instance is None:
         _rag_instance = LocalRAGKnowledgeBase()
+        # Try to load from default path if exists
+        _rag_instance.load_from_default_path()
     return _rag_instance

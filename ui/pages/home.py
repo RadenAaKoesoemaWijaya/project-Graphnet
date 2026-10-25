@@ -208,11 +208,12 @@ def show_home_page():
 
     # --- 4. INTERACTIVE KNOWLEDGE BASE & OPERATIONAL REFERENCE ---
     st.markdown("### 📚 Pusat Informasi & Panduan Operasional ASTINA")
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📑 Panduan Skema 14 Kolom",
         "🛡️ Kamus 9 Aturan Kecurangan",
         "👥 Matriks Peran & Tindak Lanjut",
-        "🧬 Arsitektur Hibrida AI"
+        "🧬 Arsitektur Hibrida AI",
+        "🔄 Bagan Alur Kerja Operasional"
     ])
 
     # --- TAB 1: 14 COLUMNS DATA DICTIONARY ---
@@ -340,6 +341,169 @@ def show_home_page():
            Memodelkan relasi transaksi sebagai graf berbobot antar entitas (Pasien, Dokter, Faskes, Diagnosis). Menggunakan mekanisme *Graph Attention Network* dan *NeighborLoader* untuk membongkar sindikat kecurangan terorganisir (*fraud rings*).
         5. **🔍 Explainable AI (XAI) & Agentic Copilot**:
            Setiap anomali yang terdeteksi dilengkapi penjelasan lokal menggunakan **SHAP** dan **LIME** serta rekomendasi investigasi kontekstual dari **Local RAG & FAISS Vector Search**.
+        """)
+
+    # --- TAB 5: OPERATIONAL WORKFLOW DIAGRAM ---
+    with tab5:
+        st.markdown("""
+        #### 🔄 Bagan Alur Kerja Operasional Sistem ASTINA
+
+        Berikut adalah diagram alur kerja lengkap dari tahap upload data hingga deteksi anomali dan investigasi:
+        """)
+
+        st.markdown(r"""
+        ```
+        ┌─────────────────────────────────────────────────────────────────────────────┐
+        │                          FASE 1: INGEST DATA                                │
+        │  ┌──────────────────────────────────────────────────────────────────────┐  │
+        │  │  User mengunggah file (CSV/Parquet/Excel) → File Handler              │  │
+        │  │  • Validasi ukuran file (max 3GB)                                     │  │
+        │  │  • Streaming upload (8MB chunks)                                     │  │
+        │  │  • Konversi ke Parquet untuk efisiensi                                │  │
+        │  └──────────────────────────────────────────────────────────────────────┘  │
+        │                                     ↓                                        │
+        │  ┌──────────────────────────────────────────────────────────────────────┐  │
+        │  │  Schema Harmonizer                                                    │  │
+        │  │  • Mapping kolom ke 14 skema standar                                  │  │
+        │  │  • Deteksi alias (Indonesia/Inggris)                                 │  │
+        │  │  • Derivasi fitur otomatis (payment_ratio, allowance_ratio, LOS)    │  │
+        │  └──────────────────────────────────────────────────────────────────────┘  │
+        └─────────────────────────────────────────────────────────────────────────────┘
+                                                     ↓
+        ┌─────────────────────────────────────────────────────────────────────────────┐
+        │                     FASE 2: PREPROCESSING                                   │
+        │  ┌──────────────────────────────────────────────────────────────────────┐  │
+        │  │  Preprocessing Optimized                                              │  │
+        │  │  • Deteksi outlier (IQR/Z-score)                                      │  │
+        │  │  • Validasi range data (umur, jumlah, tanggal)                        │  │
+        │  │  • Optimasi dtype (downcasting int64→int32, float64→float32)          │  │
+        │  │  • Imputasi missing values                                            │  │
+        │  └──────────────────────────────────────────────────────────────────────┘  │
+        │                                     ↓                                        │
+        │  ┌──────────────────────────────────────────────────────────────────────┐  │
+        │  │  Feature Engineering                                                  │  │
+        │  │  • Seleksi fitur numerik                                             │  │
+        │  │  • Scaling (StandardScaler)                                          │  │
+        │  │  • Feature selection (SelectKBest)                                   │  │
+        │  └──────────────────────────────────────────────────────────────────────┘  │
+        └─────────────────────────────────────────────────────────────────────────────┘
+                                                     ↓
+        ┌─────────────────────────────────────────────────────────────────────────────┐
+        │                    FASE 3: MODEL TRAINING (Optional)                       │
+        │  ┌──────────────────────────────────────────────────────────────────────┐  │
+        │  │  Split Data (80/20 train-test)                                       │  │
+        │  └──────────────────────────────────────────────────────────────────────┘  │
+        │                                     ↓                                        │
+        │  ┌──────────────────────────────────────────────────────────────────────┐  │
+        │  │  Train Hybrid Ensemble (Parallel)                                    │  │
+        │  │  • Isolation Forest                                                  │  │
+        │  │  • Deep Autoencoder (PyTorch)                                        │  │
+        │  │  • XGBoost / LightGBM / CatBoost                                    │  │
+        │  │  • GNN (Graph Attention Network)                                     │  │
+        │  └──────────────────────────────────────────────────────────────────────┘  │
+        │                                     ↓                                        │
+        │  ┌──────────────────────────────────────────────────────────────────────┐  │
+        │  │  Hyperparameter Tuning (Optuna)                                      │  │
+        │  │  • Pruning untuk early stopping                                      │  │
+        │  │  • Optimasi metrik (F1, ROC-AUC)                                      │  │
+        │  └──────────────────────────────────────────────────────────────────────┘  │
+        │                                     ↓                                        │
+        │  ┌──────────────────────────────────────────────────────────────────────┐  │
+        │  │  Model Evaluation                                                     │  │
+        │  │  • Confusion Matrix                                                   │  │
+        │  │  • ROC-AUC, PR-AUC                                                   │  │
+        │  │  • Feature Importance (SHAP)                                         │  │
+        │  └──────────────────────────────────────────────────────────────────────┘  │
+        └─────────────────────────────────────────────────────────────────────────────┘
+                                                     ↓
+        ┌─────────────────────────────────────────────────────────────────────────────┐
+        │                    FASE 4: FRAUD DETECTION PIPELINE                        │
+        │  ┌──────────────────────────────────────────────────────────────────────┐  │
+        │  │  Phase 1: Rule-Based Detection (Parallel - 4 threads)                 │  │
+        │  │  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌─────────────┐ │  │
+        │  │  │ Repeat       │ │ Phantom      │ │ Provider     │ │ Upcoding    │ │  │
+        │  │  │ Billing      │ │ Service      │ │ Capacity     │ │ Unbundling  │ │  │
+        │  │  └──────────────┘ └──────────────┘ └──────────────┘ └─────────────┘ │  │
+        │  │  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌─────────────┐ │  │
+        │  │  │ Inflated     │ │ Medication   │ │ Length of    │ │ Fuzzy       │ │  │
+        │  │  │ Bill/Cloning │ │ Device       │ │ Stay         │ │ Match       │ │  │
+        │  │  └──────────────┘ └──────────────┘ └──────────────┘ └─────────────┘ │  │
+        │  └──────────────────────────────────────────────────────────────────────┘  │
+        │                                     ↓                                        │
+        │  ┌──────────────────────────────────────────────────────────────────────┐  │
+        │  │  Business Risk Score Calculation                                     │  │
+        │  │  • Dynamic weight re-normalization                                    │  │
+        │  │  • Weighted sum of rule scores                                        │  │
+        │  │  • Threshold: 0.6                                                     │  │
+        │  └──────────────────────────────────────────────────────────────────────┘  │
+        │                                     ↓                                        │
+        │  ┌──────────────────────────────────────────────────────────────────────┐  │
+        │  │  Phase 2: Context-Aware Scoring (Optional)                           │  │
+        │  │  • Patient history tracking                                          │  │
+        │  │  • Composite risk scoring                                            │  │
+        │  │  • Flag suppression based on context                                  │  │
+        │  └──────────────────────────────────────────────────────────────────────┘  │
+        │                                     ↓                                        │
+        │  ┌──────────────────────────────────────────────────────────────────────┐  │
+        │  │  Phase 3: ML Model Prediction (if trained)                            │  │
+        │  │  • Ensemble prediction (RF, XGB, LGB, CatBoost)                      │  │
+        │  │  • Anomaly probability                                                │  │
+        │  │  • Feature importance (SHAP)                                         │  │
+        │  └──────────────────────────────────────────────────────────────────────┘  │
+        │                                     ↓                                        │
+        │  ┌──────────────────────────────────────────────────────────────────────┐  │
+        │  │  Phase 4: GNN Graph Analysis (if enabled)                             │  │
+        │  │  • Build graph (claims-providers-patients)                           │  │
+        │  │  • GAT layer inference                                                │  │
+        │  │  • Collusion pattern detection                                       │  │
+        │  └──────────────────────────────────────────────────────────────────────┘  │
+        │                                     ↓                                        │
+        │  ┌──────────────────────────────────────────────────────────────────────┐  │
+        │  │  Phase 5: Final Risk Aggregation                                     │  │
+        │  │  • Combine: business_risk + ml_score + gnn_score                     │  │
+        │  │  • Weighted final risk score                                          │  │
+        │  │  • Risk category assignment                                           │  │
+        │  └──────────────────────────────────────────────────────────────────────┘  │
+        └─────────────────────────────────────────────────────────────────────────────┘
+                                                     ↓
+        ┌─────────────────────────────────────────────────────────────────────────────┐
+        │                     FASE 5: OUTPUT & INVESTIGATION                           │
+        │  ┌──────────────────────────────────────────────────────────────────────┐  │
+        │  │  Hasil Deteksi                                                        │  │
+        │  │  • High-risk claims table                                             │  │
+        │  │  • Risk distribution plot                                            │  │
+        │  │  • Feature importance (SHAP)                                         │  │
+        │  └──────────────────────────────────────────────────────────────────────┘  │
+        │                                     ↓                                        │
+        │  ┌──────────────────────────────────────────────────────────────────────┐  │
+        │  │  AI Copilot Investigation (Optional)                                 │  │
+        │  │  • PII masking sebelum LLM call                                      │  │
+        │  │  • RAG knowledge base retrieval                                       │  │
+        │  │  • Generate investigation dossier (BAP format)                       │  │
+        │  │  • Recommended actions                                                │  │
+        │  └──────────────────────────────────────────────────────────────────────┘  │
+        │                                     ↓                                        │
+        │  ┌──────────────────────────────────────────────────────────────────────┐  │
+        │  │  Export & Audit Trail                                                │  │
+        │  │  • CSV export                                                        │  │
+        │  │  • PDF report (reportlab)                                            │  │
+        │  │  • Audit logging (SHA-256)                                           │  │
+        │  │  • Cloud storage sync (GCS)                                         │  │
+        │  └──────────────────────────────────────────────────────────────────────┘  │
+        └─────────────────────────────────────────────────────────────────────────────┘
+        ```
+        """)
+
+        st.markdown("""
+        #### 📌 Panduan Navigasi Singkat
+
+        1. **Unggah Data** → Upload file klaim dalam format CSV/Parquet/Excel
+        2. **Pelatihan Model** → Latih ensemble model ML dan GNN (atau gunakan model yang sudah ada)
+        3. **Evaluasi Model** → Validasi performa model dengan metrik ROC-AUC, F1-score, dll
+        4. **Deteksi Anomali** → Jalankan pipeline deteksi fraud dan review hasil
+        5. **Status Sistem** → Monitor kesehatan sistem, audit trail, dan resource usage
+
+        **💡 Tips:** Anda dapat melewati tahap pelatihan jika model sudah tersedia di directory `models/`.
         """)
 
     st.markdown("---")

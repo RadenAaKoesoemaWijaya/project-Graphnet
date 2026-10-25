@@ -15,12 +15,13 @@
 3. [Komponen Sistem](#3-komponen-sistem)
 4. [Alur Kerja Utama](#4-alur-kerja-utama)
 5. [Pipeline Deteksi Fraud](#5-pipeline-deteksi-fraud)
-6. [Teknologi & Dependencies](#6-teknologi--dependencies)
-7. [Keamanan & Compliance](#7-keamanan--compliance)
-8. [Deployment Architecture](#8-deployment-architecture)
-9. [Monitoring & Logging](#9-monitoring--logging)
-10. [Performance Optimization](#10-performance-optimization)
-11. [Troubleshooting Guide](#11-troubleshooting-guide)
+6. [RAG & Knowledge Base](#55-rag-retrieval-augmented-generation--knowledge-base)
+7. [Teknologi & Dependencies](#6-teknologi--dependencies)
+8. [Keamanan & Compliance](#7-keamanan--compliance)
+9. [Deployment Architecture](#8-deployment-architecture)
+10. [Monitoring & Logging](#9-monitoring--logging)
+11. [Performance Optimization](#10-performance-optimization)
+12. [Troubleshooting Guide](#11-troubleshooting-guide)
 
 ---
 
@@ -266,9 +267,13 @@ ASTINA (Analisis Sistem Transaksi Identifikasi Nilai Anomali) adalah sistem berb
   - Retry logic dengan exponential backoff
 
 - **`rag_engine.py`**: Retrieval-Augmented Generation
-  - Knowledge base management
-  - Semantic similarity search
+  - Knowledge base management (8 default regulatory documents)
+  - TF-IDF vectorization with FAISS indexing
+  - Semantic similarity search (cosine similarity)
   - Context retrieval untuk LLM
+  - Configurable similarity threshold & top_k
+  - Persistent knowledge base (JSON)
+  - Fallback when FAISS unavailable
 
 - **`pii_masker.py`**: PII Protection
   - Regex-based masking (names, NIK, phone, email)
@@ -870,6 +875,106 @@ Logic:
 
 ---
 
+## 5.5 RAG (Retrieval-Augmented Generation) & Knowledge Base
+
+### 5.5.1 RAG Architecture
+
+```
+Query (flags, service_code, diagnosis_code)
+    ↓
+RAG Engine (rag_engine.py)
+    ↓
+TF-IDF Vectorization
+    ├─ Indonesian stopwords filtering
+    ├─ N-gram (1-2) support
+    └─ Max features: 2500
+    ↓
+FAISS Index (or cosine similarity fallback)
+    ├─ Cosine similarity search
+    ├─ Top-k retrieval (default: 3)
+    └─ Similarity threshold (default: 0.35)
+    ↓
+Matched Knowledge Documents
+    ↓
+Context Injection to LLM Prompt
+```
+
+### 5.5.2 Default Knowledge Base
+
+RAG engine includes 8 pre-loaded regulatory documents:
+
+| ID | Title | Category | Tags |
+|----|-------|----------|------|
+| REG-001 | Permenkes No. 16 Tahun 2019 - Pencegahan dan Penanganan Kecurangan JKN | Regulasi Anti-Fraud | phantom_service, repeat_billing, inflated_bill, unbundling, upcoding |
+| REG-002 | Pedoman Penagihan Klaim Berulang (Repeat Billing & Readmission Rule) | Kaidah Verifikasi Klaim | repeat_billing, duplicate_payment, readmission |
+| REG-003 | Standar Verifikasi Phantom Service & Kapasitas Tenaga Medis | Standar Pelayanan Medis | phantom_service, provider_capacity |
+| REG-004 | Kaidah Koding INA-CBGs & Pencegahan Upcoding | Kaidah Koding Medis | upcoding, ina_cbgs, severity_level |
+| REG-005 | Batasan Formularium Nasional (FORNAS) & Pemakaian Obat/Alkes | Farmasi & Alkes | medication_device_fraud, fornas |
+| REG-006 | Standar Evaluasi Lama Rawat Inap (Length of Stay) & Readmisi | Kaidah Rawat Inap | prolonged_stay, readmission, alos |
+| REG-007 | Pedoman Audit Klaim Deviasi Biaya & Rasio Ekstrem | Kaidah Audit Deviasi Biaya | outlier, deviasi_biaya, statistical_anomaly |
+| REG-008 | Kaidah Kesesuaian Klinis Diagnosis (ICD-10) & Tindakan Medis | Standar Kesesuaian Koding Klinis | icd_10, cpt, service_code, diagnosis_code |
+
+### 5.5.3 RAG Configuration
+
+```python
+# config.py
+RAG_CONFIG = {
+    'enabled': True,
+    'top_k': 3,                      # Number of documents to retrieve
+    'similarity_threshold': 0.35,    # Cosine similarity threshold (0.0-1.0)
+    'max_features': 2500,            # TF-IDF max features
+    'ngram_range': (1, 2),           # TF-IDF n-gram range
+    'knowledge_base_path': 'cache/rag_knowledge_base.json',  # Persistent storage
+}
+```
+
+### 5.5.4 Custom Knowledge Base
+
+Adding custom documents:
+
+```python
+from rag_engine import get_rag_knowledge_base
+
+rag = get_rag_knowledge_base()
+
+# Add single document
+rag.add_document({
+    "id": "CUSTOM-001",
+    "title": "Custom Policy",
+    "category": "Internal Policy",
+    "content": "Your custom regulatory text here...",
+    "tags": ["custom", "policy"]
+})
+
+# Load from JSON file
+rag.add_documents_from_json("path/to/custom_kb.json", overwrite=False)
+
+# Save to persistent storage
+rag.save_to_default_path()
+```
+
+### 5.5.5 RAG Integration with AI Copilot
+
+```python
+from agentic_copilot import AgenticCopilot
+
+copilot = AgenticCopilot(provider="gemini")
+
+# RAG context automatically retrieved
+result = copilot.generate_investigation_dossier(
+    context={
+        "claim_id": "CLM-001",
+        "active_rules": ["repeat_billing", "phantom_service"],
+        "service_code": "99213",
+        "diagnosis_code": "J06.9"
+    }
+)
+
+# result['regulatory_citations'] contains RAG-retrieved context
+```
+
+---
+
 ## 6. TEKNOLOGI & DEPENDENCIES
 
 ### 6.1 Core Dependencies
@@ -922,6 +1027,10 @@ Logic:
 #### Validation
 - **Pydantic 2.9.2**: Data validation
 - **Pydantic-Settings 2.6.1**: Configuration management
+
+#### RAG & Vector Search
+- **FAISS-CPU 1.7.4+**: Vector similarity search (optional, fallback to cosine similarity)
+- **Scikit-learn 1.6.1**: TF-IDF vectorization
 
 #### Testing
 - **Pytest 8.0+**: Testing framework
@@ -1855,6 +1964,13 @@ project-Graphnet/
 ---
 
 ## 📝 CHANGELOG
+
+### Version 1.1 (2026-10-25)
+- RAG engine configuration synchronized with config.py
+- Added persistent knowledge base support (JSON)
+- Added configurable similarity threshold and top_k
+- Improved RAG fallback mechanism
+- Enhanced documentation for RAG & LLM integration
 
 ### Version 1.0 (2026-10-24)
 - Initial documentation release
