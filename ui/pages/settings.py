@@ -89,7 +89,9 @@ def show_settings_page():
                     💡 <b>Dapatkan API Key Google Gemini:</b><br>
                     1. Kunjungi <a href='https://aistudio.google.com/app/apikey' target='_blank'>Google AI Studio</a><br>
                     2. Create new API key<br>
-                    3. Copy dan paste di atas
+                    3. Copy dan paste di atas<br>
+                    <br>
+                    <b>Model Tersedia:</b> Gemini 2 Flash, 2 Flash Lite, 2.5 Flash Lite, 2.5 Flash TTS, 2.5 Pro, 2.5 Pro TTS, 3 Flash
                     </div>
                     """, unsafe_allow_html=True)
                 elif "OpenAI" in provider_choice:
@@ -132,23 +134,29 @@ def show_settings_page():
         with col_adv1:
             if "Gemini" in provider_choice:
                 if 'settings_gemini_model' not in st.session_state:
-                    st.session_state['settings_gemini_model'] = "gemini-1.5-flash"
+                    st.session_state['settings_gemini_model'] = "gemini-2.0-flash-exp"
 
                 def update_gemini_model():
                     st.session_state['settings_gemini_model'] = st.session_state['settings_gemini_model_widget']
 
-                # Updated list with current available Gemini models
+                # Updated list with current available Gemini models including Gemini 2.x and 3.x
                 gemini_models = [
+                    "gemini-2.0-flash-exp",
+                    "gemini-2.0-flash-lite-exp",
+                    "gemini-2.5-flash-exp",
+                    "gemini-2.5-flash-lite-exp",
+                    "gemini-2.5-flash-tts-exp",
+                    "gemini-2.5-pro-exp",
+                    "gemini-2.5-pro-tts-exp",
+                    "gemini-3.0-flash-exp",
                     "gemini-1.5-flash",
                     "gemini-1.5-flash-8b",
-                    "gemini-1.5-pro",
-                    "gemini-2.0-flash-exp",
-                    "gemini-2.5-pro-exp"
+                    "gemini-1.5-pro"
                 ]
 
                 # Ensure the saved model is in the list, otherwise use default
                 if st.session_state['settings_gemini_model'] not in gemini_models:
-                    st.session_state['settings_gemini_model'] = "gemini-1.5-flash"
+                    st.session_state['settings_gemini_model'] = "gemini-2.0-flash-exp"
 
                 model_choice = st.selectbox(
                     "Model Gemini:",
@@ -156,7 +164,7 @@ def show_settings_page():
                     index=gemini_models.index(st.session_state['settings_gemini_model']),
                     key="settings_gemini_model_widget",
                     on_change=update_gemini_model,
-                    help="Pilih model Gemini. Flash lebih cepat dan hemat kuota, Pro lebih akurat. Model dengan -exp adalah experimental."
+                    help="Pilih model Gemini. Flash lebih cepat dan hemat kuota, Pro lebih akurat. Model dengan -exp adalah experimental. Model 2.x/3.x adalah generasi terbaru."
                 )
                 
             elif "OpenAI" in provider_choice:
@@ -292,9 +300,22 @@ def show_settings_page():
                                     1. Pastikan API Key valid dan belum kadaluarsa
                                     2. Cek quota di [Google AI Studio](https://aistudio.google.com/app/apikey)
                                     3. Pastikan model yang dipilih tersedia:
-                                       - gemini-1.5-flash (recommended - cepat & hemat)
-                                       - gemini-1.5-pro (lebih akurat)
-                                       - gemini-2.0-flash-exp (experimental)
+
+                                    **Generasi Terbaru (Recommended):**
+                                    - gemini-2.0-flash-exp (recommended - generasi 2, cepat & hemat)
+                                    - gemini-2.0-flash-lite-exp (lebih ringan & hemat kuota)
+                                    - gemini-2.5-flash-exp (generasi 2.5, performa tinggi)
+                                    - gemini-2.5-flash-lite-exp (ringan, hemat kuota)
+                                    - gemini-2.5-flash-tts-exp (dengan dukungan TTS)
+                                    - gemini-2.5-pro-exp (generasi 2.5 pro, sangat akurat)
+                                    - gemini-2.5-pro-tts-exp (pro dengan dukungan TTS)
+                                    - gemini-3.0-flash-exp (generasi 3 terbaru)
+
+                                    **Generasi Sebelumnya:**
+                                    - gemini-1.5-flash (stabil, cepat & hemat)
+                                    - gemini-1.5-flash-8b (versi ringan)
+                                    - gemini-1.5-pro (lebih akurat)
+
                                     4. Cek koneksi internet Anda
                                     5. Jika masih gagal, gunakan Heuristic Engine (offline)
                                     """)
@@ -343,28 +364,36 @@ def show_settings_page():
         with st.expander("📖 Referensi Environment Variables"):
             st.markdown("""
             ### Environment Variables (Override UI Settings)
-            
+
             Anda dapat menggunakan environment variables untuk pengaturan permanen yang mengoverride konfigurasi UI:
-            
+
             | Variable | Default | Deskripsi |
             |-----------|---------|-----------|
             | `LLM_PROVIDER` | `heuristic` | Provider default (gemini/openai/ollama/heuristic) |
-            | `LLM_MODEL_NAME` | `gemini-1.5-flash` | Model name default |
+            | `LLM_MODEL_NAME` | `gemini-2.0-flash-exp` | Model name default (Gemini 2 Flash Exp) |
             | `LLM_ENDPOINT_URL` | `http://localhost:11434/api/generate` | Custom endpoint URL |
             | `GEMINI_API_KEY` | - | Google Gemini API Key |
             | `OPENAI_API_KEY` | - | OpenAI API Key |
-            
+
+            **Model Gemini Tersedia:**
+            - Gemini 2: `gemini-2.0-flash-exp`, `gemini-2.0-flash-lite-exp`
+            - Gemini 2.5: `gemini-2.5-flash-exp`, `gemini-2.5-flash-lite-exp`, `gemini-2.5-flash-tts-exp`, `gemini-2.5-pro-exp`, `gemini-2.5-pro-tts-exp`
+            - Gemini 3: `gemini-3.0-flash-exp`
+            - Gemini 1.5: `gemini-1.5-flash`, `gemini-1.5-flash-8b`, `gemini-1.5-pro`
+
             **Contoh Penggunaan (PowerShell):**
             ```powershell
             $env:GEMINI_API_KEY="your-api-key-here"
             $env:LLM_PROVIDER="gemini"
+            $env:LLM_MODEL_NAME="gemini-2.0-flash-exp"
             python run.py
             ```
-            
+
             **Contoh Penggunaan (Linux/macOS):**
             ```bash
             export GEMINI_API_KEY="your-api-key-here"
             export LLM_PROVIDER="gemini"
+            export LLM_MODEL_NAME="gemini-2.0-flash-exp"
             python run.py
             ```
             """)

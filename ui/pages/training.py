@@ -1200,7 +1200,7 @@ def show_training_page():
                         "Pilih Provider AI:",
                         ["heuristic", "gemini", "openai", "ollama"],
                         index=0,
-                        help="heuristic: mode offline tanpa API key. gemini/openai/ollama: memerlukan konfigurasi API."
+                        help="heuristic: mode offline tanpa API key. gemini/openai/ollama: memerlukan konfigurasi API. Gemini 2/2.5/3 tersedia."
                     )
 
                     if st.button("🚀 Generate Laporan Interpretasi", type="secondary"):

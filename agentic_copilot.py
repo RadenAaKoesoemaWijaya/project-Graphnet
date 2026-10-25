@@ -329,7 +329,7 @@ class AgenticInvestigatorCopilot:
     ):
         self.provider = provider.lower()
         self.api_key = api_key or os.getenv("LLM_API_KEY", "")
-        self.model_name = model_name or os.getenv("LLM_MODEL_NAME", "gemini-1.5-flash")
+        self.model_name = model_name or os.getenv("LLM_MODEL_NAME", "gemini-2.0-flash-exp")
         self.endpoint_url = endpoint_url or os.getenv("LLM_ENDPOINT_URL", "http://localhost:11434/api/generate")
         self.rag = get_rag_knowledge_base()
 
