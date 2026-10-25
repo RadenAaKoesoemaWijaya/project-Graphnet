@@ -397,59 +397,150 @@ def show_data_collection_page():
                     avg_coverage = sum(analysis_result.rule_coverage.values()) / 9
                     st.metric("Coverage Rata-rata", f"{avg_coverage:.1%}")
                 
-                # Display column mapping
-                st.markdown("### Mapping Kolom User → Kolom Kanonikal")
-                if analysis_result.column_mapping:
-                    mapping_data = []
-                    for user_col, canonical in analysis_result.column_mapping.items():
-                        confidence = analysis_result.mapping_confidence.get(user_col, 0)
-                        conf_status = "High" if confidence >= 0.9 else "Medium" if confidence >= 0.7 else "Low"
-                        mapping_data.append({
-                            "Kolom User": user_col,
-                            "Kolom Kanonikal": canonical,
-                            "Confidence": f"{confidence:.0%}",
-                            "Status": conf_status
+                st.markdown("---")
+                
+                # Dropdown untuk memilih bagian yang ingin dilihat
+                st.subheader("📊 Detail Analisis Metadata")
+                analysis_section = st.selectbox(
+                    "Pilih bagian yang ingin dilihat:",
+                    ["Ringkasan Semua", "Mapping Kolom", "Fitur yang Kurang", "Coverage per Rule", "Rekomendasi Preprocessing"],
+                    index=0,
+                    key="metadata_section_selector"
+                )
+                
+                # Ringkasan Semua - Tampilkan semua bagian
+                if analysis_section == "Ringkasan Semua":
+                    with st.expander("📋 Mapping Kolom User → Kolom Kanonikal", expanded=True):
+                        if analysis_result.column_mapping:
+                            mapping_data = []
+                            for user_col, canonical in analysis_result.column_mapping.items():
+                                confidence = analysis_result.mapping_confidence.get(user_col, 0)
+                                conf_status = "✅ Tinggi" if confidence >= 0.9 else "⚠️ Sedang" if confidence >= 0.7 else "❌ Rendah"
+                                mapping_data.append({
+                                    "Kolom Dataset": user_col,
+                                    "Kolom Standar": canonical,
+                                    "Kepercayaan": f"{confidence:.0%}",
+                                    "Status": conf_status
+                                })
+                            st.dataframe(pd.DataFrame(mapping_data), hide_index=True, width='stretch', use_container_width=True)
+                        else:
+                            st.warning("⚠️ Tidak ada kolom yang terdeteksi secara otomatis. Pastikan nama kolom sesuai dengan semantic mapping.")
+                    
+                    with st.expander("❌ Fitur yang Kurang", expanded=True):
+                        if analysis_result.features_missing:
+                            missing_data = []
+                            for feature in analysis_result.features_missing:
+                                req = analyzer.CANONICAL_COLUMNS[feature]
+                                from metadata_analyzer import RulePriority
+                                priority_label = "🔴 KRITIS" if req.priority == RulePriority.CRITICAL else "🟡 PENTING"
+                                affected_rules = ", ".join([f"Rule {r}" for r in req.required_by_rules])
+                                missing_data.append({
+                                    "Fitur": feature,
+                                    "Tipe Data": req.data_type,
+                                    "Prioritas": priority_label,
+                                    "Dibutuhkan Oleh": affected_rules
+                                })
+                            st.dataframe(pd.DataFrame(missing_data), hide_index=True, width='stretch', use_container_width=True)
+                        else:
+                            st.success("✅ Semua fitur yang diperlukan tersedia!")
+                    
+                    with st.expander("📈 Coverage per Rule", expanded=True):
+                        rule_coverage_data = []
+                        for rule_id, coverage in analysis_result.rule_coverage.items():
+                            rule_name = analyzer._get_rule_name(rule_id)
+                            status = "✅ Aktif" if coverage >= 0.5 else "❌ Tidak Aktif"
+                            coverage_color = "🟢" if coverage >= 0.8 else "🟡" if coverage >= 0.5 else "🔴"
+                            rule_coverage_data.append({
+                                "Rule": f"Rule {rule_id}",
+                                "Nama Rule": rule_name,
+                                "Coverage": f"{coverage:.1%}",
+                                "Status": status
+                            })
+                        st.dataframe(pd.DataFrame(rule_coverage_data), hide_index=True, width='stretch', use_container_width=True)
+                    
+                    with st.expander("💡 Rekomendasi Preprocessing", expanded=True):
+                        if analysis_result.recommendations:
+                            for i, rec in enumerate(analysis_result.recommendations, 1):
+                                st.info(f"{i}. {rec}")
+                        else:
+                            st.info("Tidak ada rekomendasi preprocessing tambahan.")
+                
+                # Mapping Kolom saja
+                elif analysis_section == "Mapping Kolom":
+                    st.markdown("### 📋 Mapping Kolom User → Kolom Kanonikal")
+                    if analysis_result.column_mapping:
+                        mapping_data = []
+                        for user_col, canonical in analysis_result.column_mapping.items():
+                            confidence = analysis_result.mapping_confidence.get(user_col, 0)
+                            conf_status = "✅ Tinggi" if confidence >= 0.9 else "⚠️ Sedang" if confidence >= 0.7 else "❌ Rendah"
+                            mapping_data.append({
+                                "Kolom Dataset": user_col,
+                                "Kolom Standar": canonical,
+                                "Kepercayaan": f"{confidence:.0%}",
+                                "Status": conf_status
+                            })
+                        st.dataframe(pd.DataFrame(mapping_data), hide_index=True, width='stretch', use_container_width=True)
+                    else:
+                        st.warning("⚠️ Tidak ada kolom yang terdeteksi secara otomatis. Pastikan nama kolom sesuai dengan semantic mapping.")
+                
+                # Fitur yang Kurang saja
+                elif analysis_section == "Fitur yang Kurang":
+                    st.markdown("### ❌ Fitur yang Kurang")
+                    if analysis_result.features_missing:
+                        missing_data = []
+                        for feature in analysis_result.features_missing:
+                            req = analyzer.CANONICAL_COLUMNS[feature]
+                            from metadata_analyzer import RulePriority
+                            priority_label = "🔴 KRITIS" if req.priority == RulePriority.CRITICAL else "🟡 PENTING"
+                            affected_rules = ", ".join([f"Rule {r}" for r in req.required_by_rules])
+                            missing_data.append({
+                                "Fitur": feature,
+                                "Tipe Data": req.data_type,
+                                "Prioritas": priority_label,
+                                "Dibutuhkan Oleh": affected_rules
+                            })
+                        st.dataframe(pd.DataFrame(missing_data), hide_index=True, width='stretch', use_container_width=True)
+                    else:
+                        st.success("✅ Semua fitur yang diperlukan tersedia!")
+                
+                # Coverage per Rule saja
+                elif analysis_section == "Coverage per Rule":
+                    st.markdown("### 📈 Coverage per Rule")
+                    rule_coverage_data = []
+                    for rule_id, coverage in analysis_result.rule_coverage.items():
+                        rule_name = analyzer._get_rule_name(rule_id)
+                        status = "✅ Aktif" if coverage >= 0.5 else "❌ Tidak Aktif"
+                        rule_coverage_data.append({
+                            "Rule": f"Rule {rule_id}",
+                            "Nama Rule": rule_name,
+                            "Coverage": f"{coverage:.1%}",
+                            "Status": status
                         })
-                    st.dataframe(pd.DataFrame(mapping_data), hide_index=True, width='stretch')
-                else:
-                    st.warning("Tidak ada kolom yang terdeteksi secara otomatis. Pastikan nama kolom sesuai dengan semantic mapping.")
+                    st.dataframe(pd.DataFrame(rule_coverage_data), hide_index=True, width='stretch', use_container_width=True)
                 
-                # Display missing features
-                if analysis_result.features_missing:
-                    st.markdown("### Fitur yang Kurang")
-                    for feature in analysis_result.features_missing:
-                        req = analyzer.CANONICAL_COLUMNS[feature]
-                        from metadata_analyzer import RulePriority
-                        priority_label = "CRITICAL" if req.priority == RulePriority.CRITICAL else "IMPORTANT"
-                        affected_rules = ", ".join([f"Rule {r}" for r in req.required_by_rules])
-                        st.warning(f"{priority_label}: **{feature}** ({req.data_type}) - Required by: {affected_rules}")
-                else:
-                    st.success("Semua fitur yang diperlukan tersedia!")
+                # Rekomendasi Preprocessing saja
+                elif analysis_section == "Rekomendasi Preprocessing":
+                    st.markdown("### 💡 Rekomendasi Preprocessing")
+                    if analysis_result.recommendations:
+                        for i, rec in enumerate(analysis_result.recommendations, 1):
+                            st.info(f"{i}. {rec}")
+                    else:
+                        st.info("Tidak ada rekomendasi preprocessing tambahan.")
                 
-                # Display rule coverage
-                st.markdown("### Coverage per Rule")
-                rule_coverage_data = []
-                for rule_id, coverage in analysis_result.rule_coverage.items():
-                    rule_name = analyzer._get_rule_name(rule_id)
-                    status = "Aktif" if coverage >= 0.5 else "Tidak Aktif"
-                    rule_coverage_data.append({
-                        "Rule": f"Rule {rule_id}",
-                        "Nama": rule_name,
-                        "Coverage": f"{coverage:.1%}",
-                        "Status": status
-                    })
-                st.dataframe(pd.DataFrame(rule_coverage_data), hide_index=True, width='stretch')
-                
-                # Display recommendations
-                st.markdown("### Rekomendasi Preprocessing")
-                for i, rec in enumerate(analysis_result.recommendations, 1):
-                    st.info(f"{i}. {rec}")
+                st.markdown("---")
                 
                 # Button to save analysis
-                if st.button("Simpan Analisis Metadata", key="save_metadata"):
-                    st.session_state['metadata_analysis'] = analysis_result
-                    st.session_state['column_mapping'] = analysis_result.column_mapping
-                    st.success("Analisis metadata disimpan! Mapping akan digunakan di preprocessing.")
+                col_save, col_skip = st.columns([1, 3])
+                with col_save:
+                    if st.button("💾 Simpan Analisis Metadata", key="save_metadata", type="primary"):
+                        st.session_state['metadata_analysis'] = analysis_result
+                        st.session_state['column_mapping'] = analysis_result.column_mapping
+                        st.success("✅ Analisis metadata disimpan! Mapping akan digunakan di preprocessing.")
+                with col_skip:
+                    if st.button("⏭️ Lanjut ke Preprocessing", key="skip_to_preprocess"):
+                        st.session_state['metadata_analysis'] = analysis_result
+                        st.session_state['column_mapping'] = analysis_result.column_mapping
+                        st.info("ℹ️ Analisis metadata disimpan otomatis. Lanjut ke preprocessing.")
             
             except Exception as e:
                 st.error(f"❌ Error saat analisis metadata: {e}")
