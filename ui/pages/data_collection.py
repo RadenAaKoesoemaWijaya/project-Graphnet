@@ -19,16 +19,24 @@ from file_handler import (
     show_file_size_warning, save_processed_data, remove_duplicates_from_parquet,
     normalize_upload_type, check_ingest_resources,
     merge_multiple_raw_parquets, ingest_multiple_files_to_raw_parquet,
+    validate_join_columns, estimate_merge_size,
 )
 from large_file_processor import (
     prepare_train_validation_test_parquet,
     preprocess_dataset_with_train_only_stats,
 )
 
-def load_and_validate_raw_data(uploaded_files, add_source_column=True):
+def load_and_validate_raw_data(uploaded_files, add_source_column=True, merge_mode="diagonal", join_columns=None, join_type="inner"):
     """
     Ingest single or multiple uploaded files, merge into a master Parquet dataset,
     and run comprehensive validation.
+    
+    Args:
+        uploaded_files: Uploaded file object(s)
+        add_source_column: Whether to add source_file column
+        merge_mode: 'diagonal' or 'key_based'
+        join_columns: List of columns for key-based join
+        join_type: Type of join (inner, left, outer, cross)
     """
     if not isinstance(uploaded_files, (list, tuple)):
         file_list = [uploaded_files]
@@ -54,6 +62,9 @@ def load_and_validate_raw_data(uploaded_files, add_source_column=True):
         raw_parquet_path, total_rows, schema_dict, summaries = ingest_multiple_files_to_raw_parquet(
             file_list,
             add_source_column=add_source_column if len(file_list) > 1 else False,
+            merge_mode=merge_mode,
+            join_columns=join_columns,
+            join_type=join_type,
             progress_callback=on_progress,
         )
 
@@ -215,17 +226,107 @@ def show_data_collection_page():
 
             if is_multi_file:
                 st.markdown("#### 🔗 Integrasi & Penggabungan Multi-Dataset")
-                col_m1, col_m2 = st.columns([3, 2])
+                
+                # Mode selection
+                col_m1, col_m2 = st.columns([2, 1])
                 with col_m1:
-                    st.info(f"📂 Terdeteksi **{len(uploaded_files)} file** diunggah. Seluruh berkas akan digabungkan secara streaming (*zero-RAM spike*) menjadi satu dataset master terpadu.")
+                    merge_mode = st.radio(
+                        "Mode Penggabungan",
+                        options=["Diagonal Concat (Stacking)", "Key-Based Join (Enrichment)"],
+                        help=(
+                            "Diagonal: Menumpuk semua baris dari semua file. "
+                            "Key-Based: Menggabungkan berdasarkan kesamaan nilai kolom tertentu."
+                        ),
+                        horizontal=True
+                    )
+                
                 with col_m2:
                     add_source_col = st.checkbox(
                         "🏷️ Sertakan kolom 'source_file'",
                         value=True,
-                        help="Menyertakan nama file sumber pada tiap baris transaksi untuk memudahkan penelusuran asal data pada audit trail."
+                        help="Menyertakan nama file sumber pada tiap baris"
                     )
+                
+                # Key-based merge options
+                join_columns = None
+                join_type = "inner"
+                
+                if merge_mode == "Key-Based Join (Enrichment)":
+                    st.markdown("##### 🔑 Konfigurasi Key-Based Merge")
+                    
+                    # Load sample to show available columns
+                    sample_df = None
+                    available_columns = []
+                    try:
+                        # Load first file sample to get columns
+                        first_file = uploaded_files[0]
+                        first_ext = normalize_upload_type("", first_file.name)
+                        temp_path = ingest_file_to_raw_parquet(
+                            first_file,
+                            first_ext,
+                            progress_callback=None
+                        )
+                        sample_df = get_parquet_sample(temp_path, n=100)
+                        available_columns = list(sample_df.columns)
+                        os.unlink(temp_path)  # Clean up temp file
+                    except Exception as e:
+                        st.warning(f"Tidak dapat memuat kolom sampel: {e}")
+                        available_columns = []
+                    
+                    if available_columns:
+                        st.info(f"📋 Kolom tersedia untuk join: {', '.join(available_columns[:10])}{'...' if len(available_columns) > 10 else ''}")
+                        
+                        # Multi-select for join columns
+                        join_columns = st.multiselect(
+                            "Pilih Kolom Join (Key)",
+                            options=available_columns,
+                            help="Pilih satu atau lebih kolom sebagai kunci untuk penggabungan",
+                            max_selections=5
+                        )
+                        
+                        if not join_columns:
+                            st.warning("⚠️ Pilih minimal 1 kolom join untuk mode Key-Based.")
+                            st.stop()
+                        
+                        # Join type selection
+                        join_type = st.selectbox(
+                            "Tipe Join",
+                            options=["inner", "left", "outer", "cross"],
+                            index=0,
+                            help=(
+                                "Inner: Hanya baris dengan key cocok di semua dataset. "
+                                "Left: Semua baris dari dataset pertama. "
+                                "Outer: Semua baris dari semua dataset. "
+                                "Cross: Cartesian product (hati-hati dengan data besar)."
+                            )
+                        )
+                        
+                        # Show join type explanation
+                        join_explanations = {
+                            "inner": "✅ Hanya baris dengan key yang cocok di SEMUA dataset",
+                            "left": "⬅️ Semua baris dari dataset pertama + yang cocok dari dataset lain",
+                            "outer": "🔲 Semua baris dari SEMUA dataset (dengan NULL untuk yang tidak cocok)",
+                            "cross": "❌ Cartesian product (baris1 × baris2) - HATI-HATI: bisa sangat besar!"
+                        }
+                        st.info(join_explanations.get(join_type, ""))
+                        
+                        # Warning for cross join
+                        if join_type == "cross":
+                            st.error("⚠️ CROSS JOIN dapat menghasilkan dataset yang sangat besar!")
+                            confirm_cross = st.checkbox("Saya mengerti risikonya dan ingin melanjutkan", value=False)
+                            if not confirm_cross:
+                                st.stop()
+                    else:
+                        st.error("❌ Tidak dapat menampilkan kolom untuk pilihan join.")
+                        st.stop()
+                else:
+                    # Diagonal concat mode (default)
+                    st.info(f"📂 Terdeteksi **{len(uploaded_files)} file** diunggah. Seluruh berkas akan digabungkan secara streaming (*zero-RAM spike*) menjadi satu dataset master terpadu.")
             else:
                 add_source_col = False
+                merge_mode = "diagonal"
+                join_columns = None
+                join_type = "inner"
 
             # Show file info metrics
             if not is_multi_file:
@@ -268,7 +369,8 @@ def show_data_collection_page():
                     st.dataframe(pd.DataFrame(file_table_data), hide_index=True, width='stretch')
 
             # Clear old processing state if new file selection uploaded
-            current_files_key = ";".join(f"{f.name}:{f.size}" for f in uploaded_files) + f":source={add_source_col}"
+            merge_config = f":mode={merge_mode}:join={','.join(join_columns) if join_columns else 'none'}:type={join_type}"
+            current_files_key = ";".join(f"{f.name}:{f.size}" for f in uploaded_files) + f":source={add_source_col}{merge_config}"
             if st.session_state.get('last_uploaded_filename') != current_files_key:
                 st.session_state.pop('df_processed_path', None)
                 for cache_key in (
@@ -309,7 +411,13 @@ def show_data_collection_page():
                         is_valid,
                         validation_results,
                         summaries,
-                    ) = load_and_validate_raw_data(uploaded_files, add_source_column=add_source_col)
+                    ) = load_and_validate_raw_data(
+                        uploaded_files, 
+                        add_source_column=add_source_col,
+                        merge_mode=merge_mode,
+                        join_columns=join_columns,
+                        join_type=join_type
+                    )
 
                 st.session_state['raw_data_cache_key'] = raw_cache_key
                 st.session_state['raw_data_cache_path'] = raw_parquet_path
@@ -338,7 +446,9 @@ def show_data_collection_page():
                 return
 
             if is_multi_file:
-                st.success(f"✅ Seluruh {len(uploaded_files)} file berhasil digabungkan dan divalidasi! Total baris: {total_rows:,}, Jumlah kolom: {total_cols}")
+                merge_mode_display = "Key-Based Join" if merge_mode == "key_based" else "Diagonal Concat"
+                join_info = f" (key: {', '.join(join_columns)}, type: {join_type})" if merge_mode == "key_based" else ""
+                st.success(f"✅ Seluruh {len(uploaded_files)} file berhasil digabungkan ({merge_mode_display}{join_info}) dan divalidasi! Total baris: {total_rows:,}, Jumlah kolom: {total_cols}")
             else:
                 st.success(f"✅ File berhasil dimuat dan divalidasi! Jumlah baris: {total_rows:,}, Jumlah kolom: {total_cols}")
 

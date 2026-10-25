@@ -848,6 +848,176 @@ def ingest_file_to_raw_parquet(uploaded_file, file_type='csv', progress_callback
                 pass
 
 
+def validate_join_columns(df1_columns, df2_columns, join_columns):
+    """
+    Validate that join columns exist and are available.
+    
+    Args:
+        df1_columns: List of column names in first dataset
+        df2_columns: List of column names in second dataset
+        join_columns: List of column names to use as join keys
+    
+    Returns:
+        (is_valid, error_message)
+    """
+    if not join_columns:
+        return False, "Kolom join tidak boleh kosong"
+    
+    missing_in_df1 = [col for col in join_columns if col not in df1_columns]
+    missing_in_df2 = [col for col in join_columns if col not in df2_columns]
+    
+    if missing_in_df1 or missing_in_df2:
+        error_parts = []
+        if missing_in_df1:
+            error_parts.append(f"tidak ada di dataset 1: {', '.join(missing_in_df1)}")
+        if missing_in_df2:
+            error_parts.append(f"tidak ada di dataset 2: {', '.join(missing_in_df2)}")
+        return False, f"Kolom join {', '.join(error_parts)}"
+    
+    return True, None
+
+
+def estimate_merge_size(df1_rows, df2_rows, join_type, key_cardinality_estimate=None):
+    """
+    Estimate the size of merged dataset to prevent OOM.
+    
+    Args:
+        df1_rows: Number of rows in first dataset
+        df2_rows: Number of rows in second dataset
+        join_type: Type of join ('inner', 'left', 'outer', 'cross')
+        key_cardinality_estimate: Estimated number of unique keys (optional)
+    
+    Returns:
+        (estimated_rows, risk_level)
+    """
+    if join_type == "cross":
+        estimated = df1_rows * df2_rows
+        risk = "CRITICAL" if estimated > 10_000_000 else "HIGH"
+    elif join_type == "inner":
+        if key_cardinality_estimate:
+            estimated = min(df1_rows, df2_rows, key_cardinality_estimate)
+        else:
+            estimated = min(df1_rows, df2_rows) * 0.3  # Conservative estimate
+        risk = "LOW"
+    elif join_type == "left":
+        estimated = df1_rows
+        risk = "LOW"
+    elif join_type == "outer":
+        estimated = df1_rows + df2_rows
+        risk = "MEDIUM"
+    else:
+        estimated = df1_rows + df2_rows
+        risk = "MEDIUM"
+    
+    return int(estimated), risk
+
+
+def merge_datasets_with_key(
+    parquet_paths,
+    join_columns,
+    output_path=None,
+    join_type="inner",
+    add_source_column=True,
+    file_names=None,
+    progress_callback=None,
+):
+    """
+    Merge multiple datasets based on specified join columns (key-based merge).
+    
+    Args:
+        parquet_paths: List of parquet file paths to merge
+        join_columns: List of column names to use as join keys
+        output_path: Output parquet file path
+        join_type: Type of join - 'inner', 'left', 'outer', 'cross'
+        add_source_column: Whether to add source_file column
+        file_names: List of source file names
+        progress_callback: Progress callback function
+    
+    Returns:
+        output_path: Path to merged parquet file
+    """
+    if not parquet_paths:
+        raise ValueError("Tidak ada file Parquet yang diberikan untuk digabungkan.")
+    
+    if not join_columns:
+        raise ValueError("Join columns harus ditentukan untuk key-based merge.")
+    
+    if len(parquet_paths) < 2:
+        raise ValueError("Minimal 2 file diperlukan untuk key-based merge.")
+    
+    os.makedirs(TEMP_DATA_DIR, exist_ok=True)
+    if output_path is None:
+        unique_id = uuid.uuid4().hex
+        output_path = os.path.join(TEMP_DATA_DIR, f"merged_key_{unique_id}.parquet")
+    
+    _report_progress(progress_callback, "merge_start", 10.0, 
+                   f"Menyiapkan key-based merge pada kolom: {', '.join(join_columns)}")
+    
+    try:
+        # Load first dataset as base
+        base_lf = pl.scan_parquet(parquet_paths[0])
+        base_schema = base_lf.collect_schema()
+        base_cols = list(base_schema.names())
+        
+        if add_source_column:
+            base_fname = file_names[0] if file_names else os.path.basename(parquet_paths[0])
+            base_lf = base_lf.with_columns(pl.lit(str(base_fname)).alias("source_file"))
+        
+        _report_progress(progress_callback, "loading_base", 20.0, 
+                       f"Memuat dataset dasar: {os.path.basename(parquet_paths[0])}")
+        
+        # Merge with other datasets sequentially
+        for i, (path, fname) in enumerate(zip(parquet_paths[1:], 
+                                              file_names[1:] if file_names else 
+                                              [os.path.basename(p) for p in parquet_paths[1:]]), 
+                                      start=1):
+            _report_progress(progress_callback, f"merge_step_{i}", 
+                           30.0 + (i * 20.0 / len(parquet_paths)),
+                           f"Menggabungkan dataset {i+1}/{len(parquet_paths)}: {fname}")
+            
+            current_lf = pl.scan_parquet(path)
+            current_schema = current_lf.collect_schema()
+            current_cols = list(current_schema.names())
+            
+            # Validate join columns exist
+            is_valid, error_msg = validate_join_columns(base_cols, current_cols, join_columns)
+            if not is_valid:
+                raise ValueError(
+                    f"Validasi join gagal untuk {fname}: {error_msg}"
+                )
+            
+            if add_source_column:
+                current_lf = current_lf.with_columns(pl.lit(str(fname)).alias("source_file"))
+            
+            # Perform join
+            try:
+                base_lf = base_lf.join(
+                    current_lf,
+                    on=join_columns,
+                    how=join_type,
+                    suffix=f"_ds{i}"
+                )
+            except Exception as e:
+                logger.error(f"Key-based join failed for {fname}: {e}")
+                raise ValueError(
+                    f"Gagal menggabungkan {fname} dengan key-based join. "
+                    f"Pastikan kolom join '{', '.join(join_columns)}' memiliki tipe data yang konsisten."
+                ) from e
+        
+        _report_progress(progress_callback, "writing", 90.0, "Menulis hasil merge ke disk...")
+        
+        # Write merged result
+        base_lf.sink_parquet(output_path, compression="zstd")
+        
+        _report_progress(progress_callback, "merge_done", 100.0, "Key-based merge selesai.")
+        
+        return output_path
+        
+    except Exception as e:
+        logger.error(f"Key-based merge failed: {e}")
+        raise
+
+
 def merge_multiple_raw_parquets(
     parquet_paths,
     output_path=None,
@@ -894,12 +1064,25 @@ def merge_multiple_raw_parquets(
 def ingest_multiple_files_to_raw_parquet(
     uploaded_files,
     add_source_column=True,
+    merge_mode="diagonal",
+    join_columns=None,
+    join_type="inner",
     progress_callback=None,
 ):
     """
     Ingest multiple uploaded files (CSV/Excel/Parquet/GZ) streaming to disk,
     then merge them into a single master raw Parquet file.
-    Returns (master_parquet_path, total_rows, schema_dict, summaries).
+    
+    Args:
+        uploaded_files: List of uploaded file objects
+        add_source_column: Whether to add source_file column
+        merge_mode: 'diagonal' or 'key_based'
+        join_columns: List of columns for key-based join
+        join_type: Type of join (inner, left, outer, cross)
+        progress_callback: Progress callback function
+    
+    Returns:
+        (master_parquet_path, total_rows, schema_dict, summaries)
     """
     if not uploaded_files:
         raise ValueError("Tidak ada file yang diunggah.")
@@ -939,6 +1122,7 @@ def ingest_multiple_files_to_raw_parquet(
                 "columns": schema.get("columns", []),
             })
 
+        # Merge based on mode
         if len(raw_paths) == 1 and not add_source_column:
             master_path = raw_paths[0]
         else:
@@ -946,12 +1130,25 @@ def ingest_multiple_files_to_raw_parquet(
                 overall_pct = 75.0 + (pct / 100.0) * 23.0
                 _report_progress(progress_callback, "merge", overall_pct, msg)
 
-            master_path = merge_multiple_raw_parquets(
-                raw_paths,
-                add_source_column=add_source_column,
-                file_names=file_names,
-                progress_callback=merge_cb,
-            )
+            if merge_mode == "key_based" and join_columns:
+                # Key-based merge
+                master_path = merge_datasets_with_key(
+                    raw_paths,
+                    join_columns=join_columns,
+                    join_type=join_type,
+                    add_source_column=add_source_column,
+                    file_names=file_names,
+                    progress_callback=merge_cb,
+                )
+            else:
+                # Default diagonal concat
+                master_path = merge_multiple_raw_parquets(
+                    raw_paths,
+                    add_source_column=add_source_column,
+                    file_names=file_names,
+                    progress_callback=merge_cb,
+                )
+            
             # Remove intermediate raw parquets if merged into new master
             for p in raw_paths:
                 if p != master_path and os.path.exists(p):
@@ -969,11 +1166,12 @@ def ingest_multiple_files_to_raw_parquet(
             "total_rows": total_rows,
         }
 
+        merge_mode_str = "key-based" if merge_mode == "key_based" else "diagonal"
         _report_progress(
             progress_callback,
             "complete",
             100.0,
-            f"Seluruh {total_files} dataset berhasil digabungkan ({total_rows:,} baris).",
+            f"Seluruh {total_files} dataset berhasil digabungkan ({merge_mode_str}, {total_rows:,} baris).",
         )
         return master_path, total_rows, schema_dict, summaries
 

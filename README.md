@@ -21,8 +21,39 @@ Aplikasi ini dilengkapi antarmuka interaktif berbasis **Streamlit**, mendukung i
 - **Pydantic Data Validation**: Type-safe validation dengan automatic validators untuk claim data (Phase 1)
 - **Circuit Breaker**: Evaluasi kesiapan aturan bisnis otomatis dengan bobot dinamis
 - **Multi-Format Ingestion**: Dukungan CSV, Excel (.xlsx, .xls), dan Parquet dengan streaming chunk processing
+- **Key-Based Dataset Merge**: Penggabungan multi-dataset berdasarkan kesamaan kolom (inner, left, outer, cross join)
 - **Intelligent Feature Selection**: SelectKBest, Tree-based Importance, Multicollinearity Filter, Low-Variance Filter, PCA
 - **Leakage-Safe Splitting**: Train/validation/test split sebelum preprocessing untuk mencegah data leakage
+
+### 🔗 Key-Based Dataset Merge (NEW)
+ASTINA sekarang mendukung dua mode penggabungan dataset untuk multi-file upload:
+
+**Mode 1: Diagonal Concat (Stacking)**
+- Menumpuk semua baris dari semua file secara vertikal
+- Ideal untuk dataset yang sama dari periode berbeda
+- Tidak memerlukan kolom kunci
+- Mode default untuk backward compatibility
+
+**Mode 2: Key-Based Join (Enrichment)**
+- Menggabungkan dataset berdasarkan kesamaan nilai kolom tertentu
+- Mendukung 4 tipe join SQL:
+  - **Inner**: Hanya baris dengan key cocok di SEMUA dataset
+  - **Left**: Semua baris dari dataset pertama + yang cocok dari dataset lain
+  - **Outer**: Semua baris dari SEMUA dataset (dengan NULL untuk yang tidak cocok)
+  - **Cross**: Cartesian product (dengan peringatan risiko)
+- Pilihan kolom join hingga 5 kolom
+- Validasi otomatis kolom join sebelum eksekusi
+- Estimasi ukuran hasil merge untuk mencegah OOM
+- Warning system untuk operasi berisiko (cross join)
+
+**Use Case:**
+- Enrichment: Menggabungkan klaim dengan diagnosis dari dataset terpisah
+- Consolidation: Menggabungkan data bulanan dengan key-based matching
+- Data Integration: Menghubungkan multiple source systems
+
+**File Terkait:**
+- `file_handler.py`: `merge_datasets_with_key()`, `validate_join_columns()`, `estimate_merge_size()`
+- `ui/pages/data_collection.py`: UI untuk mode selection dan konfigurasi
 
 ### 🤖 AI Copilot & RAG
 - **Multi-Provider LLM**: Google Gemini, OpenAI, Local Ollama, Offline Heuristic Engine
