@@ -532,12 +532,23 @@ def show_training_page():
                 st.error(error_msg)
                 return
 
-            # Monitor memory before training
+            # Monitor memory before training -- only warn, never block
+            import gc
             memory_stats = monitor_memory_usage()
-            if memory_stats.get('system_percent', 0) > 85:
-                st.warning(f"⚠️ System memory usage high ({memory_stats['system_percent']:.1f}%). Training may be slow.")
-                if not st.checkbox("Lanjutkan training meskipun peringatan memori?", key="continue_high_memory"):
-                    return
+            system_pct = memory_stats.get('system_percent', 0)
+            if system_pct > 90:
+                # Sangat tinggi: jalankan GC lalu lanjutkan
+                gc.collect()
+                st.warning(
+                    f"⚠️ Penggunaan memori sistem sangat tinggi ({system_pct:.1f}%). "
+                    "Garbage collection telah dijalankan. Training akan tetap dilanjutkan "
+                    "namun mungkin lebih lambat."
+                )
+            elif system_pct > 80:
+                st.info(
+                    f"ℹ️ Penggunaan memori sistem {system_pct:.1f}%. "
+                    "Training tetap dilanjutkan secara otomatis."
+                )
 
             train_df = st.session_state['train_df']
             test_df = st.session_state['test_df']
