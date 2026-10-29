@@ -6,6 +6,8 @@ Generates professional PDF reports from model training interpretation results.
 
 import os
 import logging
+import textwrap
+from html import escape
 from datetime import datetime
 from typing import Dict, Any, List
 from io import BytesIO
@@ -170,6 +172,11 @@ class PDFReportGenerator:
         if not _has_reportlab:
             raise ImportError("reportlab is not installed. Cannot generate PDF.")
 
+        if charts is None:
+            charts = report_data.get('charts')
+        if tables is None:
+            tables = report_data.get('tables')
+
         buffer = BytesIO()
         doc = SimpleDocTemplate(
             buffer,
@@ -198,6 +205,12 @@ class PDFReportGenerator:
         story.append(PageBreak())
 
         # Dataset analysis
+        if report_data.get('preprocessing_analysis'):
+            story.extend(self._build_section(
+                "Tahap Data Preprocessing", report_data['preprocessing_analysis']
+            ))
+            story.append(PageBreak())
+
         story.extend(self._build_section("Analisis Dataset", report_data.get('dataset_analysis', '')))
         story.append(PageBreak())
 
@@ -261,6 +274,9 @@ class PDFReportGenerator:
 
         # Recommendations
         story.extend(self._build_section("Rekomendasi", report_data.get('recommendations', '')))
+
+        # Include artifacts outside the original report's predefined sections.
+        story.extend(self._add_remaining_artifacts(charts, tables))
 
         # Footer
         story.append(Spacer(1, 0.5 * inch))
@@ -352,7 +368,7 @@ class PDFReportGenerator:
     def _parse_markdown_to_paragraphs(self, text: str) -> List:
         """Parse markdown-like text to Paragraph objects."""
         paragraphs = []
-        lines = text.split('\n')
+        lines = str(text or '').split('\n')
         current_text = []
 
         for line in lines:
@@ -455,11 +471,77 @@ class PDFReportGenerator:
         # Create table
         try:
             if table_data and len(table_data) > 0:
-                # Calculate column widths
-                n_cols = len(table_data[0])
-                col_widths = [2.5 * inch] + [(6 * inch - 2.5 * inch) / (n_cols - 1)] * (n_cols - 1) if n_cols > 1 else [6 * inch]
+                normalized_rows = [
+                    list(row) if isinstance(row, (list, tuple)) else [row]
+                    for row in table_data
+                ]
+                n_cols = max(len(row) for row in normalized_rows)
+                normalized_rows = [
+                    row + [''] * (n_cols - len(row)) for row in normalized_rows
+                ]
+                available_width = 6.27 * inch
+                col_widths = (
+                    [2.5 * inch] + [(available_width - 2.5 * inch) / (n_cols - 1)] * (n_cols - 1)
+                    if n_cols > 1 else [available_width]
+                )
+                min_column_width = min(col_widths)
+                cell_padding = min(8, max(2, (min_column_width - 4) / 2))
+                cell_font_size = min(8, max(5, min_column_width * 0.45))
+                header_font_size = min(9, max(5, min_column_width * 0.5))
+                cell_style = ParagraphStyle(
+                    'PDFTableCell',
+                    parent=self.styles['Normal'],
+                    fontSize=cell_font_size,
+                    leading=cell_font_size + 2,
+                    wordWrap='CJK',
+                )
+                header_style = ParagraphStyle(
+                    'PDFTableHeader',
+                    parent=cell_style,
+                    textColor=colors.white,
+                    alignment=TA_CENTER,
+                    fontName='Helvetica-Bold',
+                    fontSize=header_font_size,
+                )
+                formatted_rows = []
+                for row_index, row in enumerate(normalized_rows):
+                    style = header_style if row_index == 0 else cell_style
+                    wrapped_cells = []
+                    for value, width in zip(row, col_widths):
+                        char_width = max(
+                            3,
+                            int(max(width - 2 * cell_padding, 3) / (cell_font_size * 0.55)),
+                        )
+                        wrapped_cells.append(textwrap.wrap(
+                            str(value if value is not None else ''),
+                            width=char_width,
+                            break_long_words=True,
+                            break_on_hyphens=True,
+                        ) or [''])
 
-                table = Table(table_data, colWidths=col_widths)
+                    if row_index == 0:
+                        chunk_count = 1
+                    else:
+                        chunk_count = max(
+                            (len(lines) + 39) // 40 for lines in wrapped_cells
+                        )
+                    for chunk_index in range(chunk_count):
+                        cells = []
+                        for column_index, lines in enumerate(wrapped_cells):
+                            start = chunk_index * 40
+                            chunk_lines = lines[start:start + 40]
+                            if chunk_index and column_index == 0 and len(lines) <= start:
+                                chunk_lines = lines[:40]
+                            escaped_lines = [escape(line) for line in chunk_lines]
+                            cells.append(Paragraph('<br/>'.join(escaped_lines), style))
+                        formatted_rows.append(cells)
+
+                table = Table(
+                    formatted_rows,
+                    colWidths=col_widths,
+                    repeatRows=1,
+                    splitByRow=1,
+                )
                 table.setStyle(TableStyle([
                     # Header row styling
                     ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1E40AF')),
@@ -467,22 +549,22 @@ class PDFReportGenerator:
                     ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
                     ('VALIGN', (0, 0), (-1, 0), 'MIDDLE'),
                     ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                    ('FONTSIZE', (0, 0), (-1, 0), 9),
+                    ('FONTSIZE', (0, 0), (-1, 0), header_font_size),
                     ('TOPPADDING', (0, 0), (-1, 0), 12),
                     ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-                    ('LEFTPADDING', (0, 0), (-1, 0), 8),
-                    ('RIGHTPADDING', (0, 0), (-1, 0), 8),
+                    ('LEFTPADDING', (0, 0), (-1, 0), cell_padding),
+                    ('RIGHTPADDING', (0, 0), (-1, 0), cell_padding),
                     # Data rows styling
                     ('BACKGROUND', (0, 1), (-1, -1), colors.white),
                     ('TEXTCOLOR', (0, 1), (-1, -1), colors.black),
                     ('ALIGN', (0, 1), (-1, -1), 'LEFT'),
                     ('VALIGN', (0, 1), (-1, -1), 'MIDDLE'),
                     ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
-                    ('FONTSIZE', (0, 1), (-1, -1), 8),
+                    ('FONTSIZE', (0, 1), (-1, -1), cell_font_size),
                     ('TOPPADDING', (0, 1), (-1, -1), 8),
                     ('BOTTOMPADDING', (0, 1), (-1, -1), 8),
-                    ('LEFTPADDING', (0, 1), (-1, -1), 8),
-                    ('RIGHTPADDING', (0, 1), (-1, -1), 8),
+                    ('LEFTPADDING', (0, 1), (-1, -1), cell_padding),
+                    ('RIGHTPADDING', (0, 1), (-1, -1), cell_padding),
                     # Grid styling
                     ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#E2E8F0')),
                     ('LINEBELOW', (0, 0), (-1, 0), 1.5, colors.HexColor('#1E40AF')),
@@ -496,6 +578,46 @@ class PDFReportGenerator:
             logger.warning(f"Failed to add table to PDF: {e}")
             story.append(Paragraph(f"[Tabel tidak dapat ditampilkan: {str(e)}]", self.styles['CustomBodyText']))
 
+        return story
+
+    def _add_remaining_artifacts(
+        self,
+        charts: Dict[str, bytes] = None,
+        tables: Dict[str, List] = None
+    ) -> List:
+        """Render every chart and table not already placed in a report section."""
+        story = []
+        displayed_charts = {
+            'ensemble_weights', 'autoencoder_loss', 'cross_validation',
+            'gnn_subgraph', 'confusion_matrix', 'roc_curve',
+            'precision_recall_curve', 'shap_summary',
+            'shap_feature_importance', 'lime_explanation',
+        }
+        displayed_tables = {'model_metrics', 'optimization_results'}
+        remaining_charts = {
+            name: image for name, image in (charts or {}).items()
+            if name not in displayed_charts
+        }
+        remaining_tables = {
+            name: data for name, data in (tables or {}).items()
+            if name not in displayed_tables
+        }
+        if not remaining_charts and not remaining_tables:
+            return story
+
+        story.append(PageBreak())
+        story.extend(self._build_section(
+            "Lampiran Tabel dan Visualisasi",
+            "Seluruh tabel dan visualisasi yang dihasilkan pada tahapan preprocessing, "
+            "pelatihan, dan evaluasi yang belum ditampilkan pada bagian sebelumnya."
+        ))
+        for name, image in remaining_charts.items():
+            if image:
+                story.extend(self._add_chart_section(name.replace('_', ' ').title(), image))
+                story.append(Spacer(1, 0.2 * inch))
+        for name, table_data in remaining_tables.items():
+            story.extend(self._add_table_section(name.replace('_', ' ').title(), table_data))
+            story.append(Spacer(1, 0.2 * inch))
         return story
 
     def _add_evaluation_section(self, report_data: Dict[str, Any], charts: Dict[str, bytes] = None) -> List:

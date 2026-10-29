@@ -321,6 +321,9 @@ ASTINA menyediakan fitur laporan PDF komprehensif yang berisi:
 ### Laporan PDF Evaluasi Model
 
 Laporan PDF evaluasi model tersedia di halaman Evaluasi dan mencakup:
+- **Laporan end-to-end**: Ringkasan preprocessing, laporan training, dan hasil evaluasi model dalam satu dokumen
+- **Artefak preprocessing**: Profil kolom, statistik numerik, strategi encoding, seleksi fitur, dan grafik EDA/PCA yang tersedia
+- **Tabel evaluasi**: Performa algoritma, ringkasan prediksi, confusion matrix, classification report, serta rincian metrik fraud
 - **Metadata Evaluasi**: Tanggal, threshold, dan tingkat anomali terdeteksi
 - **Analisis Dataset**: Statistik dataset evaluasi dan probabilitas
 - **Grafik Evaluasi**:
@@ -340,6 +343,9 @@ Laporan PDF evaluasi model tersedia di halaman Evaluasi dan mencakup:
   - **False Positive Rate** (persentase false positive)
   - **Matthews Correlation Coefficient** (robust untuk data imbalanced)
 - **Rekomendasi**: Saran threshold optimal dan trade-off precision/recall
+- Grafik preprocessing dan tabel panjang dimasukkan sebagai lampiran dan diatur agar dapat berlanjut ke halaman berikutnya
+
+Ekspor grafik PDF menggunakan Plotly dan Kaleido. Instalasi lokal memerlukan Google Chrome atau Chromium; image Docker ASTINA memasang Chromium secara otomatis.
 
 ### Cara Menggunakan Laporan PDF
 

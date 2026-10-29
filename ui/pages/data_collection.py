@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import os
 import hashlib
+import logging
 from ui.utils import *
 from state_manager import *
 from ui.utils import validate_button_action
@@ -26,6 +27,37 @@ from large_file_processor import (
     preprocess_dataset_with_train_only_stats,
 )
 from metadata_analyzer import MetadataAnalyzer, RulePriority
+
+logger = logging.getLogger(__name__)
+
+
+def _capture_preprocessing_table(name, table):
+    """Keep displayed preprocessing tables available for the final PDF report."""
+    artifacts = st.session_state.setdefault(
+        'report_artifacts', {'charts': {}, 'tables': {}}
+    )
+    if isinstance(table, pd.DataFrame):
+        table_data = [table.columns.astype(str).tolist()]
+        table_data.extend(table.astype(object).where(pd.notna(table), '').values.tolist())
+    else:
+        table_data = table
+    artifacts['tables'][f'preprocessing_{name}'] = table_data
+
+
+def _capture_preprocessing_chart(name, figure):
+    """Keep the figure definition for PNG rendering when the user requests a PDF."""
+    if figure is None:
+        return
+    try:
+        figure_json = figure.to_json()
+    except Exception as exc:
+        logger.warning("Failed to capture preprocessing chart %s for PDF: %s", name, exc)
+        return
+    artifacts = st.session_state.setdefault(
+        'report_artifacts', {'charts': {}, 'tables': {}, 'plotly_figures': {}}
+    )
+    artifacts.setdefault('plotly_figures', {})[f'preprocessing_{name}'] = figure_json
+
 
 def load_and_validate_raw_data(uploaded_files, add_source_column=True):
     """
@@ -276,6 +308,7 @@ def show_data_collection_page():
             # Clear old processing state if new file selection uploaded
             current_files_key = ";".join(f"{f.name}:{f.size}" for f in uploaded_files) + f":source={add_source_col}"
             if st.session_state.get('last_uploaded_filename') != current_files_key:
+                st.session_state.pop('report_artifacts', None)
                 st.session_state.pop('df_processed_path', None)
                 st.session_state.pop('df_filtered', None)
                 st.session_state.pop('is_filtered', None)
@@ -602,6 +635,7 @@ def show_data_collection_page():
             # Tampilkan sampel data
             st.subheader("Sampel Data")
             st.dataframe(df.head())
+            _capture_preprocessing_table("sample_data", df.head())
             
             # Tampilkan informasi kolom
             st.subheader("Informasi Kolom")
@@ -612,11 +646,14 @@ def show_data_collection_page():
                 'Unique Values': [int(df[col].nunique()) for col in df.columns]
             })
             st.dataframe(col_info, width='stretch')
+            _capture_preprocessing_table("column_profile", col_info)
 
             numeric_cols = eda_df.select_dtypes(include=[np.number]).columns.tolist()  # type: ignore[arg-type]
             if numeric_cols:
                 with st.expander("📈 Ringkasan Statistik (Numerik)"):
-                    st.dataframe(eda_df[numeric_cols].describe().T, width='stretch')
+                    numeric_summary = eda_df[numeric_cols].describe().T
+                    st.dataframe(numeric_summary, width='stretch')
+                    _capture_preprocessing_table("numeric_summary", numeric_summary)
 
                 with st.expander("📉 Distribusi Fitur Numerik"):
                     plot_cols = numeric_cols[:6]
@@ -624,6 +661,7 @@ def show_data_collection_page():
                         fig = create_histogram_chart(eda_df, col, nbins=40, title=f"Distribusi: {col}")
                         if fig is not None:
                             st.plotly_chart(fig, width='stretch')
+                            _capture_preprocessing_chart(f"distribution_{col}", fig)
 
                 if len(numeric_cols) >= 2:
                     with st.expander("🔗 Korelasi (Numerik)"):
@@ -632,6 +670,7 @@ def show_data_collection_page():
                         fig = create_correlation_heatmap(corr, title="Peta Korelasi (20 Fitur Numerik Teratas)")
                         if fig is not None:
                             st.plotly_chart(fig, width='stretch')
+                            _capture_preprocessing_chart("correlation_heatmap", fig)
             
             # NEW: Filter Dataset Section (after successful load)
             st.markdown("---")
@@ -1083,7 +1122,7 @@ def show_data_collection_page():
                         else:
                             df_processed_path = save_processed_data(df_processed, prefix="preprocessed")
 
-                        reset_downstream_state()
+                        reset_downstream_state(preserve_report_artifacts=True)
                         set_processed_dataset_reference(
                             df_processed_path,
                             feature_columns,
@@ -1216,6 +1255,7 @@ def show_data_collection_page():
                                 if encoding_df_data:
                                     encoding_df = pd.DataFrame(encoding_df_data)
                                     st.dataframe(encoding_df, width='stretch')
+                                    _capture_preprocessing_table("encoding_strategies", encoding_df)
 
                         if preprocessing_metadata.get('missing_value_metadata') and isinstance(preprocessing_metadata['missing_value_metadata'], dict):
                             with st.expander("🔍 Penanganan Missing Values"):
@@ -1589,6 +1629,9 @@ def show_data_collection_page():
                                         st.success(f"✅ Select K-Best ({score_function}) berhasil! Memilih {len(selected_features)} fitur terbaik")
                                         st.write("**📊 Skor Fitur Teratas:**")
                                         st.dataframe(feature_scores.head(k_value), width='stretch')
+                                        _capture_preprocessing_table(
+                                            "feature_selection_scores", feature_scores.head(k_value)
+                                        )
                                 
                                         final_features = selected_features.copy()
                                 
@@ -1634,6 +1677,9 @@ def show_data_collection_page():
                                 st.success(f"✅ Berhasil memilih {len(selected_features)} fitur!")
                                 st.write("**📊 Skor Fitur Teratas:**")
                                 st.dataframe(feature_scores.head(k_mi), width='stretch')
+                                _capture_preprocessing_table(
+                                    "feature_selection_scores", feature_scores.head(k_mi)
+                                )
                                 st.session_state['selected_features_cache'] = selected_features
                                 st.session_state['proceed_after_selection'] = True
                 
@@ -1651,6 +1697,9 @@ def show_data_collection_page():
                                 st.success(f"✅ Berhasil memilih {len(selected_features)} fitur menggunakan {model_name}!")
                                 st.write(f"**📊 Importance Fitur ({model_name}):**")
                                 st.dataframe(feature_importances.head(k_tree), width='stretch')
+                                _capture_preprocessing_table(
+                                    "feature_selection_scores", feature_importances.head(k_tree)
+                                )
                                 st.session_state['selected_features_cache'] = selected_features
                                 st.session_state['proceed_after_selection'] = True
                             
@@ -1707,6 +1756,7 @@ def show_data_collection_page():
                                            title='Variansi Terjelaskan per Komponen',
                                            labels={'x': 'Komponen Utama', 'y': 'Variansi Terjelaskan'})
                                 st.plotly_chart(fig, width='stretch')
+                                _capture_preprocessing_chart("pca_explained_variance", fig)
                                 st.session_state['proceed_after_selection'] = not large_processed
                 
                     # Process selected features based on method
@@ -1740,6 +1790,7 @@ def show_data_collection_page():
 
                             preview_df = pd.DataFrame(preview_data)
                             st.dataframe(preview_df, width='stretch')
+                            _capture_preprocessing_table("feature_selection_preview", preview_df)
 
                             # Advanced filtering options for manual selection
                             with st.expander("⚙️ Opsi Lanjutan (Opsional)"):
@@ -1825,6 +1876,10 @@ def show_data_collection_page():
                         st.session_state['feature_selection_method'] = selection_method
                         st.session_state['original_feature_count'] = len(feature_columns)
                         st.session_state['final_feature_count'] = len(final_features)
+                        _capture_preprocessing_table(
+                            "selected_features",
+                            pd.DataFrame({'Fitur Terpilih': final_features}),
+                        )
 
                         st.success(f"✅ Seleksi fitur berhasil! Menggunakan {len(final_features)} fitur dari {len(feature_columns)} fitur tersedia")
 
@@ -1862,7 +1917,9 @@ def show_data_collection_page():
                         valid_feature_cols = [c for c in feature_columns if c in df_processed.columns]
                         if valid_feature_cols:
                             st.subheader("Statistik Data yang Diproses")
-                            st.dataframe(df_processed[valid_feature_cols].describe())
+                            processed_summary = df_processed[valid_feature_cols].describe()
+                            st.dataframe(processed_summary)
+                            _capture_preprocessing_table("processed_data_summary", processed_summary)
                     
                         # Visualisasi distribusi beberapa fitur penting
                         st.subheader("Visualisasi Data")
@@ -1873,6 +1930,7 @@ def show_data_collection_page():
                                            nbins=50, title='Distribusi Jumlah Klaim')
                             if fig is not None:
                                 st.plotly_chart(fig, width='stretch')
+                                _capture_preprocessing_chart("processed_claim_amount_distribution", fig)
 
                         # Plot 2: Distribusi usia pasien
                         if 'patient_age' in df_processed.columns:
@@ -1880,6 +1938,7 @@ def show_data_collection_page():
                                            nbins=20, title='Distribusi Usia Pasien')
                             if fig is not None:
                                 st.plotly_chart(fig, width='stretch')
+                                _capture_preprocessing_chart("processed_patient_age_distribution", fig)
 
                         # Plot 3: Provider specialty distribution
                         if 'provider_specialty' in df_processed.columns:
@@ -1888,6 +1947,7 @@ def show_data_collection_page():
                                        title='10 Spesialis Provider Teratas',
                                        labels={'x': 'Spesialisasi', 'y': 'Jumlah Klaim'})
                             st.plotly_chart(fig, width='stretch')
+                            _capture_preprocessing_chart("processed_provider_specialty", fig)
 
                         # Plot 4: Claim status distribution
                         if 'claim_status' in df_processed.columns:
@@ -1895,6 +1955,7 @@ def show_data_collection_page():
                             fig = create_pie_chart(status_counts.values, status_counts.index,
                                       title='Distribusi Status Klaim')
                             st.plotly_chart(fig, width='stretch')
+                            _capture_preprocessing_chart("processed_claim_status", fig)
                 
                     # Tombol untuk lanjut ke training yang lebih jelas
                     st.markdown("---")

@@ -126,8 +126,9 @@ def hydrate_processed_data_reference_from_cache(file_hash):
         return True
     return False
 
-def reset_downstream_state():
+def reset_downstream_state(preserve_report_artifacts=False):
     """Clear data-dependent state so a newly processed dataset starts from a clean pipeline."""
+    report_artifacts = st.session_state.get('report_artifacts') if preserve_report_artifacts else None
     # Check if training is in progress before clearing
     if st.session_state.get('training_in_progress', False):
         logger.warning("Cannot reset downstream state while training is in progress")
@@ -152,6 +153,9 @@ def reset_downstream_state():
         'eval_probabilities',
         'eval_y_true',
         'individual_probs',
+        'report_artifacts',
+        'model_interpretation_report',
+        'report_generated_at',
         'detection_results',
         'detection_threshold',
         'training_features',
@@ -183,6 +187,8 @@ def reset_downstream_state():
         if key in st.session_state:
             st.session_state.pop(key, None)
             cleared_count += 1
+    if report_artifacts is not None:
+        st.session_state['report_artifacts'] = report_artifacts
     
     logger.info(f"Downstream state reset completed: {cleared_count}/{len(keys_to_clear)} keys cleared")
     return True

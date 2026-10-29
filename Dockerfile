@@ -69,6 +69,7 @@ EXPOSE 8501
 RUN apt-get update && apt-get install -y --no-install-recommends \
         curl \
         ca-certificates \
+        chromium \
     && rm -rf /var/lib/apt/lists/*
 
 # Bring the prebuilt site-packages from the builder.

@@ -897,6 +897,136 @@ def show_evaluation_page():
                         """
                     }
 
+                    # Preserve the report's existing format while including the
+                    # preprocessing and training context in the final evaluation PDF.
+                    training_report = st.session_state.get('model_interpretation_report', {})
+                    if not isinstance(training_report, dict):
+                        training_report = {}
+                    for section in (
+                        'executive_summary',
+                        'dataset_analysis',
+                        'feature_analysis',
+                        'model_architecture',
+                        'training_process',
+                        'performance_metrics',
+                    ):
+                        training_section = training_report.get(section)
+                        if training_section:
+                            report_data[section] = (
+                                f"{training_section}\n\n### Hasil Evaluasi\n"
+                                f"{report_data[section]}"
+                            )
+
+                    preprocessing_metadata = st.session_state.get(
+                        'preprocessing_metadata', {}
+                    )
+                    preprocessing_detail_tables = {}
+                    if preprocessing_metadata:
+                        summary_fields = (
+                            ('Jumlah baris diproses', 'total_rows_processed'),
+                            ('Jumlah kolom awal', 'original_columns_count'),
+                            ('Jumlah fitur akhir', 'final_features_count'),
+                            ('Jumlah fitur numerik', 'numerical_columns_count'),
+                            ('Jumlah kolom tanggal', 'date_columns_count'),
+                            ('Jumlah kolom kategorikal', 'categorical_columns_count'),
+                            ('Scope fit preprocessing', 'preprocessing_fit_scope'),
+                            ('Versi kontrak preprocessing', 'preprocessing_contract_version'),
+                            ('Waktu preprocessing', 'processed_at'),
+                        )
+                        preprocessing_lines = []
+                        preprocessing_table = [['Informasi', 'Nilai']]
+                        for label, key in summary_fields:
+                            value = preprocessing_metadata.get(key)
+                            if value is not None:
+                                preprocessing_lines.append(f"- {label}: {value}")
+                                preprocessing_table.append([label, str(value)])
+                        report_data['preprocessing_analysis'] = (
+                            "Ringkasan tahapan preprocessing:\n"
+                            + ("\n".join(preprocessing_lines) if preprocessing_lines else
+                               "Metadata preprocessing tersedia; rincian tercantum pada tabel lampiran.")
+                        )
+                        for metadata_key, table_name in (
+                            ('fit_statistics', 'preprocessing_fit_statistics'),
+                            ('missing_value_metadata', 'preprocessing_missing_values'),
+                            ('enhanced_encoding_metadata', 'preprocessing_encoding_details'),
+                            ('outlier_metadata', 'preprocessing_outlier_handling'),
+                            ('validation_metadata', 'preprocessing_validation_details'),
+                            ('duplicate_removal', 'preprocessing_duplicate_removal'),
+                        ):
+                            metadata_details = preprocessing_metadata.get(metadata_key)
+                            if isinstance(metadata_details, dict) and metadata_details:
+                                preprocessing_detail_tables[table_name] = [
+                                    ['Kolom / Informasi', 'Rincian'],
+                                    *[
+                                        [str(key), str(value)]
+                                        for key, value in metadata_details.items()
+                                    ],
+                                ]
+                    else:
+                        preprocessing_table = []
+
+                    training_charts = training_report.get('charts', {})
+                    training_tables = training_report.get('tables', {})
+                    preprocessing_artifacts = st.session_state.get(
+                        'report_artifacts', {}
+                    )
+                    charts = dict(training_charts) if isinstance(training_charts, dict) else {}
+                    tables = dict(training_tables) if isinstance(training_tables, dict) else {}
+                    if preprocessing_table:
+                        tables['preprocessing_summary'] = preprocessing_table
+                    tables.update(preprocessing_detail_tables)
+                    if isinstance(preprocessing_artifacts, dict):
+                        charts.update(preprocessing_artifacts.get('charts', {}))
+                        tables.update(preprocessing_artifacts.get('tables', {}))
+                        plotly_figures = preprocessing_artifacts.get('plotly_figures', {})
+                        if isinstance(plotly_figures, dict):
+                            import plotly.io as plotly_io
+                            failed_chart_names = []
+                            for chart_name, figure_json in plotly_figures.items():
+                                if charts.get(chart_name):
+                                    continue
+                                try:
+                                    figure = plotly_io.from_json(figure_json)
+                                    charts[chart_name] = figure.to_image(
+                                        format='png', width=1200, height=800, scale=2
+                                    )
+                                except Exception as chart_error:
+                                    logger.warning(
+                                        "Failed to render preprocessing chart %s for PDF: %s",
+                                        chart_name,
+                                        chart_error,
+                                    )
+                                    failed_chart_names.append(chart_name)
+                            if failed_chart_names:
+                                st.warning(
+                                    "Sebagian grafik preprocessing tidak dapat dirender ke PDF: "
+                                    + ", ".join(failed_chart_names)
+                                )
+
+                    algorithm_table = [[
+                        'Algoritma',
+                        'Rata-rata Probabilitas',
+                        'Simpangan Baku',
+                        f'Tingkat Anomali @ {_active_thr:.2f}',
+                    ]]
+                    for algorithm_name, probs in individual_probs.items():
+                        algorithm_table.append([
+                            algorithm_name,
+                            f"{float(np.mean(probs)):.4f}",
+                            f"{float(np.std(probs)):.4f}",
+                            f"{float(np.mean(np.asarray(probs) > _active_thr)):.2%}",
+                        ])
+                    tables['evaluation_algorithm_performance'] = algorithm_table
+                    tables['evaluation_prediction_summary'] = [
+                        ['Ringkasan', 'Nilai'],
+                        ['Jumlah sampel evaluasi', str(len(result_df))],
+                        ['Jumlah prediksi anomali', str(int(np.sum(test_predictions)))],
+                        ['Tingkat anomali', f'{fraud_rate:.2%}'],
+                        ['Threshold evaluasi', f'{_active_thr:.4f}'],
+                        ['Rata-rata probabilitas', f'{float(np.mean(test_probabilities)):.4f}'],
+                        ['Simpangan baku probabilitas', f'{float(np.std(test_probabilities)):.4f}'],
+                    ]
+
                     # Add supervised metrics if available
                     if y_true is not None and len(np.unique(y_true)) == 2:
                         report_data['evaluation_metrics'] = {
@@ -910,6 +1040,30 @@ def show_evaluation_page():
                         except:
                             pass
 
+                        cm = confusion_matrix(y_true, test_predictions)
+                        tables['evaluation_confusion_matrix'] = [
+                            ['Aktual / Prediksi', 'Prediksi 0', 'Prediksi 1'],
+                            ['Aktual 0', str(int(cm[0, 0])), str(int(cm[0, 1]))],
+                            ['Aktual 1', str(int(cm[1, 0])), str(int(cm[1, 1]))],
+                        ]
+                        class_report = classification_report(
+                            y_true, test_predictions, output_dict=True, zero_division=0
+                        )
+                        tables['evaluation_classification_report'] = [
+                            ['Kelas', 'Precision', 'Recall', 'F1-Score', 'Support'],
+                            *[
+                                [
+                                    label,
+                                    f"{values.get('precision', 0):.4f}",
+                                    f"{values.get('recall', 0):.4f}",
+                                    f"{values.get('f1-score', 0):.4f}",
+                                    str(values.get('support', 0)),
+                                ]
+                                for label, values in class_report.items()
+                                if isinstance(values, dict)
+                            ],
+                        ]
+
                         # Add fraud-specific metrics
                         try:
                             fraud_metrics = calculate_all_fraud_metrics(y_true, test_predictions, test_probabilities)
@@ -919,12 +1073,17 @@ def show_evaluation_page():
                             report_data['evaluation_metrics']['False Negative Rate'] = fraud_metrics.get('false_negative_rate', 0.0)
                             report_data['evaluation_metrics']['False Positive Rate'] = fraud_metrics.get('false_positive_rate', 0.0)
                             report_data['evaluation_metrics']['Matthews Correlation Coefficient'] = fraud_metrics.get('mcc', 0.0)
+                            tables['evaluation_fraud_confusion_details'] = [
+                                ['Kategori', 'Jumlah'],
+                                ['True Negatives (Non-fraud benar)', str(fraud_metrics.get('true_negatives', 0))],
+                                ['False Positives (Non-fraud salah)', str(fraud_metrics.get('false_positives', 0))],
+                                ['False Negatives (Fraud lolos)', str(fraud_metrics.get('false_negatives', 0))],
+                                ['True Positives (Fraud tertangkap)', str(fraud_metrics.get('true_positives', 0))],
+                            ]
                         except Exception as e:
                             logger.warning(f"Failed to add fraud metrics to PDF: {e}")
 
                     # Prepare charts
-                    charts = {}
-
                     # Confusion Matrix chart
                     if y_true is not None and len(np.unique(y_true)) == 2:
                         try:
@@ -995,34 +1154,45 @@ def show_evaluation_page():
 
                     # Threshold Trade-off Analysis chart
                     if y_true is not None and len(np.unique(y_true)) == 2:
-                        try:
-                            tradeoff_data = get_threshold_tradeoff_analysis(y_true, test_probabilities)
-
-                            fig_tradeoff = go.Figure()
-                            fig_tradeoff.add_trace(go.Scatter(
-                                x=tradeoff_data['thresholds'],
-                                y=tradeoff_data['precision'],
-                                mode='lines',
-                                name='Precision',
-                                line=dict(color='blue')
-                            ))
-                            fig_tradeoff.add_trace(go.Scatter(
-                                x=tradeoff_data['thresholds'],
-                                y=tradeoff_data['recall'],
-                                mode='lines',
-                                name='Recall',
-                                line=dict(color='green')
-                            ))
-                            fig_tradeoff.add_vline(x=eval_threshold, line_dash="dash", line_color="red",
-                                                   annotation_text=f"Current ({eval_threshold:.2f})")
-                            fig_tradeoff.update_layout(
-                                title='Threshold Trade-off Analysis',
-                                xaxis_title='Threshold',
-                                yaxis_title='Score'
+                        displayed_tradeoff_figure = locals().get('fig_tradeoff')
+                        if displayed_tradeoff_figure is not None:
+                            charts['threshold_tradeoff'] = plotly_to_bytes(
+                                displayed_tradeoff_figure
                             )
-                            charts['threshold_tradeoff'] = plotly_to_bytes(fig_tradeoff)
-                        except Exception as e:
-                            logger.warning(f"Failed to create threshold trade-off chart: {e}")
+                        else:
+                            try:
+                                tradeoff_data = get_threshold_tradeoff_analysis(
+                                    y_true, test_probabilities
+                                )
+                                fig_tradeoff = go.Figure()
+                                fig_tradeoff.add_trace(go.Scatter(
+                                    x=tradeoff_data['thresholds'],
+                                    y=tradeoff_data['precision'],
+                                    mode='lines',
+                                    name='Precision',
+                                    line=dict(color='blue')
+                                ))
+                                fig_tradeoff.add_trace(go.Scatter(
+                                    x=tradeoff_data['thresholds'],
+                                    y=tradeoff_data['recall'],
+                                    mode='lines',
+                                    name='Recall',
+                                    line=dict(color='green')
+                                ))
+                                fig_tradeoff.add_vline(
+                                    x=eval_threshold,
+                                    line_dash="dash",
+                                    line_color="red",
+                                    annotation_text=f"Current ({eval_threshold:.2f})",
+                                )
+                                fig_tradeoff.update_layout(
+                                    title='Threshold Trade-off Analysis',
+                                    xaxis_title='Threshold',
+                                    yaxis_title='Score'
+                                )
+                                charts['threshold_tradeoff'] = plotly_to_bytes(fig_tradeoff)
+                            except Exception as e:
+                                logger.warning(f"Failed to create threshold trade-off chart: {e}")
 
                     # Probability Distribution chart
                     try:
@@ -1034,6 +1204,17 @@ def show_evaluation_page():
                         charts['probability_distribution'] = plotly_to_bytes(fig_dist)
                     except Exception as e:
                         logger.warning(f"Failed to create probability distribution chart: {e}")
+
+                    if 'gnn' in individual_probs:
+                        try:
+                            fig_gnn = create_probability_distribution(
+                                individual_probs['gnn'],
+                                title="Distribusi Probabilitas GNN",
+                                threshold=eval_threshold,
+                            )
+                            charts['gnn_probability_distribution'] = plotly_to_bytes(fig_gnn)
+                        except Exception as e:
+                            logger.warning(f"Failed to create GNN probability chart: {e}")
 
                     # Add SHAP charts if explainer is available
                     if 'model_explainer' in st.session_state:
@@ -1076,7 +1257,9 @@ def show_evaluation_page():
                             logger.warning(f"Failed to add SHAP charts to PDF: {e}")
 
                     # Generate PDF
-                    pdf_buffer = generator.generate_pdf(report_data, charts=charts)
+                    pdf_buffer = generator.generate_pdf(
+                        report_data, charts=charts, tables=tables
+                    )
 
                     st.download_button(
                         label="⬇️ Klik untuk Mengunduh PDF",

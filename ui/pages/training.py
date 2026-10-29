@@ -38,6 +38,19 @@ def plotly_to_bytes(fig, format='png', width=1200, height=800, scale=2):
         return None
 
 
+def _capture_training_chart(name, figure):
+    """Keep displayed training figures available for the final evaluation PDF."""
+    try:
+        figure_json = figure.to_json()
+    except Exception as exc:
+        logger.warning("Failed to capture training chart %s for PDF: %s", name, exc)
+        return
+    artifacts = st.session_state.setdefault(
+        'report_artifacts', {'charts': {}, 'tables': {}, 'plotly_figures': {}}
+    )
+    artifacts.setdefault('plotly_figures', {})[name] = figure_json
+
+
 def _write_training_status(status_path, payload):
     os.makedirs(os.path.dirname(status_path), exist_ok=True)
     temp_path = f"{status_path}.{uuid.uuid4().hex}.tmp"
@@ -748,6 +761,7 @@ def show_training_page():
                                      title=f'Cross-Validation Scores ({cv_folds}-Fold)',
                                      labels={'value': 'Score', 'variable': 'Metric'})
                         st.plotly_chart(fig, width='stretch')
+                        _capture_training_chart('cross_validation', fig)
                     else:
                         st.warning("⚠️ Cross-Validation gagal untuk semua folds.")
                         
@@ -1195,6 +1209,7 @@ def show_training_page():
                     )
                     fig.update_traces(textposition='inside', textinfo='percent+label')
                     st.plotly_chart(fig, width='stretch')
+                    _capture_training_chart('ensemble_weights', fig)
                 
                 # Show Optuna Ensemble Weight Optimization Results
                 if getattr(detector, 'weight_optimization_results', None):
@@ -1841,6 +1856,7 @@ def show_training_page():
                                 )
                             )
                             st.plotly_chart(fig, width='stretch')
+                            _capture_training_chart('gnn_subgraph', fig)
                             performance = _sub.get('performance', {})
                             score_seconds = performance.get('score_seconds')
                             subgraph_seconds = performance.get('subgraph_seconds')
