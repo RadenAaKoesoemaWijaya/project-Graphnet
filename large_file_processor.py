@@ -11,6 +11,20 @@ from config import TEMP_DATA_DIR, LARGE_DATASET_CONFIG
 logger = logging.getLogger("graphnet.large_file_processor")
 
 
+def materialize_preprocessed_dataframe(value):
+    """Resolve preprocessing output to a DataFrame without treating paths as data."""
+    if isinstance(value, pd.DataFrame):
+        return value
+    if isinstance(value, (str, os.PathLike)):
+        parquet_path = os.fspath(value)
+        if not os.path.isfile(parquet_path):
+            raise FileNotFoundError(
+                f"File hasil preprocessing tidak ditemukan: {parquet_path}"
+            )
+        return pd.read_parquet(parquet_path)
+    raise TypeError("Preprocessing harus menghasilkan DataFrame atau path Parquet.")
+
+
 def _is_target_column(column_name):
     name = column_name.lower()
     return any(token in name for token in ("fraud", "label", "target", "class"))

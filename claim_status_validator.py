@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 logger = logging.getLogger("astina.claim_status")
+
+CLAIM_KEY_COLUMNS = ("patient_id", "provider_id", "service_code")
 
 
 class ClaimStatusValidator:
@@ -18,10 +20,23 @@ class ClaimStatusValidator:
         if not claim:
             return False, [], "Claim kosong."
 
+        if self.db_connection is None:
+            return False, [], "Validasi pembayaran tidak tersedia: koneksi database belum dikonfigurasi."
         history = self._query_claim_history(claim)
+        return self.evaluate_duplicate_payment(claim, history)
+
+    @staticmethod
+    def claim_key(claim: Dict[str, Any]) -> Tuple[str, str, str] | None:
+        values = tuple(str(claim.get(column) or "").strip() for column in CLAIM_KEY_COLUMNS)
+        return values if all(values) else None
+
+    @staticmethod
+    def evaluate_duplicate_payment(
+        claim: Dict[str, Any],
+        history: Iterable[Dict[str, Any]],
+    ) -> Tuple[bool, List[Dict[str, Any]], str]:
+        history = list(history)
         if not history:
-            if self.db_connection is None:
-                return False, [], "Validasi pembayaran tidak tersedia: koneksi database belum dikonfigurasi."
             return False, [], "Tidak ada riwayat pembayaran yang cocok."
 
         current_claim_id = str(claim.get("claim_id", "")).strip()
@@ -37,6 +52,60 @@ class ClaimStatusValidator:
             return True, paid_matches, "Riwayat pembayaran PAID ditemukan untuk klaim serupa."
         return False, comparable, "Riwayat klaim ditemukan, tetapi belum ada pembayaran PAID duplikat."
 
+    def get_claim_history_batch(
+        self,
+        claims: Iterable[Dict[str, Any]],
+        batch_size: int = 200,
+    ) -> Dict[Tuple[str, str, str], List[Dict[str, Any]]]:
+        """Fetch matching histories in bounded queries instead of one query per claim."""
+        if batch_size < 1:
+            raise ValueError("batch_size harus lebih besar dari 0.")
+        if self.db_connection is None:
+            return {}
+
+        keys = list(dict.fromkeys(
+            key for claim in claims if (key := self.claim_key(claim)) is not None
+        ))
+        histories: Dict[Tuple[str, str, str], List[Dict[str, Any]]] = {
+            key: [] for key in keys
+        }
+        for start in range(0, len(keys), batch_size):
+            batch_keys = keys[start:start + batch_size]
+            row_placeholders = ", ".join(["(%s, %s, %s)"] * len(batch_keys))
+            query = (
+                "SELECT claim_id, patient_id, provider_id, service_code, status "
+                "FROM claim_history WHERE (patient_id, provider_id, service_code) "
+                f"IN ({row_placeholders})"
+            )
+            parameters = tuple(value for key in batch_keys for value in key)
+            try:
+                result = self.db_connection.execute(query, parameters)
+                rows = result.fetchall() if callable(getattr(result, "fetchall", None)) else list(result or [])
+                description = getattr(result, "description", None)
+                column_names = [
+                    getattr(column, "name", None) or column[0]
+                    for column in description
+                ] if description else None
+                for row in rows:
+                    if isinstance(row, dict):
+                        record = row
+                    elif hasattr(row, "_mapping"):
+                        record = dict(row._mapping)
+                    elif column_names:
+                        record = dict(zip(column_names, row))
+                    else:
+                        raise TypeError(
+                            "Koneksi database harus mengembalikan mapping atau cursor "
+                            "dengan metadata kolom."
+                        )
+                    key = self.claim_key(record)
+                    if key in histories:
+                        histories[key].append(record)
+            except Exception:
+                logger.exception("Batch query riwayat pembayaran gagal.")
+                raise
+        return histories
+
     def check_pending_claims(self, claim: Dict[str, Any]) -> Tuple[bool, List[Dict[str, Any]], str]:
         history = self._query_claim_history(claim)
         pending = [item for item in history if item.get("status") == "PENDING"]
@@ -48,18 +117,7 @@ class ClaimStatusValidator:
         if self.db_connection is None:
             return []
 
-        try:
-            patient_id = claim.get("patient_id")
-            provider_id = claim.get("provider_id")
-            service_code = claim.get("service_code")
-            if not patient_id and not provider_id and not service_code:
-                return []
-
-            result = self.db_connection.execute(
-                "SELECT claim_id, patient_id, provider_id, service_code, status FROM claim_history WHERE patient_id = %s AND provider_id = %s AND service_code = %s",
-                (patient_id, provider_id, service_code),
-            )
-            return list(result or [])
-        except Exception as exc:  # pragma: no cover
-            logger.warning("Database query failed in claim status validator: %s", exc)
+        key = self.claim_key(claim)
+        if key is None:
             return []
+        return self.get_claim_history_batch([claim]).get(key, [])

@@ -258,6 +258,19 @@ flowchart TD
 5. **Detection**: Deteksi fraud pada dataset baru dengan hybrid scoring
 6. **Investigation**: Gunakan AI Copilot untuk generate BAP dan analisis mendalam
 
+### Batas Deteksi Interaktif
+
+- Ingestion dan preprocessing dapat menggunakan streaming Parquet, tetapi inference dan
+  aturan bisnis masih memerlukan DataFrame di memori. File besar yang disampling di UI
+  menghasilkan cakupan `PARTIAL_SAMPLE`, bukan audit seluruh file.
+- GNN interaktif hanya dijalankan sampai 20.000 klaim; di atas batas tersebut, skor
+  ensemble berjalan tanpa kontribusi GNN dan UI menampilkan peringatan.
+- Pemeriksaan duplicate-payment memerlukan `db_connection` pada session state aplikasi.
+  Jika koneksi tidak tersedia, hasil diberi status bahwa validasi database tidak dilakukan.
+- Jangan gunakan sampel atau hasil tanpa validasi database sebagai hasil audit lengkap.
+  Jalur inference batch penuh perlu disediakan terpisah sebelum audit seluruh file besar
+  dinyatakan didukung.
+
 ---
 
 ## 🤖 Konfigurasi LLM

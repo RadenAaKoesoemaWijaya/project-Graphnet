@@ -6,6 +6,7 @@ import polars as pl
 import pytest
 from large_file_processor import (
     compute_global_preprocessing_stats,
+    materialize_preprocessed_dataframe,
     stream_transform_to_parquet,
     preprocess_large_dataset
 )
@@ -79,3 +80,22 @@ def test_preprocess_large_dataset_from_path(tmp_path):
     assert os.path.exists(out_path)
     assert 'amount' in features
     assert metadata['total_rows_processed'] == n_rows
+
+
+def test_materialize_preprocessed_dataframe_resolves_parquet_paths(tmp_path):
+    source = pd.DataFrame({"value": [1, 2, 3]})
+    parquet_path = tmp_path / "processed.parquet"
+    source.to_parquet(parquet_path, index=False)
+
+    pd.testing.assert_frame_equal(
+        materialize_preprocessed_dataframe(str(parquet_path)),
+        source,
+    )
+    assert materialize_preprocessed_dataframe(source) is source
+
+
+def test_materialize_preprocessed_dataframe_rejects_invalid_outputs(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        materialize_preprocessed_dataframe(tmp_path / "missing.parquet")
+    with pytest.raises(TypeError):
+        materialize_preprocessed_dataframe({"path": "processed.parquet"})

@@ -59,3 +59,23 @@ def test_detector_initialization_and_resilience():
     preds, individual = detector.predict_anomaly_probability(X)
     assert len(preds) == 50
     assert 'isolation_forest' in individual
+
+
+def test_gnn_can_be_excluded_without_changing_non_gnn_scores():
+    detector = CombinedAnomalyDetector(
+        algorithms=['isolation_forest', 'xgboost'],
+        random_state=42,
+        verbose=False,
+    )
+    X = np.random.default_rng(42).normal(size=(50, 5))
+    detector.fit(X)
+    expected, _ = detector.predict_anomaly_probability(X)
+    detector.algorithms.append("gnn")
+    detector.gnn_weight = 0.5
+    detector.gnn_model = MagicMock()
+
+    actual, individual = detector.predict_anomaly_probability(X, enable_gnn=False)
+
+    np.testing.assert_allclose(actual, expected)
+    assert np.count_nonzero(individual["gnn"]) == 0
+    detector.gnn_model.eval.assert_not_called()

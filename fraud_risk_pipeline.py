@@ -438,8 +438,17 @@ def run_integrated_claim_risk_pipeline(
     risk_threshold: float = 0.65,
     disabled_rules: Optional[List[str]] = None,
 ) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    """Enrich a complete claim frame while batching independent post-rule work.
+
+    Relationship-based fraud rules intentionally see the whole frame so pairs and
+    provider/patient aggregates are not lost at arbitrary chunk boundaries.
+    ``chunk_size`` bounds payment-history query batches and row-wise final labeling;
+    it does not make those cross-claim rules out-of-core.
+    """
     if not 0.0 <= float(risk_threshold) <= 1.0:
         raise ValueError("risk_threshold harus berada pada rentang 0 sampai 1.")
+    if chunk_size is not None and int(chunk_size) < 1:
+        raise ValueError("chunk_size harus lebih besar dari 0.")
     if df is None or df.empty:
         return pd.DataFrame(), {
             "total_claims": 0,
@@ -454,13 +463,41 @@ def run_integrated_claim_risk_pipeline(
             "high_risk_claims": 0,
             "duplicate_payment_claims": 0,
             "final_high_risk_claims": 0,
+            "duplicate_payment_validation_status": (
+                "NOT_CONFIGURED" if db_connection is None else "CHECKED"
+            ),
         }
 
     enriched, summary = enrich_claims_with_business_risk_features(df, disabled_rules=disabled_rules)
     validator = ClaimStatusValidator(db_connection=db_connection)
+    claim_records = enriched.to_dict("records")
+    payment_histories = validator.get_claim_history_batch(
+        claim_records,
+        batch_size=min(int(chunk_size or 200), 200),
+    )
     status_flags = []
-    for idx, claim in enriched.iterrows():
-        duplicate, history, message = validator.check_duplicate_payment(claim.to_dict())
+    for idx, claim in enumerate(claim_records):
+        claim_key = validator.claim_key(claim)
+        history = payment_histories.get(claim_key, [])
+        if db_connection is None:
+            duplicate, history, message = (
+                False,
+                [],
+                "Validasi pembayaran tidak dilakukan: koneksi database belum dikonfigurasi.",
+            )
+            validation_status = "NOT_CONFIGURED"
+        elif claim_key is None:
+            duplicate, history, message = (
+                False,
+                [],
+                "Validasi pembayaran tidak dilakukan: kunci pasien, provider, atau layanan tidak lengkap.",
+            )
+            validation_status = "NOT_CHECKABLE"
+        else:
+            duplicate, history, message = validator.evaluate_duplicate_payment(
+                claim, history
+            )
+            validation_status = "CHECKED"
         matched_statuses = sorted({
             str(item.get("status", "")).upper()
             for item in history if item.get("status")
@@ -470,6 +507,7 @@ def run_integrated_claim_risk_pipeline(
             "duplicate_payment_flag": int(duplicate),
             "duplicate_payment_status": "|".join(matched_statuses),
             "status_message": message,
+            "duplicate_payment_validation_status": validation_status,
         })
     status_df = pd.DataFrame(status_flags)
     if not status_df.empty:
@@ -479,6 +517,7 @@ def run_integrated_claim_risk_pipeline(
         enriched["duplicate_payment_flag"] = 0
         enriched["duplicate_payment_status"] = ""
         enriched["status_message"] = "Tidak ada riwayat pembayaran"
+        enriched["duplicate_payment_validation_status"] = "NOT_CONFIGURED"
 
     enriched["business_risk_flag"] = (enriched["business_risk_score"] >= 0.6).astype(int)
 
@@ -522,8 +561,22 @@ def run_integrated_claim_risk_pipeline(
         )
 
     enriched["final_risk_flag"] = (enriched["final_risk_score"] >= risk_threshold).astype(int)
-    enriched["risk_category"] = enriched.apply(derive_risk_category, axis=1)
+    category_chunk_size = int(chunk_size or max(len(enriched), 1))
+    categories = []
+    for start in range(0, len(enriched), category_chunk_size):
+        categories.extend(
+            enriched.iloc[start:start + category_chunk_size]
+            .apply(derive_risk_category, axis=1)
+            .tolist()
+        )
+    enriched["risk_category"] = categories
 
     summary["duplicate_payment_claims"] = int(enriched["duplicate_payment_flag"].sum())
     summary["final_high_risk_claims"] = int(enriched["final_risk_flag"].sum())
+    validation_statuses = set(enriched["duplicate_payment_validation_status"])
+    summary["duplicate_payment_validation_status"] = (
+        next(iter(validation_statuses))
+        if len(validation_statuses) == 1
+        else "PARTIAL"
+    )
     return enriched, summary

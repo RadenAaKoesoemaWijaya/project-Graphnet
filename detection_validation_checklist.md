@@ -124,7 +124,8 @@
 2. Upload file Parquet
 3. Sistem otomatis sampling untuk interaktif
 4. Jalankan deteksi pada sampel
-5. Untuk audit lengkap, gunakan batch CLI
+5. Catat bahwa hasil hanya mencakup sampel dan bukan audit lengkap
+6. Jangan menyatakan audit seluruh file didukung sampai jalur inference batch penuh tersedia
 ```
 
 ## 🔒 Security & Compliance

@@ -73,11 +73,12 @@ class RepeatBillingDetector:
             sampled_df = df.sample(n=sample_size, random_state=42) if len(df) > sample_size else df
 
             similarities = []
-            for i in range(len(sampled_df) - 1):
-                for j in range(i + 1, min(i + 10, len(sampled_df))):
+            records = sampled_df.to_dict("records")
+            for i, claim1 in enumerate(records[:-1]):
+                for claim2 in records[i + 1:min(i + 10, len(records))]:
                     sim = self._calculate_claim_similarity(
-                        sampled_df.iloc[i],
-                        sampled_df.iloc[j]
+                        claim1,
+                        claim2,
                     )
                     similarities.append(sim)
 
@@ -185,12 +186,12 @@ class RepeatBillingDetector:
             # Sliding-window comparison keeps only claims within the active temporal window.
             # This preserves the original logic while avoiding unnecessary comparisons outside
             # the valid repeat-billing timeframe.
-            for i in range(len(ordered) - 1):
-                claim1 = ordered.iloc[i]
+            records = ordered.to_dict("records")
+            for i, claim1 in enumerate(records[:-1]):
                 claim1_date = pd.Timestamp(claim1["billing_date"])
 
-                for j in range(i + 1, len(ordered)):
-                    claim2 = ordered.iloc[j]
+                for j in range(i + 1, len(records)):
+                    claim2 = records[j]
                     claim2_date = pd.Timestamp(claim2["billing_date"])
                     time_gap = int((claim2_date - claim1_date).days)
 

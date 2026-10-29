@@ -24,6 +24,7 @@ from file_handler import (
     normalize_upload_type,
     read_file_with_optimization,
 )
+from large_file_processor import materialize_preprocessed_dataframe
 from ui.utils import (
     generate_sample_claims_template,
     render_schema_readiness_card,
@@ -615,8 +616,14 @@ def show_detection_page():
                     st.session_state['detection_feature_columns'] = feature_columns_proc
                     st.session_state['detection_processed_signature'] = preprocessing_signature
 
-                if not isinstance(df_processed, pd.DataFrame):
-                    df_processed = pd.DataFrame(df_processed)
+                df_processed = materialize_preprocessed_dataframe(df_processed)
+
+                if len(df_processed) != len(raw_df):
+                    raise ValueError(
+                        "Jumlah baris hasil preprocessing tidak sesuai dengan input "
+                        f"({len(df_processed)} != {len(raw_df)}). Deteksi dibatalkan "
+                        "agar skor tidak dipasangkan ke klaim yang salah."
+                    )
 
                 # 2. Strict feature alignment with training metadata
                 # Priority order for median imputation:
@@ -643,9 +650,28 @@ def show_detection_page():
                 X = aligned_feature_df[training_features].values
                 edge_index = None
                 edge_type = None
+                gnn_requested = (
+                    enable_gnn_inf
+                    and getattr(detector, "gnn_model", None) is not None
+                    and getattr(detector, "gnn_weight", 0) > 0
+                )
+                gnn_inference_enabled = gnn_requested and len(X) <= MAX_GRAPH_NODES
+                gnn_status = (
+                    "enabled"
+                    if gnn_inference_enabled
+                    else "disabled_capacity"
+                    if gnn_requested
+                    else "disabled"
+                )
+                st.session_state["detection_gnn_status"] = gnn_status
+                if gnn_requested and not gnn_inference_enabled:
+                    st.warning(
+                        f"GNN tidak dijalankan karena graf interaktif dibatasi hingga {MAX_GRAPH_NODES:,} "
+                        "klaim. Ensemble non-GNN tetap memproses seluruh klaim yang dimuat."
+                    )
 
                 # 3. Optional GNN Graph construction
-                if enable_gnn_inf and getattr(detector, "gnn_model", None) is not None and getattr(detector, "gnn_weight", 0) > 0:
+                if gnn_inference_enabled:
                     graph_frame = df_processed.copy()
                     for feature_name in training_features:
                         graph_frame[feature_name] = aligned_feature_df[feature_name].to_numpy()
@@ -658,7 +684,7 @@ def show_detection_page():
                         graph_frame,
                         training_features,
                         method=graph_method,
-                        max_nodes=min(len(graph_frame), 20000),
+                        max_nodes=min(len(graph_frame), MAX_GRAPH_NODES),
                         **graph_kwargs,
                     )
                     if len(graph_result) == 3:
@@ -668,7 +694,11 @@ def show_detection_page():
 
                 # 4. Multi-model ensemble inference
                 probabilities, individual_probs = detector.predict_anomaly_probability(
-                    X, edge_index=edge_index, edge_type=edge_type, device=str(device)
+                    X,
+                    edge_index=edge_index,
+                    edge_type=edge_type,
+                    device=str(device),
+                    enable_gnn=gnn_inference_enabled,
                 )
                 predictions = (probabilities > threshold).astype(int)
 
@@ -706,6 +736,8 @@ def show_detection_page():
                 
                 df_risk, risk_summary = run_integrated_claim_risk_pipeline(
                     df_result,
+                    db_connection=st.session_state.get("db_connection"),
+                    chunk_size=LARGE_DATASET_CONFIG.get("chunk_size", 50000),
                     ml_scores=probabilities,
                     risk_threshold=threshold,
                     disabled_rules=disabled_rules,
@@ -768,6 +800,22 @@ def show_detection_page():
 
         st.markdown("---")
         st.subheader("📊 3. Hasil & Analisis Deteksi Anomali")
+        if st.session_state.get("detection_gnn_status") == "disabled_capacity":
+            st.warning(
+                f"Skor pada hasil ini tidak menggunakan GNN karena jumlah klaim melampaui "
+                f"batas graf interaktif ({MAX_GRAPH_NODES:,}). Skor ensemble non-GNN mencakup seluruh baris."
+            )
+        payment_validation_status = risk_summary.get("duplicate_payment_validation_status")
+        if payment_validation_status == "NOT_CONFIGURED":
+            st.warning(
+                "Pemeriksaan riwayat pembayaran tidak dijalankan karena koneksi database "
+                "belum dikonfigurasi. Nilai duplicate-payment bukan hasil verifikasi database."
+            )
+        elif payment_validation_status in {"PARTIAL", "NOT_CHECKABLE"}:
+            st.warning(
+                "Pemeriksaan riwayat pembayaran hanya mencakup sebagian klaim; sebagian "
+                "kunci pasien/provider/layanan tidak lengkap. Tinjau status validasi per klaim."
+            )
         if df_result.get("analysis_scope", pd.Series(["FULL_DATASET"])).iloc[0] == "PARTIAL_SAMPLE":
             st.error(
                 f"Hasil parsial: {len(df_result):,} dari {source_total_rows or 'jumlah tidak diketahui'} "

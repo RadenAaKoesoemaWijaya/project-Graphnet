@@ -39,7 +39,14 @@ import os
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.metrics import confusion_matrix, classification_report
-from model import ClaimAnomalyXGBoostModel, ClaimAnomalyAutoencoder, CombinedAnomalyDetector, analyze_anomaly_networks, create_claim_graph
+from model import (
+    MAX_GRAPH_NODES,
+    ClaimAnomalyXGBoostModel,
+    ClaimAnomalyAutoencoder,
+    CombinedAnomalyDetector,
+    analyze_anomaly_networks,
+    create_claim_graph,
+)
 from sklearn.feature_selection import SelectKBest, f_classif, mutual_info_classif, VarianceThreshold
 from sklearn.decomposition import PCA
 import re

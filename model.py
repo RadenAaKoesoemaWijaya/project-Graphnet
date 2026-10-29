@@ -149,6 +149,7 @@ import streamlit as st
 from logging_config import configure_logging
 configure_logging()
 logger = logging.getLogger("graphnet.model")
+MAX_GRAPH_NODES = 20000
 
 def get_optimal_batch_size(device, num_samples, feature_dim, default_batch=1024):
     """
@@ -4054,7 +4055,14 @@ class CombinedAnomalyDetector:
                 self.xgboost_weight, self.gnn_weight,
             )
 
-    def predict_anomaly_probability(self, features, edge_index=None, edge_type=None, device='cpu'):
+    def predict_anomaly_probability(
+        self,
+        features,
+        edge_index=None,
+        edge_type=None,
+        device='cpu',
+        enable_gnn=True,
+    ):
         """Predict anomaly probability using all three methods"""
         # Impute missing values, then scale features
         features_imputed = self.imputer.transform(features)
@@ -4174,7 +4182,7 @@ class CombinedAnomalyDetector:
             xgb_probabilities = np.zeros(len(features))
 
         # GNN predictions
-        if self.gnn_model is not None and ('gnn' in self.algorithms or self.gnn_weight > 0):
+        if enable_gnn and self.gnn_model is not None and ('gnn' in self.algorithms or self.gnn_weight > 0):
             self.gnn_model.eval()
             with torch.no_grad():
                 try:
@@ -4285,7 +4293,7 @@ class CombinedAnomalyDetector:
             'autoencoder': self.autoencoder_weight if 'autoencoder' in self.algorithms else 0.0,
             'dbscan': self.dbscan_weight if 'dbscan' in self.algorithms else 0.0,
             'xgboost': self.xgboost_weight if 'xgboost' in self.algorithms else 0.0,
-            'gnn': self.gnn_weight if 'gnn' in self.algorithms else 0.0
+            'gnn': self.gnn_weight if enable_gnn and 'gnn' in self.algorithms else 0.0
         }
         total_w = sum(weights.values())
         if total_w <= 0:
@@ -4700,7 +4708,7 @@ class CombinedAnomalyDetector:
         self.scaler = joblib.load(f"{path_prefix}_scaler.pkl")
 
 @st.cache_data(ttl=1800, max_entries=5)
-def create_claim_graph(df, feature_columns, method='star', max_nodes=20000, max_edges=200000, **kwargs):
+def create_claim_graph(df, feature_columns, method='star', max_nodes=MAX_GRAPH_NODES, max_edges=200000, **kwargs):
     """
     Dispatcher for graph construction. Supports:
     - 'star'  : original star-topology based on shared categorical IDs (default)
@@ -4773,7 +4781,7 @@ def create_claim_graph(df, feature_columns, method='star', max_nodes=20000, max_
         return create_similarity_graph(df[feature_columns].values if isinstance(df, pd.DataFrame) else df)
 
 
-def create_knn_graph(node_features, k=5, max_nodes=20000, metric='euclidean'):
+def create_knn_graph(node_features, k=5, max_nodes=MAX_GRAPH_NODES, metric='euclidean'):
     """Build a k-nearest-neighbor graph using FAISS (if available) or sklearn NearestNeighbors.
 
     For very large datasets we use FAISS to keep memory bounded and speed up construction.
@@ -4826,7 +4834,7 @@ def create_heterogeneous_graph(df, feature_columns,
                                patient_col='patient_id',
                                diagnosis_col='diagnosis_code',
                                edge_type_dim=3,
-                               max_nodes=20000,
+                               max_nodes=MAX_GRAPH_NODES,
                                max_edges=200000):
     """Build a heterogeneous graph with explicit edge types.
 

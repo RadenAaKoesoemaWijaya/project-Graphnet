@@ -149,12 +149,77 @@ def test_pipeline_result_is_independent_of_chunk_size():
     assert full["repeat_billing_score"].tolist() == chunked["repeat_billing_score"].tolist()
 
 
+def test_pipeline_batches_payment_history_and_marks_verified_duplicates():
+    class FakeConnection:
+        def __init__(self):
+            self.calls = 0
+
+        def execute(self, _query, params):
+            self.calls += 1
+            keys = [tuple(params[i:i + 3]) for i in range(0, len(params), 3)]
+            return [
+                {
+                    "claim_id": "OLD1",
+                    "patient_id": patient_id,
+                    "provider_id": provider_id,
+                    "service_code": service_code,
+                    "status": "PAID",
+                }
+                for patient_id, provider_id, service_code in keys
+            ]
+
+    frame = pd.DataFrame([
+        {
+            "claim_id": "NEW1",
+            "patient_id": "P1",
+            "provider_id": "PR1",
+            "service_code": "CT001",
+            "amount": 1000,
+            "billing_date": "2026-01-01",
+            "service_date": "2026-01-01",
+        },
+        {
+            "claim_id": "NEW2",
+            "patient_id": "P2",
+            "provider_id": "PR1",
+            "service_code": "CT001",
+            "amount": 1200,
+            "billing_date": "2026-01-02",
+            "service_date": "2026-01-02",
+        },
+    ])
+    connection = FakeConnection()
+
+    result, summary = run_integrated_claim_risk_pipeline(
+        frame,
+        db_connection=connection,
+        chunk_size=1,
+    )
+
+    assert connection.calls == 2
+    assert result["duplicate_payment_flag"].tolist() == [1, 1]
+    assert set(result["duplicate_payment_validation_status"]) == {"CHECKED"}
+    assert summary["duplicate_payment_validation_status"] == "CHECKED"
+
+
 def test_duplicate_payment_excludes_current_claim_and_only_paid_counts():
     class FakeConnection:
         def execute(self, *_args):
             return [
-                {"claim_id": "C1", "status": "PAID"},
-                {"claim_id": "C0", "status": "PENDING"},
+                {
+                    "claim_id": "C1",
+                    "patient_id": "P1",
+                    "provider_id": "PR1",
+                    "service_code": "CT001",
+                    "status": "PAID",
+                },
+                {
+                    "claim_id": "C0",
+                    "patient_id": "P1",
+                    "provider_id": "PR1",
+                    "service_code": "CT001",
+                    "status": "PENDING",
+                },
             ]
 
     validator = ClaimStatusValidator(db_connection=FakeConnection())
@@ -164,6 +229,76 @@ def test_duplicate_payment_excludes_current_claim_and_only_paid_counts():
     assert duplicate is False
     assert [item["claim_id"] for item in history] == ["C0"]
     assert "belum ada pembayaran PAID duplikat" in message
+
+
+def test_duplicate_payment_history_queries_are_batched():
+    class FakeConnection:
+        def __init__(self):
+            self.calls = 0
+
+        def execute(self, _query, params):
+            self.calls += 1
+            keys = [tuple(params[i:i + 3]) for i in range(0, len(params), 3)]
+            return [
+                {
+                    "claim_id": f"C{index}",
+                    "patient_id": patient_id,
+                    "provider_id": provider_id,
+                    "service_code": service_code,
+                    "status": "PAID",
+                }
+                for index, (patient_id, provider_id, service_code) in enumerate(keys)
+            ]
+
+    connection = FakeConnection()
+    validator = ClaimStatusValidator(db_connection=connection)
+    claims = [
+        {
+            "claim_id": f"NEW{i}",
+            "patient_id": f"P{i}",
+            "provider_id": "PR1",
+            "service_code": "CT001",
+        }
+        for i in range(5)
+    ]
+
+    history = validator.get_claim_history_batch(claims, batch_size=2)
+
+    assert connection.calls == 3
+    assert len(history) == 5
+    duplicate, paid_history, _ = validator.check_duplicate_payment(claims[0])
+    assert duplicate
+    assert [claim["claim_id"] for claim in paid_history] == ["C0"]
+
+
+def test_duplicate_payment_query_errors_are_not_reported_as_clean_results():
+    class BrokenConnection:
+        def execute(self, *_args):
+            raise RuntimeError("database unavailable")
+
+    validator = ClaimStatusValidator(db_connection=BrokenConnection())
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        validator.check_duplicate_payment({
+            "claim_id": "C1",
+            "patient_id": "P1",
+            "provider_id": "PR1",
+            "service_code": "CT001",
+        })
+
+
+def test_duplicate_payment_without_connection_is_marked_unavailable():
+    validator = ClaimStatusValidator()
+
+    duplicate, history, message = validator.check_duplicate_payment({
+        "claim_id": "C1",
+        "patient_id": "P1",
+        "provider_id": "PR1",
+        "service_code": "CT001",
+    })
+
+    assert duplicate is False
+    assert history == []
+    assert "belum dikonfigurasi" in message
 
 
 def test_phantom_engine_edge_cases():
