@@ -1560,7 +1560,12 @@ def show_training_page():
                                 report_data = st.session_state['model_interpretation_report']
                                 charts = report_data.get('charts', {})
                                 tables = report_data.get('tables', {})
-                                pdf_buffer = generate_training_report_pdf(report_data, charts=charts, tables=tables)
+                                pdf_buffer = generate_training_report_pdf(
+                                    report_data,
+                                    charts=charts,
+                                    tables=tables,
+                                    summary_only=True,
+                                )
 
                                 st.download_button(
                                     label="⬇️ Klik untuk Mengunduh PDF",

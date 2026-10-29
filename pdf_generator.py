@@ -155,7 +155,8 @@ class PDFReportGenerator:
         report_data: Dict[str, Any],
         output_filename: str = None,
         charts: Dict[str, bytes] = None,
-        tables: Dict[str, List] = None
+        tables: Dict[str, List] = None,
+        summary_only: bool = False,
     ) -> BytesIO:
         """
         Generate PDF report from training interpretation data.
@@ -165,6 +166,7 @@ class PDFReportGenerator:
             output_filename: Optional filename for the PDF
             charts: Dictionary mapping chart names to image bytes (PNG/JPEG)
             tables: Dictionary mapping table names to table data (list of lists)
+            summary_only: Include only decision-relevant ML results and explanations.
 
         Returns:
             BytesIO buffer containing the PDF data
@@ -188,11 +190,233 @@ class PDFReportGenerator:
         )
 
         story = []
-        story = self._build_story(report_data, story, charts, tables)
+        if summary_only:
+            story = self._build_summary_story(report_data, charts, tables)
+        else:
+            story = self._build_story(report_data, story, charts, tables)
 
         doc.build(story)
         buffer.seek(0)
         return buffer
+
+    def _build_summary_story(
+        self,
+        report_data: Dict[str, Any],
+        charts: Dict[str, bytes] = None,
+        tables: Dict[str, List] = None,
+    ) -> List:
+        """Create a concise, plain-language report of decision-relevant ML results."""
+        charts = charts or {}
+        tables = tables or {}
+        metadata = report_data.get("metadata", {})
+        story = [
+            Paragraph("Ringkasan Hasil Machine Learning", self.styles["CustomTitle"]),
+            Paragraph(
+                f"ASTINA · Dibuat {escape(str(metadata.get('generated_at', 'N/A')))}",
+                self.styles["CustomSubtitle"],
+            ),
+            Spacer(1, 0.15 * inch),
+        ]
+
+        executive_summary = str(report_data.get("executive_summary") or "").strip()
+        if executive_summary:
+            story.extend(self._build_section("Kesimpulan Singkat", executive_summary[:1200]))
+
+        prediction_summary = self._table_as_mapping(
+            tables.get("evaluation_prediction_summary")
+        )
+        key_facts = []
+        for key, label in (
+            ("Jumlah sampel evaluasi", "Data yang dievaluasi"),
+            ("Jumlah prediksi anomali", "Anomali yang ditandai model"),
+            ("Tingkat anomali", "Proporsi anomali"),
+            ("Threshold evaluasi", "Ambang keputusan"),
+        ):
+            value = prediction_summary.get(key)
+            if value is not None:
+                key_facts.append([label, str(value)])
+        if key_facts:
+            story.extend(self._add_table_section(
+                "Ringkasan Evaluasi", [["Informasi", "Hasil"], *key_facts]
+            ))
+            story.append(Paragraph(
+                "Ambang keputusan (threshold) adalah batas skor untuk menandai data sebagai "
+                "anomali. Mengubahnya dapat mengubah jumlah temuan.",
+                self.styles["CustomMetadata"],
+            ))
+
+        evaluation_metrics = report_data.get("evaluation_metrics") or {}
+        metric_definitions = (
+            ("precision", "Presisi", "Dari semua klaim yang ditandai, berapa banyak yang benar."),
+            ("recall", "Recall (sensitivitas)", "Dari semua fraud aktual, berapa banyak yang tertangkap."),
+            ("f1-score", "Skor F1", "Keseimbangan antara presisi dan recall."),
+            ("f2-score", "Skor F2", "Metrik yang lebih menekankan recall; berguna bila fraud yang lolos perlu ditekan."),
+            ("pr-auc", "PR-AUC", "Kemampuan membedakan fraud pada berbagai threshold; informatif untuk data tidak seimbang."),
+            ("roc-auc", "ROC-AUC", "Kemampuan membedakan dua kelas pada berbagai threshold."),
+            ("accuracy", "Akurasi", "Proporsi seluruh prediksi yang benar; dapat terlihat tinggi saat kelas tidak seimbang."),
+        )
+        normalized_metrics = {
+            str(name).strip().lower().replace("_", "-"): value
+            for name, value in evaluation_metrics.items()
+        }
+        metric_rows = [["Metrik", "Nilai", "Makna"]]
+        for key, label, explanation in metric_definitions:
+            value = normalized_metrics.get(key)
+            if value is None:
+                continue
+            try:
+                formatted_value = f"{float(value):.1%}"
+            except (TypeError, ValueError):
+                formatted_value = str(value)
+            metric_rows.append([label, formatted_value, explanation])
+
+        if len(metric_rows) > 1:
+            story.extend(self._add_table_section("Kualitas Model", metric_rows))
+        else:
+            story.extend(self._build_section(
+                "Kualitas Model",
+                "Metrik presisi/recall tidak tersedia. Biasanya hal ini terjadi karena data "
+                "evaluasi tidak memiliki label aktual yang dapat dibandingkan dengan prediksi. "
+                "Jumlah anomali yang ditandai bukan ukuran akurasi model.",
+            ))
+
+        model_rows = self._compact_model_metrics(tables.get("model_metrics"))
+        if model_rows:
+            story.extend(self._add_table_section(
+                "Model yang Digunakan", [["Model", "Status", "Bobot"], *model_rows]
+            ))
+            story.append(Paragraph(
+                "Bobot menunjukkan porsi kontribusi tiap model dalam skor gabungan; bobot "
+                "bukan ukuran akurasi model.",
+                self.styles["CustomMetadata"],
+            ))
+
+        optimized_rows = self._compact_optimization_metrics(
+            tables.get("optimization_results")
+        )
+        if optimized_rows:
+            story.extend(self._add_table_section(
+                "Dampak Optimasi Model",
+                [["Metrik", "Sebelum", "Sesudah"], *optimized_rows],
+            ))
+            story.append(Paragraph(
+                "Perubahan ini membandingkan hasil sebelum dan sesudah optimasi bobot "
+                "ensemble pada data evaluasi yang sama.",
+                self.styles["CustomMetadata"],
+            ))
+
+        if "evaluation_confusion_matrix" in tables:
+            story.extend(self._add_table_section(
+                "Prediksi Benar dan Keliru",
+                tables["evaluation_confusion_matrix"],
+            ))
+            story.append(Paragraph(
+                "False positive berarti klaim wajar ikut ditandai; false negative berarti "
+                "fraud aktual terlewat. Periksa keduanya sebelum menentukan threshold.",
+                self.styles["CustomMetadata"],
+            ))
+        if charts.get("confusion_matrix"):
+            story.extend(self._add_chart_section(
+                "Visualisasi Prediksi Benar dan Keliru",
+                charts["confusion_matrix"],
+            ))
+        if charts.get("precision_recall_curve"):
+            story.extend(self._add_chart_section(
+                "Trade-off Presisi dan Recall",
+                charts["precision_recall_curve"],
+            ))
+            story.append(Paragraph(
+                "Grafik menunjukkan perubahan presisi dan recall saat threshold berubah. "
+                "Pilih titik operasi berdasarkan toleransi terhadap fraud yang lolos dan "
+                "klaim wajar yang perlu ditinjau.",
+                self.styles["CustomMetadata"],
+            ))
+        if charts.get("shap_feature_importance"):
+            story.extend(self._add_chart_section(
+                "Faktor yang Paling Memengaruhi Prediksi",
+                charts["shap_feature_importance"],
+            ))
+            story.append(Paragraph(
+                "Grafik SHAP merangkum pengaruh fitur terhadap prediksi pada data yang "
+                "dianalisis; ini membantu interpretasi, bukan bukti sebab-akibat.",
+                self.styles["CustomMetadata"],
+            ))
+
+        story.extend(self._build_section(
+            "Catatan Penggunaan",
+            "Hasil model adalah alat bantu penyaringan, bukan keputusan final. Validasi "
+            "temuan dengan bukti klaim dan peninjauan manusia. Metrik hanya bermakna "
+            "sebagai evaluasi kinerja jika label aktual tersedia.",
+        ))
+        story.extend(self._build_footer(report_data))
+        return story
+
+    @staticmethod
+    def _table_as_mapping(table_data):
+        if not table_data or len(table_data) < 2:
+            return {}
+        return {
+            str(row[0]).strip(): row[1]
+            for row in table_data[1:]
+            if isinstance(row, (list, tuple)) and len(row) >= 2
+        }
+
+    @staticmethod
+    def _compact_model_metrics(table_data):
+        if not table_data or len(table_data) < 2:
+            return []
+        headers = [str(value).strip().lower() for value in table_data[0]]
+        try:
+            model_index = headers.index("model")
+        except ValueError:
+            try:
+                model_index = headers.index("algoritma")
+            except ValueError:
+                return []
+        status_index = headers.index("status") if "status" in headers else None
+        weight_index = headers.index("bobot") if "bobot" in headers else None
+        rows = []
+        for row in table_data[1:]:
+            if not isinstance(row, (list, tuple)) or len(row) <= model_index:
+                continue
+            model = str(row[model_index]).strip()
+            status = str(row[status_index]).strip() if status_index is not None and len(row) > status_index else "-"
+            weight = str(row[weight_index]).strip() if weight_index is not None and len(row) > weight_index else "-"
+            if model:
+                rows.append([model, status, weight])
+        return rows
+
+    @staticmethod
+    def _compact_optimization_metrics(table_data):
+        if not table_data or len(table_data) < 2:
+            return []
+        headers = [str(value).strip().lower() for value in table_data[0]]
+        try:
+            name_index = headers.index("metrik")
+            default_index = headers.index("default")
+            optimized_index = headers.index("optimized")
+        except ValueError:
+            return []
+        important_names = {
+            "precision": "Presisi",
+            "recall": "Recall",
+            "f1-score": "Skor F1",
+            "false positive rate": "False positive",
+        }
+        rows = []
+        for row in table_data[1:]:
+            if not isinstance(row, (list, tuple)) or len(row) <= max(
+                name_index, default_index, optimized_index
+            ):
+                continue
+            name = important_names.get(str(row[name_index]).strip().lower())
+            if name:
+                rows.append([
+                    name,
+                    str(row[default_index]),
+                    str(row[optimized_index]),
+                ])
+        return rows
 
     def _build_story(self, report_data: Dict[str, Any], story: List, charts: Dict[str, bytes] = None, tables: Dict[str, List] = None) -> List:
         """Build the PDF story from report data."""
@@ -722,7 +946,8 @@ class PDFReportGenerator:
         report_data: Dict[str, Any],
         output_path: str,
         charts: Dict[str, bytes] = None,
-        tables: Dict[str, List] = None
+        tables: Dict[str, List] = None,
+        summary_only: bool = False,
     ) -> str:
         """
         Generate PDF and save to file.
@@ -736,7 +961,12 @@ class PDFReportGenerator:
         Returns:
             Path to the saved PDF file
         """
-        buffer = self.generate_pdf(report_data, charts=charts, tables=tables)
+        buffer = self.generate_pdf(
+            report_data,
+            charts=charts,
+            tables=tables,
+            summary_only=summary_only,
+        )
 
         with open(output_path, 'wb') as f:
             f.write(buffer.getvalue())
@@ -749,7 +979,8 @@ def generate_training_report_pdf(
     report_data: Dict[str, Any],
     output_path: str = None,
     charts: Dict[str, bytes] = None,
-    tables: Dict[str, List] = None
+    tables: Dict[str, List] = None,
+    summary_only: bool = False,
 ) -> BytesIO:
     """
     Convenience function to generate PDF from report data.
@@ -767,6 +998,17 @@ def generate_training_report_pdf(
     generator = PDFReportGenerator()
 
     if output_path:
-        return generator.save_pdf_to_file(report_data, output_path, charts=charts, tables=tables)
+        return generator.save_pdf_to_file(
+            report_data,
+            output_path,
+            charts=charts,
+            tables=tables,
+            summary_only=summary_only,
+        )
     else:
-        return generator.generate_pdf(report_data, charts=charts, tables=tables)
+        return generator.generate_pdf(
+            report_data,
+            charts=charts,
+            tables=tables,
+            summary_only=summary_only,
+        )

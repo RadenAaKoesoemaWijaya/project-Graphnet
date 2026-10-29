@@ -1258,7 +1258,10 @@ def show_evaluation_page():
 
                     # Generate PDF
                     pdf_buffer = generator.generate_pdf(
-                        report_data, charts=charts, tables=tables
+                        report_data,
+                        charts=charts,
+                        tables=tables,
+                        summary_only=True,
                     )
 
                     st.download_button(

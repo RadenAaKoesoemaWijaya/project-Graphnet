@@ -98,3 +98,95 @@ def test_wide_table_is_split_into_readable_horizontal_segments():
     pdf = generator.generate_pdf(report_data).getvalue()
 
     assert pdf.startswith(b"%PDF")
+
+
+def test_summary_pdf_contains_only_key_metrics_with_plain_language_meanings():
+    generator = PDFReportGenerator()
+    report_data = {
+        "metadata": {"generated_at": "2026-10-30"},
+        "executive_summary": "Model menandai sejumlah klaim untuk ditinjau.",
+        "evaluation_metrics": {
+            "Accuracy": 0.96,
+            "Precision": 0.72,
+            "Recall": 0.81,
+            "F1-Score": 0.76,
+            "F2-Score": 0.79,
+            "PR-AUC": 0.68,
+            "Matthews Correlation Coefficient": 0.4,
+        },
+    }
+    tables = {
+        "evaluation_prediction_summary": [
+            ["Ringkasan", "Nilai"],
+            ["Jumlah sampel evaluasi", "500"],
+            ["Jumlah prediksi anomali", "40"],
+            ["Tingkat anomali", "8.00%"],
+            ["Threshold evaluasi", "0.50"],
+        ],
+        "evaluation_classification_report": [
+            ["Kelas", "Precision", "Recall"],
+            ["0", "0.96", "0.98"],
+            ["1", "0.72", "0.81"],
+        ],
+        "evaluation_confusion_matrix": [
+            ["Aktual / Prediksi", "Prediksi 0", "Prediksi 1"],
+            ["Aktual 0", "450", "10"],
+            ["Aktual 1", "8", "32"],
+        ],
+        "model_metrics": [
+            ["Model", "Status", "Bobot", "Detail"],
+            ["Isolation Forest", "Trained", "0.600", "unimportant internals"],
+        ],
+        "unrelated_large_table": [
+            ["Raw Detail"],
+            ["must not appear in concise output"],
+        ],
+    }
+
+    story = generator._build_summary_story(report_data, charts={}, tables=tables)
+    paragraph_text = "\n".join(
+        flowable.getPlainText()
+        for flowable in story
+        if hasattr(flowable, "getPlainText")
+    )
+    table_text = "\n".join(
+        str(cell.getPlainText() if hasattr(cell, "getPlainText") else cell)
+        for flowable in story
+        if hasattr(flowable, "_cellvalues")
+        for row in flowable._cellvalues
+        for cell in row
+    ).replace("<br/>", " ")
+
+    assert "Dari semua fraud aktual" in table_text
+    assert "tertangkap" in table_text
+    assert "false negative berarti fraud aktual terlewat." in paragraph_text.lower()
+    assert "Akurasi" in table_text
+    assert "Matthews Correlation Coefficient" not in table_text
+    assert "must not appear in concise output" not in table_text
+    assert "unimportant internals" not in table_text
+    assert not any(flowable.__class__.__name__ == "PageBreak" for flowable in story)
+
+    pdf = generator.generate_pdf(
+        report_data,
+        charts={},
+        tables=tables,
+        summary_only=True,
+    ).getvalue()
+    assert pdf.startswith(b"%PDF")
+
+
+def test_summary_pdf_explains_when_supervised_metrics_are_unavailable():
+    generator = PDFReportGenerator()
+    story = generator._build_summary_story(
+        {"metadata": {}, "evaluation_metrics": {}},
+        charts={},
+        tables={},
+    )
+
+    paragraph_text = "\n".join(
+        flowable.getPlainText()
+        for flowable in story
+        if hasattr(flowable, "getPlainText")
+    )
+    assert "data evaluasi tidak memiliki label aktual" in paragraph_text
+    assert "bukan ukuran akurasi model" in paragraph_text

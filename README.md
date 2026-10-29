@@ -311,52 +311,14 @@ export GEMINI_API_KEY="your-api-key"
 
 ## 📊 Laporan PDF
 
-### Laporan PDF Pelatihan Model
+PDF pelatihan dan evaluasi menggunakan format ringkas yang menampilkan hasil ML penting beserta keterangan sederhana:
 
-ASTINA menyediakan fitur laporan PDF komprehensif yang berisi:
-- **Ringkasan Eksekutif**: Gambaran singkat hasil pelatihan model
-- **Analisis Dataset**: Informasi ukuran dataset, preprocessing, dan fitur
-- **Analisis Fitur**: Detail seleksi fitur dan metode yang digunakan
-- **Arsitektur Model**: Konfigurasi ensemble dan algoritma yang dilatih
-- **Proses Pelatihan**: Konfigurasi hyperparameter dan alur pelatihan
-- **Metrik Performa**: Status model dan distribusi bobot ensemble
-- **Rekomendasi**: Saran untuk pengembangan model selanjutnya
-- **Grafik Visual**:
-  - Pie chart distribusi bobot ensemble
-  - Visualisasi jaringan anomali GNN (jika GNN dilatih)
-  - Grafik loss autoencoder (jika dilatih)
-  - Grafik cross-validation (jika diaktifkan)
-- **Tabel Data**:
-  - Tabel metrik model lengkap (status, bobot, detail)
-  - Tabel hasil optimasi Optuna (jika digunakan)
-- **Layout Profesional**: Styling modern dengan color scheme konsisten, typography yang lebih baik, dan formatting yang rapi
+- **Kesimpulan dan ringkasan**: jumlah data yang dievaluasi, jumlah/proporsi anomali, dan threshold yang digunakan.
+- **Kualitas model** (jika label aktual tersedia): presisi menunjukkan ketepatan temuan; recall menunjukkan jumlah fraud aktual yang tertangkap; F1/F2 merangkum keseimbangan metrik tersebut; PR-AUC membantu menilai model pada data yang tidak seimbang.
+- **Prediksi benar dan keliru**: confusion matrix membantu memahami false positive (klaim wajar ikut ditandai) dan false negative (fraud aktual terlewat).
+- **Informasi pendukung**: model dan bobot ensemble, dampak optimasi, serta grafik precision-recall atau SHAP bila tersedia.
 
-### Laporan PDF Evaluasi Model
-
-Laporan PDF evaluasi model tersedia di halaman Evaluasi dan mencakup:
-- **Laporan end-to-end**: Ringkasan preprocessing, laporan training, dan hasil evaluasi model dalam satu dokumen
-- **Artefak preprocessing**: Profil kolom, statistik numerik, strategi encoding, seleksi fitur, dan grafik EDA/PCA yang tersedia
-- **Tabel evaluasi**: Performa algoritma, ringkasan prediksi, confusion matrix, classification report, serta rincian metrik fraud
-- **Metadata Evaluasi**: Tanggal, threshold, dan tingkat anomali terdeteksi
-- **Analisis Dataset**: Statistik dataset evaluasi dan probabilitas
-- **Grafik Evaluasi**:
-  - Confusion Matrix (jika label tersedia)
-  - ROC Curve (jika label tersedia)
-  - Precision-Recall Curve (jika label tersedia)
-  - Distribusi Probabilitas Anomali
-  - Threshold Trade-off Analysis
-  - SHAP Summary Plot (jika explainer tersedia)
-  - SHAP Feature Importance (jika explainer tersedia)
-- **Metrik Supervised** (jika label tersedia):
-  - Accuracy, Precision, Recall, F1-Score, ROC-AUC
-  - **PR-AUC** (Precision-Recall AUC - lebih relevan untuk data imbalanced)
-  - **F2-Score** (memberi bobot 2x pada recall - ideal untuk fraud detection)
-  - **Specificity** (True Negative Rate)
-  - **False Negative Rate** (persentase fraud yang lolos - critical!)
-  - **False Positive Rate** (persentase false positive)
-  - **Matthews Correlation Coefficient** (robust untuk data imbalanced)
-- **Rekomendasi**: Saran threshold optimal dan trade-off precision/recall
-- Grafik preprocessing dan tabel panjang dimasukkan sebagai lampiran dan diatur agar dapat berlanjut ke halaman berikutnya
+Metrik supervised tidak ditampilkan sebagai ukuran akurasi jika label aktual tidak tersedia. Bobot ensemble menunjukkan kontribusi model, bukan akurasinya. Laporan ini membantu peninjauan dan tidak menggantikan verifikasi manusia.
 
 Ekspor grafik PDF menggunakan Plotly dan Kaleido. Instalasi lokal memerlukan Google Chrome atau Chromium; image Docker ASTINA memasang Chromium secara otomatis.
 
@@ -391,24 +353,7 @@ Ekspor grafik PDF menggunakan Plotly dan Kaleido. Instalasi lokal memerlukan Goo
 
 ### Konten Laporan PDF
 
-Laporan PDF secara otomatis menyertakan:
-
-**📊 Grafik yang Disertakan:**
-- **Distribusi Bobot Ensemble**: Pie chart menampilkan persentase kontribusi setiap algoritma (Isolation Forest, Autoencoder, GNN, XGBoost)
-- **Visualisasi Jaringan Anomali GNN**: Network graph menampilkan node anomali (seed) dan tetangga 1-hopnya dengan skor GNN
-
-**📋 Tabel yang Disertakan:**
-- **Tabel Metrik Model**: Status pelatihan, bobot ensemble, dan detail konfigurasi untuk setiap algoritma
-- **Tabel Hasil Optimasi Optuna**: Perbandingan metrik sebelum dan sesudah optimasi (FPR, Precision, Recall, F1-Score)
-
-**📝 Bagian Naratif:**
-- Ringkasan eksekutif dengan analisis AI generatif (jika provider AI aktif)
-- Analisis dataset dan preprocessing
-- Analisis fitur dan seleksi
-- Arsitektur model ensemble
-- Proses pelatihan dan hyperparameter
-- Metrik performa dan hasil optimasi
-- Rekomendasi untuk pengembangan selanjutnya
+Isi menyesuaikan hasil yang tersedia. Grafik dan perbandingan optimasi hanya disertakan jika datanya tersedia; laporan tidak memuat seluruh tabel teknis atau artefak preprocessing.
 
 ### Provider AI untuk Laporan
 
