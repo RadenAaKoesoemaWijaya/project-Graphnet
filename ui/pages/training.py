@@ -22,6 +22,7 @@ except (ImportError, OSError, Exception):
 from ui.utils import *
 from state_manager import *
 from state_manager import monitor_memory_usage
+from training_status import write_training_status as _write_training_status
 
 logger = logging.getLogger(__name__)
 
@@ -49,18 +50,6 @@ def _capture_training_chart(name, figure):
         'report_artifacts', {'charts': {}, 'tables': {}, 'plotly_figures': {}}
     )
     artifacts.setdefault('plotly_figures', {})[name] = figure_json
-
-
-def _write_training_status(status_path, payload):
-    os.makedirs(os.path.dirname(status_path), exist_ok=True)
-    temp_path = f"{status_path}.{uuid.uuid4().hex}.tmp"
-    try:
-        with open(temp_path, "w", encoding="utf-8") as status_file:
-            json.dump(payload, status_file)
-        os.replace(temp_path, status_path)
-    finally:
-        if os.path.exists(temp_path):
-            os.unlink(temp_path)
 
 
 def show_training_page():

@@ -55,3 +55,46 @@ def test_pdf_includes_unmapped_charts_and_tables():
     assert pdf.startswith(b"%PDF")
     assert b"/Subtype /Image" in pdf
     assert len(re.findall(rb"/Type\s*/Page\b", pdf)) > 1
+
+
+def test_wide_table_is_split_into_readable_horizontal_segments():
+    generator = PDFReportGenerator()
+    headers = ["identifier"] + [f"feature_{index}" for index in range(1, 75)]
+    wide_table = [
+        headers,
+        *[
+            [f"row_{row_index}"] + [
+                f"value_{row_index}_{column_index}"
+                for column_index in range(1, 75)
+            ]
+            for row_index in range(8)
+        ],
+    ]
+
+    flowables = generator._add_table_section("Wide table", wide_table)
+    tables = [flowable for flowable in flowables if hasattr(flowable, "_cellvalues")]
+    rendered_headers = {
+        cell.getPlainText()
+        for table in tables
+        for cell in table._cellvalues[0]
+    }
+
+    assert len(tables) == 15
+    assert all(len(table._cellvalues[0]) <= 6 for table in tables)
+    assert all(min(table._colWidths) > 4 for table in tables)
+    assert set(headers).issubset(rendered_headers)
+
+    report_data = {
+        "metadata": {},
+        "executive_summary": "Summary",
+        "dataset_analysis": "Dataset",
+        "feature_analysis": "Features",
+        "model_architecture": "Model",
+        "training_process": "Training",
+        "performance_metrics": "Metrics",
+        "recommendations": "Recommendations",
+        "tables": {"wide_feature_summary": wide_table},
+    }
+    pdf = generator.generate_pdf(report_data).getvalue()
+
+    assert pdf.startswith(b"%PDF")

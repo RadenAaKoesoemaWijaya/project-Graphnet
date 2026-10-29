@@ -455,7 +455,7 @@ def show_data_collection_page():
                                     "Kepercayaan": f"{confidence:.0%}",
                                     "Status": conf_status
                                 })
-                            st.dataframe(pd.DataFrame(mapping_data), hide_index=True, width='stretch', use_container_width=True)
+                            st.dataframe(pd.DataFrame(mapping_data), hide_index=True, width='stretch')
                         else:
                             st.warning("⚠️ Tidak ada kolom yang terdeteksi secara otomatis. Pastikan nama kolom sesuai dengan semantic mapping.")
                     
@@ -473,7 +473,7 @@ def show_data_collection_page():
                                     "Prioritas": priority_label,
                                     "Dibutuhkan Oleh": affected_rules
                                 })
-                            st.dataframe(pd.DataFrame(missing_data), hide_index=True, width='stretch', use_container_width=True)
+                            st.dataframe(pd.DataFrame(missing_data), hide_index=True, width='stretch')
                         else:
                             st.success("✅ Semua fitur yang diperlukan tersedia!")
                     
@@ -489,7 +489,7 @@ def show_data_collection_page():
                                 "Coverage": f"{coverage:.1%}",
                                 "Status": status
                             })
-                        st.dataframe(pd.DataFrame(rule_coverage_data), hide_index=True, width='stretch', use_container_width=True)
+                        st.dataframe(pd.DataFrame(rule_coverage_data), hide_index=True, width='stretch')
                     
                     with st.expander("💡 Rekomendasi Preprocessing", expanded=True):
                         if analysis_result.recommendations:
@@ -512,7 +512,7 @@ def show_data_collection_page():
                                 "Kepercayaan": f"{confidence:.0%}",
                                 "Status": conf_status
                             })
-                        st.dataframe(pd.DataFrame(mapping_data), hide_index=True, width='stretch', use_container_width=True)
+                        st.dataframe(pd.DataFrame(mapping_data), hide_index=True, width='stretch')
                     else:
                         st.warning("⚠️ Tidak ada kolom yang terdeteksi secara otomatis. Pastikan nama kolom sesuai dengan semantic mapping.")
                 
@@ -532,7 +532,7 @@ def show_data_collection_page():
                                 "Prioritas": priority_label,
                                 "Dibutuhkan Oleh": affected_rules
                             })
-                        st.dataframe(pd.DataFrame(missing_data), hide_index=True, width='stretch', use_container_width=True)
+                        st.dataframe(pd.DataFrame(missing_data), hide_index=True, width='stretch')
                     else:
                         st.success("✅ Semua fitur yang diperlukan tersedia!")
                 
@@ -549,7 +549,7 @@ def show_data_collection_page():
                             "Coverage": f"{coverage:.1%}",
                             "Status": status
                         })
-                    st.dataframe(pd.DataFrame(rule_coverage_data), hide_index=True, width='stretch', use_container_width=True)
+                    st.dataframe(pd.DataFrame(rule_coverage_data), hide_index=True, width='stretch')
                 
                 # Rekomendasi Preprocessing saja
                 elif analysis_section == "Rekomendasi Preprocessing":

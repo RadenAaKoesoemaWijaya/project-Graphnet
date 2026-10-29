@@ -480,98 +480,123 @@ class PDFReportGenerator:
                     row + [''] * (n_cols - len(row)) for row in normalized_rows
                 ]
                 available_width = 6.27 * inch
-                col_widths = (
-                    [2.5 * inch] + [(available_width - 2.5 * inch) / (n_cols - 1)] * (n_cols - 1)
-                    if n_cols > 1 else [available_width]
-                )
-                min_column_width = min(col_widths)
-                cell_padding = min(8, max(2, (min_column_width - 4) / 2))
-                cell_font_size = min(8, max(5, min_column_width * 0.45))
-                header_font_size = min(9, max(5, min_column_width * 0.5))
-                cell_style = ParagraphStyle(
-                    'PDFTableCell',
-                    parent=self.styles['Normal'],
-                    fontSize=cell_font_size,
-                    leading=cell_font_size + 2,
-                    wordWrap='CJK',
-                )
-                header_style = ParagraphStyle(
-                    'PDFTableHeader',
-                    parent=cell_style,
-                    textColor=colors.white,
-                    alignment=TA_CENTER,
-                    fontName='Helvetica-Bold',
-                    fontSize=header_font_size,
-                )
-                formatted_rows = []
-                for row_index, row in enumerate(normalized_rows):
-                    style = header_style if row_index == 0 else cell_style
-                    wrapped_cells = []
-                    for value, width in zip(row, col_widths):
-                        char_width = max(
-                            3,
-                            int(max(width - 2 * cell_padding, 3) / (cell_font_size * 0.55)),
-                        )
-                        wrapped_cells.append(textwrap.wrap(
-                            str(value if value is not None else ''),
-                            width=char_width,
-                            break_long_words=True,
-                            break_on_hyphens=True,
-                        ) or [''])
+                columns_per_segment = 6
+                segment_starts = range(1, n_cols, columns_per_segment - 1)
+                if n_cols == 1:
+                    segment_starts = [0]
+                segment_count = len(segment_starts)
 
-                    if row_index == 0:
-                        chunk_count = 1
-                    else:
-                        chunk_count = max(
+                for segment_number, segment_start in enumerate(segment_starts, start=1):
+                    column_indices = [0] if n_cols == 1 else [
+                        0,
+                        *range(
+                            segment_start,
+                            min(segment_start + columns_per_segment - 1, n_cols),
+                        ),
+                    ]
+                    segment_rows = [
+                        [row[index] for index in column_indices]
+                        for row in normalized_rows
+                    ]
+                    segment_cols = len(column_indices)
+                    col_widths = (
+                        [2.5 * inch]
+                        + [(available_width - 2.5 * inch) / (segment_cols - 1)]
+                        * (segment_cols - 1)
+                        if segment_cols > 1 else [available_width]
+                    )
+                    min_column_width = min(col_widths)
+                    cell_padding = min(8, max(2, (min_column_width - 4) / 2))
+                    cell_font_size = min(8, max(5, min_column_width * 0.45))
+                    header_font_size = min(9, max(5, min_column_width * 0.5))
+                    cell_style = ParagraphStyle(
+                        'PDFTableCell',
+                        parent=self.styles['Normal'],
+                        fontSize=cell_font_size,
+                        leading=cell_font_size + 2,
+                        wordWrap='CJK',
+                    )
+                    header_style = ParagraphStyle(
+                        'PDFTableHeader',
+                        parent=cell_style,
+                        textColor=colors.white,
+                        alignment=TA_CENTER,
+                        fontName='Helvetica-Bold',
+                        fontSize=header_font_size,
+                    )
+                    formatted_rows = []
+                    for row_index, row in enumerate(segment_rows):
+                        style = header_style if row_index == 0 else cell_style
+                        wrapped_cells = []
+                        for value, width in zip(row, col_widths):
+                            char_width = max(
+                                3,
+                                int(max(width - 2 * cell_padding, 3) / (cell_font_size * 0.55)),
+                            )
+                            wrapped_cells.append(textwrap.wrap(
+                                str(value if value is not None else ''),
+                                width=char_width,
+                                break_long_words=True,
+                                break_on_hyphens=True,
+                            ) or [''])
+
+                        chunk_count = 1 if row_index == 0 else max(
                             (len(lines) + 39) // 40 for lines in wrapped_cells
                         )
-                    for chunk_index in range(chunk_count):
-                        cells = []
-                        for column_index, lines in enumerate(wrapped_cells):
-                            start = chunk_index * 40
-                            chunk_lines = lines[start:start + 40]
-                            if chunk_index and column_index == 0 and len(lines) <= start:
-                                chunk_lines = lines[:40]
-                            escaped_lines = [escape(line) for line in chunk_lines]
-                            cells.append(Paragraph('<br/>'.join(escaped_lines), style))
-                        formatted_rows.append(cells)
+                        for chunk_index in range(chunk_count):
+                            cells = []
+                            for column_index, lines in enumerate(wrapped_cells):
+                                start = chunk_index * 40
+                                chunk_lines = lines[start:start + 40]
+                                if chunk_index and column_index == 0 and len(lines) <= start:
+                                    chunk_lines = lines[:40]
+                                escaped_lines = [escape(line) for line in chunk_lines]
+                                cells.append(Paragraph('<br/>'.join(escaped_lines), style))
+                            formatted_rows.append(cells)
 
-                table = Table(
-                    formatted_rows,
-                    colWidths=col_widths,
-                    repeatRows=1,
-                    splitByRow=1,
-                )
-                table.setStyle(TableStyle([
-                    # Header row styling
-                    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1E40AF')),
-                    ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-                    ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
-                    ('VALIGN', (0, 0), (-1, 0), 'MIDDLE'),
-                    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                    ('FONTSIZE', (0, 0), (-1, 0), header_font_size),
-                    ('TOPPADDING', (0, 0), (-1, 0), 12),
-                    ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-                    ('LEFTPADDING', (0, 0), (-1, 0), cell_padding),
-                    ('RIGHTPADDING', (0, 0), (-1, 0), cell_padding),
-                    # Data rows styling
-                    ('BACKGROUND', (0, 1), (-1, -1), colors.white),
-                    ('TEXTCOLOR', (0, 1), (-1, -1), colors.black),
-                    ('ALIGN', (0, 1), (-1, -1), 'LEFT'),
-                    ('VALIGN', (0, 1), (-1, -1), 'MIDDLE'),
-                    ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
-                    ('FONTSIZE', (0, 1), (-1, -1), cell_font_size),
-                    ('TOPPADDING', (0, 1), (-1, -1), 8),
-                    ('BOTTOMPADDING', (0, 1), (-1, -1), 8),
-                    ('LEFTPADDING', (0, 1), (-1, -1), cell_padding),
-                    ('RIGHTPADDING', (0, 1), (-1, -1), cell_padding),
-                    # Grid styling
-                    ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#E2E8F0')),
-                    ('LINEBELOW', (0, 0), (-1, 0), 1.5, colors.HexColor('#1E40AF')),
-                    # Alternating row colors
-                    ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F8FAFC')]),
-                ]))
-                story.append(table)
+                    table = Table(
+                        formatted_rows,
+                        colWidths=col_widths,
+                        repeatRows=1,
+                        splitByRow=1,
+                    )
+                    table.setStyle(TableStyle([
+                        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1E40AF')),
+                        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+                        ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
+                        ('VALIGN', (0, 0), (-1, 0), 'MIDDLE'),
+                        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                        ('FONTSIZE', (0, 0), (-1, 0), header_font_size),
+                        ('TOPPADDING', (0, 0), (-1, 0), 12),
+                        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                        ('LEFTPADDING', (0, 0), (-1, 0), cell_padding),
+                        ('RIGHTPADDING', (0, 0), (-1, 0), cell_padding),
+                        ('BACKGROUND', (0, 1), (-1, -1), colors.white),
+                        ('TEXTCOLOR', (0, 1), (-1, -1), colors.black),
+                        ('ALIGN', (0, 1), (-1, -1), 'LEFT'),
+                        ('VALIGN', (0, 1), (-1, -1), 'MIDDLE'),
+                        ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+                        ('FONTSIZE', (0, 1), (-1, -1), cell_font_size),
+                        ('TOPPADDING', (0, 1), (-1, -1), 8),
+                        ('BOTTOMPADDING', (0, 1), (-1, -1), 8),
+                        ('LEFTPADDING', (0, 1), (-1, -1), cell_padding),
+                        ('RIGHTPADDING', (0, 1), (-1, -1), cell_padding),
+                        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#E2E8F0')),
+                        ('LINEBELOW', (0, 0), (-1, 0), 1.5, colors.HexColor('#1E40AF')),
+                        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F8FAFC')]),
+                    ]))
+                    if segment_count > 1:
+                        if segment_number > 1:
+                            story.append(Spacer(1, 0.15 * inch))
+                        segment_title = Paragraph(
+                            f"Bagian {segment_number}/{segment_count} "
+                            f"(kolom {segment_start + 1}–"
+                            f"{min(segment_start + columns_per_segment - 1, n_cols)}; "
+                            "kolom pertama diulang sebagai identitas)",
+                            self.styles['CustomMetadata'],
+                        )
+                        story.append(segment_title)
+                    story.append(table)
             else:
                 story.append(Paragraph("[Tabel kosong]", self.styles['CustomBodyText']))
         except Exception as e:
